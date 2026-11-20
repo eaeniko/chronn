@@ -3,7 +3,7 @@
 // O evento "estado-mudou" pede snapshot novo e redesenha a visão; a cada segundo só os números
 // andam, e as réguas da linha do tempo são redesenhadas uma vez por minuto.
 import { chamar, aoMudar } from './api.js';
-import { curto, relogio, relogioGrande, horaMin, totalDeTimers, totalDoGrupo, dataDoDia, trocarTexto, msDeHoje, desdeTexto, dicaDoTotalDoDia, itensDoMenuZerar, REUNIAO } from './formato.js';
+import { curto, relogio, relogioGrande, horaMin, totalDeTimers, totalDoGrupo, dataDoDia, trocarTexto, msDeHoje, desdeTexto, dicaDoTotalDoDia, itensDoMenuZerar, temaResolvido, segueOSistema, REUNIAO } from './formato.js';
 import {
   secaoGrupo,
   relogioFoco,
@@ -12,7 +12,6 @@ import {
   chaveGrupo,
   cor,
   semTimerNenhum,
-  barraRodando,
   usarAtividades,
   usarCorte,
   usarEsperaApp,
@@ -22,7 +21,7 @@ import {
   opcoesDaPergunta,
   htmlDoMenuZerar,
 } from './componentes.js';
-import { linhaCompacta, visaoLinha } from './linha.js';
+import { secaoLinhaDoPainel, visaoLinha, CHAVE_LINHA } from './linha.js';
 import {
   abaAtual,
   comAbas,
@@ -32,13 +31,17 @@ import {
   secoesDaAba,
   totalDaAba,
   dicaDoTotalDaAba,
-  textoPausarTudo,
   textoZeradosDaAba,
   topoDaTela,
   espacoDoBotao,
   abaDoTopo,
   grupoPreEscolhido,
   espacoPreEscolhido,
+  htmlDoMenuGrupo,
+  htmlDoMenuEspacos,
+  htmlDoMenuTimer,
+  htmlDoMenuDestinos,
+  textoDoMovido,
   htmlDoMenuNovo,
   teclaDoNovo,
 } from './espacos.js';
@@ -47,6 +50,7 @@ import { visaoFoco } from './foco.js';
 import {
   novoGrupo,
   novoEspaco,
+  arquivarGrupo,
   editarGrupo,
   novoTimer,
   editarTimer,
@@ -77,6 +81,7 @@ import { NOME_APP, nomearPagina, linhaDoConsole } from './nome.js';
 import { vigiarTitulos, trocarTitulo } from './titulos.js';
 import { iniciarTour, mostrarFaixaTour, tourAtivo, passosDoTour, htmlDoMenuAjuda, redesenharTour } from './tour.js';
 import { DICAS, gatilhos, criarFila, balaoDeDica, fecharDicaAVista } from './dicas.js';
+import { TEXTOS } from './textos.js';
 
 // as dicas longas em linhas curtas (rodada 19)
 vigiarTitulos();
@@ -84,6 +89,8 @@ vigiarTitulos();
 const $ = (sel) => document.querySelector(sel);
 const CHAVE_FECHADOS = 'worktimer.grupos-fechados';
 const CHAVE_TEMA = 'worktimer.tema';
+/** O tema escolhido (claro, escuro, sistema): o `<head>` das páginas resolve antes de pintar. */
+const CHAVE_TEMA_ESCOLHIDO = 'worktimer.tema-escolhido';
 const VISOES = ['painel', 'foco', 'cartoes', 'linha'];
 
 let snap = null;
@@ -117,33 +124,19 @@ function gravarLocal(chave, valor) {
 
 // ---- tema ----
 
-function temaResolvido(tema) {
-  if (tema === 'claro' || tema === 'escuro') return tema;
-  return escuroDoWindows.matches ? 'escuro' : 'claro';
-}
-
+// rodada 21: o tema fica em Ajustes → Aparência (Claro, Escuro, Sistema); o botão saiu do topo
 function aplicarTema() {
-  const escolhido = snap?.config.tema ?? 'escuro';
-  const tema = temaResolvido(escolhido);
+  const escolhido = snap?.config.tema ?? 'sistema';
+  const tema = temaResolvido(escolhido, escuroDoWindows.matches);
   document.documentElement.dataset.tema = tema;
   // barra de título nativa acompanha (null = segue o Windows)
-  const nativo = escolhido === 'windows' ? null : tema === 'claro' ? 'light' : 'dark';
+  const nativo = segueOSistema(escolhido) ? null : tema === 'claro' ? 'light' : 'dark';
   if (nativo !== temaNativo) {
     temaNativo = nativo;
     window.__TAURI__?.window?.getCurrentWindow().setTheme(nativo).catch(() => {});
   }
   gravarLocal(CHAVE_TEMA, tema);
-  const bt = $('#bt-tema');
-  bt.textContent = tema === 'escuro' ? '☀︎' : '☾';
-  bt.title = tema === 'escuro' ? 'Modo claro' : 'Modo escuro';
-}
-
-async function alternarTema() {
-  if (!snap) return;
-  const tema = temaResolvido(snap.config.tema) === 'escuro' ? 'claro' : 'escuro';
-  snap.config = { ...snap.config, tema };
-  aplicarTema();
-  await agir('salvar_config', { config: snap.config });
+  gravarLocal(CHAVE_TEMA_ESCOLHIDO, escolhido);
 }
 
 escuroDoWindows.addEventListener('change', () => snap && aplicarTema());
@@ -152,6 +145,8 @@ escuroDoWindows.addEventListener('change', () => snap && aplicarTema());
 
 function mostrarVisao() {
   $('#bt-ajustes').classList.toggle('on', visao === 'ajustes');
+  // o cabeçalho segue a tela (as abas só nas telas com abas; o escopo do topo)
+  desenharTopoDaAba();
   for (const b of document.querySelectorAll('.views [data-visao]')) {
     const on = b.dataset.visao === visao;
     b.classList.toggle('on', on);
@@ -333,17 +328,51 @@ function desenharTopoDaAba() {
   if (zt.dataset.padrao === undefined) zt.dataset.padrao = zt.title;
   const topo = topoDaTela(snap, visao);
   zt.dataset.espaco = topo.espaco ?? '';
-  trocarTexto(zt, topo.texto);
+  trocarTexto(zt.querySelector('.rot'), topo.texto);
   trocarTitulo(zt, topo.dica ?? zt.dataset.padrao);
+  // rodada 21: "N rodando" e "Pausar tudo" moram na linha de baixo do cabeçalho, com o escopo da
+  // mesma aba
+  const rodando = timersDaAba(snap, topo.espaco).filter((t) => t.rodando).length;
+  const n = $('#rodando');
+  const pa = $('#bt-pausar-tudo');
+  n.hidden = pa.hidden = rodando === 0;
+  // compacto, fica só o número (com a dica)
+  trocarTexto(n.querySelector('.rn'), String(rodando));
+  trocarTexto(n.querySelector('.rt'), TEXTOS.rodandoRotulo);
+  trocarTitulo(n, TEXTOS.rodando(rodando));
+  pa.dataset.espaco = topo.espaco ?? '';
+  trocarTexto(pa.querySelector('.rot'), topo.pausar);
+  trocarTitulo(pa, topo.pausar);
+  // as abas dos espaços, depois da navegação (só nas telas com abas e com 2 ou mais espaços)
+  const abas = TELAS_COM_ABAS.includes(visao) ? htmlAbas(snap, abaDaTela()) : '';
+  const box = $('#abas');
+  if (box.dataset.html !== abas) {
+    box.dataset.html = abas;
+    box.innerHTML = abas;
+  }
+  $('#abas-sep').hidden = !abas;
+  ajustarCabecalho();
 }
+
+/**
+ * Antes de a linha de baixo do cabeçalho quebrar, as ações viram ícones (com o texto na dica);
+ * o "+ Novo" mantém o texto. Só depois, se ainda não couber, a linha quebra (rodada 21).
+ */
+function ajustarCabecalho() {
+  const top = $('.top');
+  const views = $('.top-l2 .views');
+  const acoes = $('.top-l2 .acoes');
+  if (!top || !views || !acoes) return;
+  top.classList.remove('compacta');
+  if (acoes.offsetTop > views.offsetTop + 4) top.classList.add('compacta');
+}
+window.addEventListener('resize', ajustarCabecalho);
 
 function desenharPainel(atual, agora) {
   const a = abaDaTela();
   const grupos = gruposDaAba(snap, a);
   const rodando = grupos.flatMap((g) => g.timers).filter((t) => t.rodando).length;
   $('#grupos').innerHTML =
-    htmlAbas(snap, a) +
-    barraRodando(rodando, textoPausarTudo(snap, a), a) +
     (grupos.length
       ? secoesDaAba(snap, a, (g) => secaoGrupo(g, agora, !fechados.has(chaveGrupo(g)), selecionado), agora)
       : semTimerNenhum());
@@ -355,8 +384,12 @@ function desenharPainel(atual, agora) {
   } else {
     foco.innerHTML = '';
   }
-  $('#linha').innerHTML = linhaCompacta(grupos, meiaNoite(), agora);
+  $('#linha').innerHTML = linhaDoPainel(grupos, agora);
 }
+
+/** A linha do tempo no fim do Painel (rodada 21): recolhível, e desligável em Ajustes → Painel. */
+const linhaDoPainel = (grupos, agora) =>
+  secaoLinhaDoPainel(grupos, meiaNoite(), agora, { mostrar: snap.config.painel_linha !== false, aberta: !fechados.has(CHAVE_LINHA) });
 
 function desenharFoco(atual, agora) {
   $('#v-foco').innerHTML = visaoFoco(snap, agora, fechados, atual, atual ? grupoDe(atual) : null, meiaNoite());
@@ -365,7 +398,7 @@ function desenharFoco(atual, agora) {
 /** Uma vez por minuto: as réguas e o que mostra minutos (blocos abertos crescem). */
 function desenharMinuto(agora) {
   preservando(() => {
-    if (visao === 'painel') $('#linha').innerHTML = linhaCompacta(gruposDaAba(snap, abaDaTela()), meiaNoite(), agora);
+    if (visao === 'painel') $('#linha').innerHTML = linhaDoPainel(gruposDaAba(snap, abaDaTela()), agora);
     else if (visao === 'linha') $('#v-linha').innerHTML = visaoLinha(snap, meiaNoite(), agora, abaDaTela());
     else if (visao === 'foco') desenharFoco(timerSelecionado(), agora);
     else if (visao === 'cartoes') $('#v-cartoes').innerHTML = visaoCartoes(snap, agora, fechados, selecionado, abaDaTela());
@@ -504,6 +537,13 @@ async function aoClicar(ev) {
       await agir('salvar_config', { config: snap.config });
       break;
     }
+    // os ⋯ do grupo e do timer (rodada 21)
+    case 'menu-grupo':
+      alternarMenuGrupo(alvo, grupoId);
+      break;
+    case 'menu-timer':
+      alternarMenuTimer(alvo, id);
+      break;
     // o "+ Novo" do topo: o menu com Timer, Grupo e Espaço
     case 'novo-menu':
       alternarMenuNovo(alvo);
@@ -524,9 +564,6 @@ async function aoClicar(ev) {
       break;
     case 'editar-sessao':
       editarSessao(lerSnap, Number(alvo.dataset.timer), alvo.dataset.sessao);
-      break;
-    case 'tema':
-      await alternarTema();
       break;
     // ↺: só grava o instante do zerar (nada é apagado), sem diálogo; a faixa tem o "Desfazer".
     // Com mais de uma atividade com tempo, abre o menu "O timer todo" / "Só <atividade>" (rodada 19).
@@ -757,6 +794,56 @@ function alternarMenuZerar(botao, timer, itens) {
   });
 }
 
+/**
+ * O ⋯ de um grupo (rodada 21): Editar, "Mover para outro espaço…" (o segundo passo lista os
+ * espaços, no mesmo lugar) e Arquivar.
+ */
+function alternarMenuGrupo(botao, grupoId) {
+  const g = snap?.grupos.find((x) => x.id === grupoId);
+  if (!g) return;
+  abrirMenu(botao, htmlDoMenuGrupo(snap, g), 'esquerda', (b) => {
+    if (b.dataset.mg === 'editar') editarGrupo(snap, grupoId);
+    else if (b.dataset.mg === 'arquivar') arquivarGrupo(snap, grupoId);
+    else if (b.dataset.mg === 'mover') {
+      abrirMenu(botao, htmlDoMenuEspacos(snap, g), 'esquerda', (e) => moverGrupo(g, Number(e.dataset.espaco)));
+    }
+  });
+}
+
+/** O ⋯ do cartão de um timer (rodada 21): Editar e "Mover para…" (os grupos de cada espaço). */
+function alternarMenuTimer(botao, timerId) {
+  const t = todosTimers().find((x) => x.id === timerId);
+  if (!t) return;
+  abrirMenu(botao, htmlDoMenuTimer(t), 'esquerda', (b) => {
+    if (b.dataset.mt === 'editar') editarTimer(snap, timerId);
+    else if (b.dataset.mt === 'mover') {
+      abrirMenu(botao, htmlDoMenuDestinos(snap, t), 'esquerda', (d) =>
+        moverTimer(t, d.dataset.grupo === '' ? null : Number(d.dataset.grupo), Number(d.dataset.espaco)),
+      );
+    }
+  });
+}
+
+/** Faixa do mover, com o Desfazer por 10 s (rodada 21). */
+const DESFAZER_MOVER_MS = 10_000;
+
+async function moverGrupo(g, espacoId) {
+  const m = await agir('mover_grupo', { grupo_id: g.id, espaco_id: espacoId });
+  if (m) faixa(textoDoMovido(snap, g.nome, { espacoId, espacoAntes: m.espaco_id }), 'Desfazer', () => chamar('desfazer_mover', { movido: m }), DESFAZER_MOVER_MS);
+}
+
+async function moverTimer(t, grupoId, espacoId) {
+  const m = await agir('mover_timer', { timer_id: t.id, grupo_id: grupoId, espaco_id: espacoId });
+  if (!m) return;
+  const destino = grupoId === null ? espacoId : (snap.grupos.find((g) => g.id === grupoId)?.espaco_id ?? espacoId);
+  faixa(
+    textoDoMovido(snap, t.nome, { grupoId, espacoId: destino, espacoAntes: m.espaco_id }),
+    'Desfazer',
+    () => chamar('desfazer_mover', { movido: m }),
+    DESFAZER_MOVER_MS,
+  );
+}
+
 /** O menu do "+ Novo" (rodada 20): Timer, Grupo e Espaço. */
 function alternarMenuNovo(botao) {
   abrirMenu(botao, htmlDoMenuNovo(), 'direita', (b) => criarNovo(b.dataset.novo));
@@ -792,7 +879,8 @@ function alternarMenuAjuda(botao) {
 let menuAberto = null;
 
 /** Quem abriu o menu: a ação e o timer do botão (o botão pode ser redesenhado com o menu aberto). */
-const donoDoMenu = (b) => `${b.dataset.acao}:${b.dataset.timer ?? ''}`;
+// (rodada 21: o grupo também, para o ⋯ de cada grupo ser um dono diferente)
+const donoDoMenu = (b) => `${b.dataset.acao}:${b.dataset.timer ?? ''}:${b.dataset.grupo ?? ''}`;
 
 /** O botão de agora do dono (o redesenho troca o elemento). */
 const botaoDoDono = (dono) => [...document.querySelectorAll('[data-acao]')].find((b) => donoDoMenu(b) === dono) ?? null;
@@ -830,7 +918,7 @@ function abrirMenu(botao, html, lado, aoEscolher) {
     const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - m.width - 8));
     Object.assign(menu.style, { top: `${Math.round(top)}px`, left: `${Math.round(left)}px` });
   }
-  menu.querySelector('button')?.focus();
+  menu.querySelector('button:not(:disabled)')?.focus();
   const fechar = () => {
     menu.remove();
     document.removeEventListener('mousedown', fora, true);

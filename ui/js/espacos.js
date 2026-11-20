@@ -151,6 +151,95 @@ export function textoAoApagar(snap, e) {
   return n > 0 && destino ? TEXTOS.arquivadosVaoPara(n, destino.nome) : TEXTOS.apagarEspacoVazio;
 }
 
+// ---- os menus ⋯ e o mover (rodada 21) ----
+
+/** Os outros espaços não arquivados, para onde o grupo pode ir. */
+export const espacosParaMover = (snap, g) => espacosAtivos(snap).filter((e) => e.id !== espacoDoGrupo(g));
+
+/**
+ * O menu ⋯ do cabeçalho de um grupo: Editar, "Mover para outro espaço…" (só com 2 ou mais
+ * espaços) e Arquivar.
+ */
+export function itensDoMenuGrupo(snap, g) {
+  const v = [{ id: 'editar', rotulo: TEXTOS.editar }];
+  if (comAbas(snap) && espacosParaMover(snap, g).length) v.push({ id: 'mover', rotulo: TEXTOS.moverParaOutroEspaco });
+  v.push({ id: 'arquivar', rotulo: TEXTOS.arquivar });
+  return v;
+}
+
+const botaoDeMenu = (attrs, rotulo, desabilitado = false) =>
+  `<button type="button" role="menuitem" ${attrs}${desabilitado ? ' disabled' : ''}>${esc(rotulo)}</button>`;
+
+export const htmlDoMenuGrupo = (snap, g) =>
+  `<div class="menu-ajuda menu-grupo" role="menu" aria-label="${esc(g.nome)}">${itensDoMenuGrupo(snap, g)
+    .map((it) => botaoDeMenu(`data-mg="${it.id}" data-grupo="${g.id}"`, it.rotulo))
+    .join('')}</div>`;
+
+/** O segundo passo do "Mover para outro espaço…": os outros espaços, na ordem. */
+export const htmlDoMenuEspacos = (snap, g) =>
+  `<div class="menu-ajuda menu-mover" role="menu" aria-label="${esc(TEXTOS.moverParaOutroEspaco)}">${espacosParaMover(snap, g)
+    .map((e) => botaoDeMenu(`data-mover-grupo="${g.id}" data-espaco="${e.id}"`, e.nome))
+    .join('')}</div>`;
+
+/** O menu ⋯ do cartão de um timer: Editar e "Mover para…". */
+export const ITENS_DO_MENU_TIMER = [
+  { id: 'editar', rotulo: TEXTOS.editar },
+  { id: 'mover', rotulo: TEXTOS.moverPara },
+];
+
+export const htmlDoMenuTimer = (t) =>
+  `<div class="menu-ajuda menu-timer" role="menu" aria-label="${esc(t.nome)}">${ITENS_DO_MENU_TIMER.map((it) =>
+    botaoDeMenu(`data-mt="${it.id}" data-timer="${t.id}"`, it.rotulo),
+  ).join('')}</div>`;
+
+/**
+ * Para onde o timer pode ir ("Mover para…"): por espaço (com 2 ou mais), os grupos e o "Sem
+ * grupo" de cada um; com um espaço só, os grupos e o "Sem grupo", sem o nome do espaço.
+ * `[{ espaco, itens: [{ grupoId, espacoId, rotulo, atual }] }]`; `atual` é onde ele está.
+ */
+export function destinosDoTimer(snap, t) {
+  const espacos = comAbas(snap) ? espacosAtivos(snap) : [espacosAtivos(snap)[0] ?? { id: t.espaco_id ?? ESPACO_PRIMEIRO, nome: '' }];
+  const doTimer = t.espaco_id ?? ESPACO_PRIMEIRO;
+  return espacos.map((e) => ({
+    espaco: comAbas(snap) ? e : null,
+    itens: [
+      ...snap.grupos
+        .filter((g) => g.id !== null && g.id !== undefined && (!comAbas(snap) || espacoDoGrupo(g) === e.id))
+        .map((g) => ({ grupoId: g.id, espacoId: espacoDoGrupo(g), rotulo: g.nome, atual: t.grupo_id === g.id })),
+      { grupoId: null, espacoId: e.id, rotulo: TEXTOS.semGrupo, atual: (t.grupo_id ?? null) === null && doTimer === e.id },
+    ],
+  }));
+}
+
+export const htmlDoMenuDestinos = (snap, t) =>
+  `<div class="menu-ajuda menu-mover" role="menu" aria-label="${esc(TEXTOS.moverPara)}">${destinosDoTimer(snap, t)
+    .map(
+      ({ espaco, itens }) =>
+        (espaco ? `<div class="menu-sec" role="presentation"><i style="--e:${cor(espaco.cor)}"></i>${esc(espaco.nome)}</div>` : '') +
+        itens
+          .map((it) =>
+            botaoDeMenu(
+              `data-mover-timer="${t.id}" data-grupo="${it.grupoId ?? ''}" data-espaco="${it.espacoId}"`,
+              it.atual ? `${it.rotulo} · ${TEXTOS.ondeEsta}` : it.rotulo,
+              it.atual,
+            ),
+          )
+          .join(''),
+    )
+    .join('')}</div>`;
+
+/**
+ * O aviso depois de mover: "Obra foi para Pessoal. As horas dele, também as de dias anteriores,
+ * agora contam em Pessoal." `destino`: o grupo ou, sem grupo, o espaço; a segunda frase só quando
+ * o espaço mudou.
+ */
+export function textoDoMovido(snap, nome, { grupoId = null, espacoId, espacoAntes }) {
+  const espaco = espacoPorId(snap, espacoId);
+  const grupo = grupoId === null ? null : snap.grupos.find((g) => g.id === grupoId);
+  const destino = grupo ? grupo.nome : espaco?.nome ?? TEXTOS.semGrupo;
+  return TEXTOS.movido(nome, destino, espacoId !== espacoAntes ? espaco?.nome ?? null : null);
+}
+
 /** O nome da aba (nulo em "Todos"). */
 const nomeDaAba = (snap, aba) => (aba === null ? null : espacoPorId(snap, aba)?.nome ?? null);
 

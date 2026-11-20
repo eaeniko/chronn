@@ -123,7 +123,7 @@ test('👥: ao lado do ▶, aceso com a reunião, some sem a atividade Reunião 
   assert.equal(botaoReuniao(parado, 'pe'), '', 'Reunião arquivada');
   usarAtividades(ATIVIDADES);
   // no cartão, no canto de cima (ao lado do nome); nos controles do painel e do Foco, antes do ▶ grande
-  assert.match(cartaoTimer(parado, 0, false), /<div class="h"><i><\/i><span class="nm">Cliente A<\/span><button class="pe reu" data-acao="reuniao"/);
+  assert.match(cartaoTimer(parado, 0, false), /<div class="h"><i><\/i><span class="nm">Cliente A<\/span><button class="km" data-acao="menu-timer"[^>]*>⋯<\/button><button class="pe reu" data-acao="reuniao"/);
   assert.match(controles(parado), /data-acao="zerar"[\s\S]*data-acao="reuniao"[\s\S]*class="big"/);
   assert.deepEqual(SITUACAO.reuniao, { curta: 'reunião', longa: 'reunião' });
 });
@@ -158,7 +158,7 @@ test('"Ajustar hoje" com a atividade (a padrão do timer já escolhida) e o edit
   assert.equal(resumoDoTimer({ atividade_padrao_id: TRABALHO, ajuste_ms: 0, ajustes: [] }), '');
   // a escolhida arquivada continua no seletor, marcada
   usarAtividades(ATIVIDADES.map((a) => (a.id === ESTUDO ? { ...a, arquivada: true } : a)));
-  assert.match(opcoesDeAtividade(ATIVIDADES.slice(0, 2), ESTUDO), /<option value="3" selected>Estudo \(arquivada\)<\/option>$/);
+  assert.match(opcoesDeAtividade(ATIVIDADES.slice(0, 2), ESTUDO), /^<option value="3" selected>Estudo \(arquivada\)<\/option>/);
   usarAtividades(ATIVIDADES);
 });
 

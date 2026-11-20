@@ -8,10 +8,16 @@
 <meta name="generator" content="Chronn">
 <title></title>
 <script>
-  // Último tema usado, antes do primeiro desenho (evita piscar o escuro no modo claro).
+  // O tema antes do primeiro desenho (evita piscar o escuro no Claro ou no Sistema claro).
   try {
-    const t = JSON.parse(localStorage.getItem('worktimer.tema'));
-    if (t === 'claro' || t === 'escuro') document.documentElement.dataset.tema = t;
+    const ler = (k) => JSON.parse(localStorage.getItem(k));
+    const escolhido = ler('worktimer.tema-escolhido');
+    const ultimo = ler('worktimer.tema');
+    const sistema = () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'escuro' : 'claro');
+    // claro ou escuro escolhidos valem; "sistema" (o padrão) segue o Windows; sem nada guardado, o
+    // último tema usado ou o do sistema
+    document.documentElement.dataset.tema =
+      escolhido === 'claro' || escolhido === 'escuro' ? escolhido : escolhido ? sistema() : ultimo === 'claro' || ultimo === 'escuro' ? ultimo : sistema();
   } catch {}
 </script>
 <link rel="stylesheet" href="css/tema.css">
@@ -22,22 +28,35 @@
 </head>
 <body>
 <div class="app">
+  <!-- rodada 21: duas linhas. Em cima, o nome à esquerda e, à direita, ? e ⚙ e o total do dia (o
+       maior texto); embaixo, separadas por uma linha fina, a navegação e as abas à esquerda e as
+       ações à direita, com o "+ Novo" como botão principal. -->
   <header class="top">
-    <div class="logo"><b aria-hidden="true"></b><span data-nome-app></span></div>
-    <nav class="views" aria-label="Visões">
-      <button data-acao="visao" data-visao="painel">Painel</button>
-      <button data-acao="visao" data-visao="foco">Foco</button>
-      <button data-acao="visao" data-visao="cartoes">Cartões</button>
-      <button data-acao="visao" data-visao="linha">Linha do tempo</button>
-    </nav>
-    <div class="sp"></div>
-    <button class="zt" id="bt-zerar-todos" data-acao="zerar-todos" title="Zerar todos: o número de cada timer volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão">↺ Zerar todos</button>
-    <div class="day"><small id="data"></small><b class="mono" id="total-dia">0min</b></div>
-    <button class="novo" id="bt-novo" data-acao="novo-menu" title="Novo timer, grupo ou espaço (tecla N)" aria-haspopup="menu" aria-expanded="false">+ Novo</button>
-    <button class="ic" id="bt-tema" data-acao="tema" title="Modo claro">☀&#xFE0E;</button>
-    <button class="ic" id="bt-tour" data-acao="tour" title="Tour de 1 minuto" aria-label="Ver o tour" aria-haspopup="menu" aria-expanded="false">?</button>
-    <button class="ic" id="bt-ajustes" data-acao="ajustes" title="Ajustes" aria-label="Ajustes">⚙&#xFE0E;</button>
-    <span class="cta-dica" title="Disponível numa próxima versão"><button class="cta" disabled>Lançar o dia · em breve</button></span>
+    <div class="top-l1">
+      <div class="logo"><b aria-hidden="true"></b><span data-nome-app></span></div>
+      <div class="sp"></div>
+      <button class="ic" id="bt-tour" data-acao="tour" title="Tour de 1 minuto" aria-label="Ver o tour" aria-haspopup="menu" aria-expanded="false">?</button>
+      <button class="ic" id="bt-ajustes" data-acao="ajustes" title="Ajustes" aria-label="Ajustes">⚙&#xFE0E;</button>
+      <div class="day"><small id="data"></small><b class="mono" id="total-dia">0min</b></div>
+    </div>
+    <div class="top-l2">
+      <nav class="views" aria-label="Visões">
+        <button data-acao="visao" data-visao="painel">Painel</button>
+        <button data-acao="visao" data-visao="foco">Foco</button>
+        <button data-acao="visao" data-visao="cartoes">Cartões</button>
+        <button data-acao="visao" data-visao="linha">Linha do tempo</button>
+      </nav>
+      <span class="sep-v" id="abas-sep" aria-hidden="true" hidden></span>
+      <div class="abas-topo" id="abas"></div>
+      <div class="sp"></div>
+      <div class="acoes">
+        <span class="rodando-n" id="rodando" hidden><b class="rn mono"></b><span class="rt"></span></span>
+        <button class="acao" id="bt-pausar-tudo" data-acao="pausar-tudo" title="Pausar tudo" hidden><span class="ai" aria-hidden="true">⏸&#xFE0E;</span><span class="rot">Pausar tudo</span></button>
+        <button class="acao" id="bt-zerar-todos" data-acao="zerar-todos" title="Zerar todos: o número de cada timer volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão"><span class="ai" aria-hidden="true">↺</span><span class="rot">Zerar todos</span></button>
+        <span class="cta-dica" title="Lançar o dia: disponível numa próxima versão"><button class="acao" disabled><span class="ai" aria-hidden="true">⇪</span><span class="rot">Lançar o dia · em breve</span></button></span>
+        <button class="novo principal" id="bt-novo" data-acao="novo-menu" title="Novo timer, grupo ou espaço (tecla N)" aria-haspopup="menu" aria-expanded="false">+ Novo</button>
+      </div>
+    </div>
   </header>
   <div class="pergunta-topo" id="perguntas" role="region" aria-label="Pergunta" hidden></div>
   <div class="faixa-topo" id="faixa-tour" role="status" hidden>

@@ -24,36 +24,77 @@ svg { display: block; fill: currentColor; }
 
 .app { height: 100vh; display: flex; flex-direction: column; }
 
-/* ---- topo ---- */
-.top { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--ln); flex-shrink: 0; }
-.logo { font-weight: 650; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+/* ---- topo (rodada 21) ----
+   Duas linhas. Linha 1: o nome à esquerda; à direita, ? e ⚙ e o total do dia (o maior texto do
+   cabeçalho, em mono), com a data pequena em cima. O meio fica vazio. Linha 2, separada por uma
+   linha fina: a navegação e as abas dos espaços à esquerda; à direita, "N rodando", Pausar tudo,
+   Zerar todos, Lançar o dia e o "+ Novo", o botão principal. Mais estreito, as ações viram ícones
+   (com a dica) antes de a linha quebrar; o "+ Novo" mantém o texto. */
+.top { flex-shrink: 0; padding: 0 22px; border-bottom: 1px solid var(--ln); }
+.top-l1 { display: flex; align-items: center; gap: 8px; padding: 12px 0 10px; }
+.top-l2 {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; min-height: 46px; padding: 7px 0;
+  border-top: 1px solid var(--ln);
+}
+.logo { font-weight: 650; font-size: 15px; display: flex; align-items: center; gap: 9px; letter-spacing: -.01em; }
 .logo b {
-  width: 16px; height: 16px; border-radius: 50%; box-sizing: border-box;
+  width: 18px; height: 18px; border-radius: 50%; box-sizing: border-box;
   background: conic-gradient(from 200deg, var(--acento) 0 30%, var(--acento2) 30% 32%, transparent 32%);
   border: 2px solid var(--acento);
 }
-.views { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--mu); }
-.views button { transition: color .15s; }
-.views button:hover { color: var(--tx2); }
-.views .on, .views .on:hover { color: var(--tx); }
+.views { display: flex; flex-wrap: wrap; gap: 2px; font-size: 13px; color: var(--mu); }
+.views button { padding: 6px 10px; border-radius: 8px; transition: color .15s, background .15s; }
+.views button:hover { color: var(--tx2); background: var(--btn); }
+.views .on, .views .on:hover { color: var(--tx); font-weight: 600; background: var(--btn); }
+.sep-v { width: 1px; height: 20px; background: var(--ln); flex-shrink: 0; }
 .sp { flex: 1; }
-.day { text-align: right; }
-.day small { display: block; font-size: 11.5px; color: var(--mu); }
-.day b { font-size: 21px; font-weight: 600; letter-spacing: -.02em; }
-/* "Zerar todos", ao lado do total do dia: discreto, só texto, aparece mais no hover */
-.zt {
-  align-self: flex-end; margin-bottom: 3px; font-size: 11.5px; color: var(--mu); padding: 4px 8px; border-radius: 7px;
-  white-space: nowrap; transition: color .15s, background .15s;
-}
-.zt:hover { color: var(--tx2); background: var(--btn); }
+/* o total do dia: o maior texto do cabeçalho; a data pequena em cima */
+.day { text-align: right; margin-left: 10px; line-height: 1.05; }
+.day small { display: block; font-size: 11.5px; color: var(--mu); margin-bottom: 2px; letter-spacing: .01em; }
+.day b { font-size: 30px; font-weight: 650; letter-spacing: -.03em; color: var(--tx); }
 .ic {
   width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
   background: var(--btn); color: var(--tx2); font-size: 14px; transition: background .15s;
 }
 .ic:hover { background: var(--btn-h); }
+/* as ações da linha de baixo: texto e ícone; o "+ Novo" é o principal */
+.acoes { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.rodando-n { font-size: 12px; color: var(--mu); white-space: nowrap; padding-right: 2px; }
+.rodando-n .rn { font-weight: 600; font-size: 12px; color: var(--tx2); }
+.rodando-n .rt { margin-left: 0.3em; }
+.acao {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border-radius: 9px;
+  font-size: 12.5px; color: var(--tx2); white-space: nowrap; transition: background .15s, color .15s;
+}
+.acao .ai { font-size: 13px; line-height: 1; color: var(--mu); }
+.acao:hover:not(:disabled) { background: var(--btn); color: var(--tx); }
+.acao:hover:not(:disabled) .ai { color: var(--tx2); }
+.acao:disabled { color: var(--mu); cursor: default; opacity: .75; }
+.novo {
+  font-size: 13px; font-weight: 650; color: var(--tx); background: var(--btn); padding: 0 14px; height: 34px;
+  border-radius: 10px; white-space: nowrap; transition: background .15s, filter .15s;
+}
+.novo.principal {
+  margin-left: 4px; background: var(--acento); color: #fff;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .18) inset, 0 4px 14px color-mix(in srgb, var(--acento) 35%, transparent);
+}
+.novo.principal:hover, .novo.principal[aria-expanded="true"] { filter: brightness(1.07); }
 .cta { font-size: 13px; font-weight: 600; padding: 9px 14px; border-radius: 10px; background: var(--acento); color: #fff; white-space: nowrap; }
-/* ainda não disponível: discreto, só o contorno */
-.cta:disabled { font-size: 12.5px; font-weight: 500; padding: 8px 12px; background: none; border: 1px solid var(--bd); color: var(--mu); cursor: default; }
+/* sem espaço na linha (a página põe a classe antes de a linha quebrar): as ações ficam só com o
+   ícone (o texto vai na dica); o "+ Novo" mantém o texto */
+.top.compacta .acao { width: 32px; padding: 0; justify-content: center; }
+.top.compacta .acao .rot { display: none; }
+.top.compacta .acao .ai { font-size: 14px; color: var(--tx2); }
+/* compacto, o "N rodando" vira só o número, num selo (a dica diz o resto) */
+.top.compacta .rodando-n .rt { display: none; }
+.top.compacta .rodando-n .rn {
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--acento) 16%, var(--btn)); color: var(--tx);
+}
+@media (max-width: 900px) {
+  .top { padding: 0 16px; }
+  .day b { font-size: 27px; }
+}
 
 /* ---- corpo ---- */
 .corpo { flex: 1; min-height: 0; display: flex; }
@@ -85,7 +126,23 @@ svg { display: block; fill: currentColor; }
   width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; flex-shrink: 0;
   color: var(--mu); font-size: 12px; opacity: 0; transition: opacity .15s, background .15s;
 }
-.gh:hover .ge, .gh .ge:focus-visible { opacity: 1; }
+.gh:hover .ge, .gh .ge:focus-visible, .gh .ge[aria-expanded="true"] { opacity: 1; }
+/* rodada 21: o ⋯ do cartão do timer, à vista no hover (Editar, Mover para…) */
+.k .km, .kc .km {
+  width: 0; height: 22px; border-radius: 7px; display: grid; place-items: center; flex-shrink: 0; margin-left: auto;
+  overflow: hidden; color: var(--mu); font-size: 13px; opacity: 0; transition: opacity .15s, background .15s;
+}
+/* escondido, não ocupa lugar (o nome do timer usa a largura toda); no hover ou com o foco, aparece */
+.k:hover .km, .k:focus-within .km, .kc:hover .km, .kc:focus-within .km, .km[aria-expanded="true"] { width: 22px; opacity: 1; }
+.k .km:hover, .kc .km:hover { background: var(--btn); color: var(--tx2); }
+.k .km + .pe, .kc .km + .pe { margin-left: 0; }
+/* os menus do mover: o nome do espaço como título de cada parte */
+.menu-ajuda .menu-sec {
+  display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 650; color: var(--mu);
+  text-transform: uppercase; letter-spacing: .05em; padding: 8px 10px 3px;
+}
+.menu-ajuda .menu-sec i { width: 7px; height: 7px; border-radius: 2px; background: var(--e); }
+.menu-ajuda button:disabled { color: var(--mu); cursor: default; background: none; }
 .gh .ge:hover { background: var(--btn); color: var(--tx2); }
 .gh .tt { margin-left: auto; color: var(--mu); padding-left: 8px; flex-shrink: 0; }
 
@@ -95,14 +152,10 @@ svg { display: block; fill: currentColor; }
 .g-vazio button:hover { background: var(--btn); color: var(--tx); }
 
 /* rodada 20: o "+ Novo" do topo (ao lado do total) */
-.novo {
-  font-size: 12.5px; font-weight: 600; color: var(--tx); background: var(--btn); padding: 7px 12px; border-radius: 9px;
-  white-space: nowrap; transition: background .15s;
-}
-.novo:hover, .novo[aria-expanded="true"] { background: var(--btn-h); }
 
 /* rodada 20: as abas de espaço (Painel, Cartões e Linha do tempo) */
-.abas { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 12px; }
+.abas { display: flex; flex-wrap: wrap; gap: 4px; }
+.abas-topo:empty { display: none; }
 .aba {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--mu); padding: 5px 11px;
   border-radius: 999px; border: 1px solid transparent; transition: background .15s, color .15s;
@@ -121,7 +174,6 @@ svg { display: block; fill: currentColor; }
 .esp-h .tt { margin-left: auto; color: var(--mu); font-size: 12px; }
 .lt-esp { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; color: var(--tx); margin-top: 12px; }
 .lt-esp i { width: 8px; height: 8px; border-radius: 3px; background: var(--e); }
-.kv > .abas { margin-bottom: 14px; }
 .lt-vazio, .lt { margin-top: 0; }
 
 /* cartões */
@@ -577,8 +629,9 @@ body:has(> .dlg-fundo) :is(.k.on, .kc.on, .fi.run i, .k.on .h i, .kc.on .h i, .f
 .lat .pt { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--a) 70%, var(--mu2)); }
 .lat .lic { display: grid; place-items: center; width: 16px; flex-shrink: 0; color: var(--at); opacity: .85; }
 .lat .lic svg { width: 14px; height: 12px; }
-.lat .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); font-weight: 550; }
-.lat .st { font-style: normal; font-size: 10.5px; color: var(--at); white-space: nowrap; }
+/* o nome da atividade tem prioridade: o "rodando" encurta antes (revisão da rodada 21) */
+.lat .nm { flex: 0 1 auto; min-width: 3.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); font-weight: 550; }
+.lat .st { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-style: normal; font-size: 10.5px; color: var(--at); white-space: nowrap; }
 .lat .t { margin-left: auto; font-size: 13px; color: var(--tx3); }
 .lat .lp, .lat .le, .lat .lz {
   width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0;

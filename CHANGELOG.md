@@ -3,6 +3,20 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.3.0] - 2026-11-20
+
+### Added
+- Move a timer or a group to another space (from the ⋯ menu or the timer's Group field, now
+  grouped by space). Totals follow; Undo for 10 s.
+- Settings → Appearance: Light, Dark or System (default).
+- Settings → Panel: show or hide the timeline on the Panel; it also collapses like a group.
+
+### Changed
+- New two-row header: big day total and date on the right, navigation, space tabs and actions on
+  the second row, and a prominent "+ New" button.
+- Focus view lists every activity of the timer.
+- Selectors always keep the current value, even when it is archived.
+
 ## [0.2.0] - 2026-11-20
 
 ### Added

@@ -7,7 +7,11 @@
 // (o acumulado desde o zerar).
 import { trechosDoDia, reguaDoDia, horaMin, atividadesDosTrechos, msDeHoje } from './formato.js';
 import { esc, cor, botaoPlay, ajusteDoTimer, atividadesAtuais } from './componentes.js';
-import { gruposDaAba, comAbas, espacoPorId, htmlAbas } from './espacos.js';
+import { gruposDaAba, comAbas, espacoPorId } from './espacos.js';
+import { TEXTOS } from './textos.js';
+
+/** A chave da linha do tempo do Painel no "abrir e fechar" dos grupos (rodada 21). */
+export const CHAVE_LINHA = 'linha-do-tempo';
 
 const H = 3_600_000;
 
@@ -73,11 +77,25 @@ export function linhaCompacta(grupos, diaInicio, agora) {
 </div>${leg}`;
 }
 
+/**
+ * A linha do tempo no fim do Painel (rodada 21): uma seção que abre e fecha como um grupo, com a
+ * mesma seta (o estado fica lembrado, `CHAVE_LINHA`). Desligada em Ajustes → Painel
+ * (`mostrar` falso), não aparece. Aberta e sem tempo hoje, diz "Nada contado hoje".
+ */
+export function secaoLinhaDoPainel(grupos, diaInicio, agora, { mostrar = true, aberta = true } = {}) {
+  if (!mostrar) return '';
+  // o cabeçalho sempre (aberta ou fechada); aberta e sem tempo hoje, "Nada contado hoje"
+  const corpo = aberta ? linhaCompacta(grupos, diaInicio, agora) || `<p class="vazio">${esc(TEXTOS.nadaContadoHoje)}</p>` : '';
+  return `<section class="grp lt-painel${aberta ? '' : ' fechado'}">
+  <div class="gh"><button class="gd" data-acao="dobrar" data-grupo="${CHAVE_LINHA}" aria-expanded="${aberta}"><span class="fd" aria-hidden="true">${aberta ? '▾' : '▸'}</span><b>${esc(TEXTOS.linhaDoTempo)}</b></button></div>
+  ${corpo}
+</section>`;
+}
+
 /** Visão "Linha do tempo": uma linha por timer, por grupo, com o total e o play. */
 export function visaoLinha(snap, diaInicio, agora, aba = null) {
-  const abas = htmlAbas(snap, aba);
   const grupos = gruposDaAba(snap, aba).filter((g) => g.timers.length);
-  if (!grupos.length) return `${abas}<div class="lt-vazio"><p class="vazio">Nenhum timer ainda.</p></div>`;
+  if (!grupos.length) return `<div class="lt-vazio"><p class="vazio">Nenhum timer ainda.</p></div>`;
   // em "Todos" com abas, o nome do espaço antes do primeiro grupo dele (rodada 20)
   const comEspacos = aba === null && comAbas(snap);
   const r = regua(grupos.flatMap((g) => g.timers), diaInicio, agora);
@@ -100,7 +118,7 @@ export function visaoLinha(snap, diaInicio, agora, aba = null) {
       return titulo + timers;
     })
     .join('');
-  return `${abas}<div class="lt" data-rolagem="linha" style="--horas:${r.vao}">
+  return `<div class="lt" data-rolagem="linha" style="--horas:${r.vao}">
   <div class="lt-grade">
     <div></div><div class="lt-hrs mono">${marcas(r.ini, r.fim, r.vao > 16 ? 2 : 1)}</div><div></div><div></div>
     ${linhas}

@@ -5,7 +5,7 @@
 // Sem dependência do Painel: o dock também usa `ligarATimer` (opção "Outro timer…" / "Escolher timer…" da pergunta).
 // Cada função recebe o snapshot atual; erros dos comandos aparecem dentro do diálogo.
 import { chamar } from './api.js';
-import { esc, cor, ESTADO_SESSAO, ajusteDoTimer, atividadesAtivas, atividadePorId } from './componentes.js';
+import { esc, cor, ESTADO_SESSAO, ajusteDoTimer, atividadesAtivas, atividadePorId, comOAtual } from './componentes.js';
 import { codigosDoLink, deltaDoAjuste, textoDoAjuste, TRABALHO } from './formato.js';
 import { NOME_APP } from './nome.js';
 import { espacosAtivos, comAbas, gruposPorEspaco, espacoPreEscolhido, ESPACO_PRIMEIRO } from './espacos.js';
@@ -352,30 +352,39 @@ const caixa = (nome, rotulo, dica = '', marcada = false) => `<label class="chk">
 /** Valor da opção "+ Novo grupo…" no seletor de grupo do timer. */
 export const NOVO_GRUPO = 'novo';
 
+/** Prefixo do valor do "Sem grupo" de um espaço no seletor ("sem:2"; rodada 21). */
+export const SEM_GRUPO = 'sem:';
+
 /**
  * Seletor de grupo do timer, com "+ Novo grupo…" no fim: escolhido, aparecem ali mesmo o nome e a
  * cor do grupo novo, que é criado junto com o timer ao salvar.
  */
 export function campoGrupo(snap, grupoId, espacoId = espacoPreEscolhido(snap, null), grupoArquivado = null) {
   const grupos = snap.grupos.filter((g) => g.id !== null);
-  const op = (g) => `<option value="${g.id}"${g.id === grupoId ? ' selected' : ''}>${esc(g.nome)}</option>`;
-  // o grupo atual fora da lista (arquivado): fica como opção marcada, para salvar sem mexer não
-  // trocar em silêncio (re-revisão da rodada 20)
-  const fora =
-    grupoId !== null && grupoId !== undefined && !grupos.some((g) => g.id === grupoId)
-      ? `<option value="${grupoId}" selected>${esc(grupoArquivado ?? TEXTOS.grupo)} (${esc(TEXTOS.arquivado)})</option>`
-      : '';
-  // com 2 ou mais espaços, os grupos vêm separados por espaço (rodada 20)
-  const ops = comAbas(snap)
-    ? gruposPorEspaco(snap)
-        .map(({ espaco, grupos: gs }) => {
-          const dele = gs.filter((g) => g.id !== null);
-          return dele.length ? `<optgroup label="${esc(espaco.nome)}">${dele.map(op).join('')}</optgroup>` : '';
+  const op = (g) => `<option value="${g.id}">${esc(g.nome)}</option>`;
+  // com 2 ou mais espaços (rodada 21): os grupos de todos os espaços, separados por espaço, com o
+  // "Sem grupo" de cada um ("sem:<espaço>"); com um só, como antes
+  const multi = comAbas(snap);
+  const ops = multi
+    ? espacosAtivos(snap)
+        .map((e) => {
+          const dele = grupos.filter((g) => (g.espaco_id ?? ESPACO_PRIMEIRO) === e.id);
+          const sem = `<option value="${SEM_GRUPO}${e.id}">${esc(TEXTOS.semGrupo)}</option>`;
+          return `<optgroup label="${esc(e.nome)}">${dele.map(op).join('')}${sem}</optgroup>`;
         })
         .join('')
-    : grupos.map(op).join('');
-  return `<label class="campo"><span>Grupo</span><select name="grupo">${fora}${ops}<option value=""${grupoId === null ? ' selected' : ''}>${esc(TEXTOS.semGrupo)}</option><option value="${NOVO_GRUPO}">+ Novo grupo…</option></select></label>
-<div class="timer-espaco"${grupoId === null ? '' : ' hidden'}>${campoEspaco(snap, espacoId, 'espaco', TEXTOS.espacoDoTimerDica)}</div>
+    : grupos.map(op).join('') + `<option value="">${esc(TEXTOS.semGrupo)}</option>`;
+  // o valor de agora sempre marcado, mesmo fora da lista (re-revisões das rodadas 20 e 21): o grupo
+  // arquivado, ou o "Sem grupo" de um espaço arquivado
+  const espacoAtual = (snap.espacos ?? []).find((e) => e.id === espacoId);
+  const atual = grupoId !== null && grupoId !== undefined ? grupoId : multi || espacoAtual?.arquivado ? `${SEM_GRUPO}${espacoId}` : '';
+  const rotuloFora =
+    grupoId !== null && grupoId !== undefined
+      ? `${grupoArquivado ?? TEXTOS.grupo} (${TEXTOS.arquivado})`
+      : `${TEXTOS.semGrupo} · ${espacoAtual?.nome ?? TEXTOS.espaco} (${TEXTOS.arquivado})`;
+  const marcadas = atual === '' ? ops.replace(`<option value="">`, `<option value="" selected>`) : comOAtual(ops, atual, rotuloFora);
+  return `<label class="campo"><span>Grupo</span><select name="grupo">${marcadas}<option value="${NOVO_GRUPO}">+ Novo grupo…</option></select></label>
+<div class="timer-espaco" hidden>${campoEspaco(snap, espacoId, 'espaco', TEXTOS.espacoDoGrupoNovoDica)}</div>
 <div class="grupo-novo" hidden>
   ${campoTexto('grupo_nome', 'Nome do grupo novo', '', '', 'placeholder="ex.: Clientes"')}
   ${campoCor(corLivre(grupos.map((g) => g.cor)), 'grupo_cor', 'Cor do grupo')}
@@ -391,10 +400,11 @@ export function campoEspaco(snap, espacoId, nome = 'espaco', dica = '') {
   const lista = espacosAtivos(snap);
   const atual = (snap.espacos ?? []).find((e) => e.id === espacoId);
   if (lista.length < 2 && !atual?.arquivado) return '';
-  if (atual && atual.arquivado) lista.push(atual);
-  const ops = lista
-    .map((e) => `<option value="${e.id}"${e.id === espacoId ? ' selected' : ''}>${esc(e.nome)}${e.arquivado ? ` (${esc(TEXTOS.arquivado)})` : ''}</option>`)
-    .join('');
+  const ops = comOAtual(
+    lista.map((e) => `<option value="${e.id}">${esc(e.nome)}</option>`).join(''),
+    espacoId,
+    `${atual?.nome ?? TEXTOS.espaco} (${TEXTOS.arquivado})`,
+  );
   return `<label class="campo"><span>${esc(TEXTOS.espaco)}</span><select name="${nome}">${ops}</select>${dica ? `<small>${esc(dica)}</small>` : ''}</label>`;
 }
 
@@ -416,7 +426,8 @@ function ligarNovoGrupo(form) {
   const espaco = form.querySelector('.timer-espaco');
   sel.addEventListener('change', () => {
     bloco.hidden = sel.value !== NOVO_GRUPO;
-    if (espaco) espaco.hidden = sel.value !== '' && sel.value !== NOVO_GRUPO;
+    // rodada 21: o espaço vale só para o grupo novo (o "Sem grupo" de cada espaço está na lista)
+    if (espaco) espaco.hidden = sel.value !== NOVO_GRUPO;
     if (!bloco.hidden) form.elements.grupo_nome.focus();
   });
 }
@@ -431,6 +442,8 @@ export function grupoDoForm(valor, nomeNovo, corNova) {
     if (!nome) throw 'Dê um nome ao grupo novo';
     return { novo: { nome, cor: corNova } };
   }
+  // o "Sem grupo" de um espaço (rodada 21)
+  if (String(valor ?? '').startsWith(SEM_GRUPO)) return { id: null, espaco: Number(String(valor).slice(SEM_GRUPO.length)) };
   return { id: valor === '' || valor === undefined ? null : Number(valor) };
 }
 
@@ -447,6 +460,8 @@ export function grupoComNome(grupos, nome) {
  * criar outro. O que sobrar sem uso sai em `arquivarSobra`.
  */
 async function grupoDoTimer(form, snap, feito) {
+  // o espaço do "Sem grupo" escolhido (rodada 21); nulo nos outros casos
+  feito.espaco = null;
   let g;
   try {
     g = grupoDoForm(ler(form, 'grupo'), ler(form, 'grupo_nome'), ler(form, 'grupo_cor'));
@@ -454,6 +469,7 @@ async function grupoDoTimer(form, snap, feito) {
     form.elements.grupo_nome?.focus();
     throw e;
   }
+  if (g.espaco) feito.espaco = g.espaco;
   if (!g.novo) return g.id;
   const ja = grupoComNome(snap.grupos, g.novo.nome);
   if (ja) return ja.id;
@@ -566,12 +582,12 @@ function ligarCodigos(form) {
  * ela no fim, se estiver arquivada, para não sumir do seletor).
  */
 export function opcoesDeAtividade(ativas, escolhida) {
-  const v = [...ativas];
   const atual = atividadePorId(escolhida);
-  if (atual && !v.some((a) => a.id === atual.id)) v.push(atual);
-  return v
-    .map((a) => `<option value="${a.id}"${a.id === escolhida ? ' selected' : ''}>${esc(a.nome)}${a.arquivada ? ' (arquivada)' : ''}</option>`)
-    .join('');
+  return comOAtual(
+    ativas.map((a) => `<option value="${a.id}">${esc(a.nome)}${a.arquivada ? ' (arquivada)' : ''}</option>`).join(''),
+    escolhida,
+    `${atual?.nome ?? 'Atividade'} (arquivada)`,
+  );
 }
 
 /**
@@ -732,6 +748,21 @@ export function editarGrupo(snap, grupoId) {
           espaco_id: espacoDoForm(form, g.espaco_id ?? ESPACO_PRIMEIRO),
         }),
       });
+    },
+  });
+}
+
+/** "Arquivar" do ⋯ do grupo (rodada 21): confirma e arquiva (os timers dele saem das listas). */
+export function arquivarGrupo(snap, grupoId) {
+  const g = snap.grupos.find((x) => x.id === grupoId);
+  if (!g) return;
+  abrirDialogo({
+    titulo: esc(TEXTOS.arquivarGrupoTitulo(g.nome)),
+    corpo: `<p class="dlg-p">${esc(TEXTOS.arquivarGrupoTexto)}</p>`,
+    enviar: TEXTOS.arquivar,
+    perigo: true,
+    async aoEnviar() {
+      await chamar('editar_grupo', { grupo: grupoParaSalvar({ ...g, arquivado: true }) });
     },
   });
 }
@@ -897,7 +928,7 @@ export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = fal
         }
         if (id === null) {
           const grupo_id = await grupoDoTimer(form, snap, feito);
-          const s = await chamar('criar_timer', { grupo_id, nome, cor: ler(form, 'cor'), espaco_id: espacoDoForm(form, espacoId ?? espacoPreEscolhido(snap, null)) });
+          const s = await chamar('criar_timer', { grupo_id, nome, cor: ler(form, 'cor'), espaco_id: feito.espaco ?? espacoDoForm(form, espacoId ?? espacoPreEscolhido(snap, null)) });
           await arquivarSobra(feito, grupo_id);
           const t = todosTimers(s).find((x) => x.id === maiorId(todosTimers(s)));
           id = t?.id ?? null;
@@ -1184,12 +1215,9 @@ export function editarTimer(snap, timerId) {
         form.elements.grupo_nome.focus();
         throw 'Dê um nome ao grupo novo';
       }
-      // o ajuste antes (o timer arquivado não aceita mais ajuste); feito, os campos esvaziam para
-      // um "Salvar" de novo, depois de um erro, não ajustar duas vezes
-      if (ajuste) await gravarAjuste(form, t.id);
-      const grupo_id = await grupoDoTimer(form, snap, feito);
-      await chamar('editar_timer', {
-        timer: timerParaSalvar({
+      const ocultas = atividadesOcultasDoForm(form);
+      const comLugar = (grupo_id, espaco_id) =>
+        timerParaSalvar({
           ...t,
           grupo_id,
           nome,
@@ -1197,9 +1225,25 @@ export function editarTimer(snap, timerId) {
           ...cardDoTimer(form),
           arquivado: marcado(form, 'arquivado'),
           atividade_padrao_id: form.elements.atividade_padrao ? Number(ler(form, 'atividade_padrao')) : t.atividade_padrao_id,
-          espaco_id: espacoDoForm(form, t.espaco_id ?? ESPACO_PRIMEIRO),
-        }),
-        ocultas: atividadesOcultasDoForm(form),
+          espaco_id,
+        });
+      // tudo conferido antes de gravar qualquer coisa (revisão da rodada 21): o ajuste, o lugar
+      // (o espaço arquivado só barra um destino novo) e o espaço do grupo novo
+      const g = grupoDoForm(ler(form, 'grupo'), ler(form, 'grupo_nome'), ler(form, 'grupo_cor'));
+      const espacoAtual = t.espaco_id ?? ESPACO_PRIMEIRO;
+      await chamar('checar_editar_timer', {
+        timer: g.novo ? comLugar(t.grupo_id ?? null, espacoAtual) : comLugar(g.id, g.espaco ?? espacoDoForm(form, espacoAtual)),
+        ocultas,
+        ajuste,
+        grupo_novo_espaco: g.novo ? espacoDoForm(form) : null,
+      });
+      // o ajuste antes (o timer arquivado não aceita mais ajuste); feito, os campos esvaziam para
+      // um "Salvar" de novo, depois de um erro, não ajustar duas vezes
+      if (ajuste) await gravarAjuste(form, t.id);
+      const grupo_id = await grupoDoTimer(form, snap, feito);
+      await chamar('editar_timer', {
+        timer: comLugar(grupo_id, feito.espaco ?? espacoDoForm(form, espacoAtual)),
+        ocultas,
       });
       await arquivarSobra(feito, grupo_id);
     },

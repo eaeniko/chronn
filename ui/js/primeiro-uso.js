@@ -5,7 +5,7 @@
 // cartão do Claude Code) · 4 pastas dos projetos (os projetos recentes deste PC; só com timers) ·
 // 5 iniciar com o Windows · 6 pronto, com o resumo. Esc fecha o assistente a qualquer momento.
 import { chamar, iniciarComWindows } from './api.js';
-import { esc } from './componentes.js';
+import { esc, comOAtual } from './componentes.js';
 import { abrirDialogo, PALETA, avisoPastaMae } from './editar.js';
 import { linhas, faltamCriar } from './formato.js';
 import { corpoPrevia, corpoInstalado, lerPrevia, gravarPastas, htmlConexaoClaude } from './ajustes.js';
@@ -89,9 +89,9 @@ export function linhaDoRecente(linha, i, timers, agora = Date.now()) {
   const timer = timers.find((t) => t.id === linha.timer_id);
   if (linha.conf?.pasta_mae && timer) avisos.push(avisoPastaMae(esc(timer.nome)));
   if (linha.conf?.outro_timer_nome && timer) avisos.push(`A regra desta pasta é de ${esc(linha.conf.outro_timer_nome)}: ela passa para ${esc(timer.nome)}.`);
-  const opcoes = [`<option value=""${linha.timer_id ? '' : ' selected'}>—</option>`]
-    .concat(timers.map((t) => `<option value="${t.id}"${t.id === linha.timer_id ? ' selected' : ''}>${esc(t.nome)}</option>`))
-    .join('');
+  // o timer escolhido sempre marcado, mesmo fora da lista (revisão da rodada 21)
+  const lista = ['<option value="">—</option>'].concat(timers.map((t) => `<option value="${t.id}">${esc(t.nome)}</option>`)).join('');
+  const opcoes = linha.timer_id ? comOAtual(lista, linha.timer_id, 'Timer') : lista.replace('<option value="">', '<option value="" selected>');
   return `<li class="pu-recente" data-i="${i}">
   <span class="pu-recente-nome" title="${esc(linha.pasta)}">${esc(linha.nome)}</span>
   <small class="pu-recente-uso">${esc(textoUsadoHa(linha.usado_em, agora))}</small>

@@ -321,11 +321,32 @@ export function cartaoTimer(timer, agora, selecionado) {
     .filter(Boolean)
     .join(' ');
   return `<div class="${cls}" style="--c:${cor(timer.cor)}" data-timer="${timer.id}" tabindex="0">
-  <div class="h"><i></i><span class="nm">${esc(timer.nome)}</span>${botaoReuniao(timer, 'pe')}</div>
+  <div class="h"><i></i><span class="nm">${esc(timer.nome)}</span>${botaoMenuTimer(timer)}${botaoReuniao(timer, 'pe')}</div>
   ${linhaExtra(timer, agora)}
   <div class="r"><span class="tm mono" data-tempo="${timer.id}"${tituloDoTempo(timer, agora)}>${relogio(ms)}</span><span class="bts">${botaoEncerrar(timer, 'pe')}${botaoPlay(timer, 'pl')}</span></div>
 </div>`;
 }
+
+/**
+ * O valor atual de um seletor sempre vem como opção marcada (revisão da rodada 21: nunca trocar
+ * em silêncio). `ops`: o HTML das opções; `valor`: o valor de agora. Se ele está entre as
+ * opções, fica marcado (só ele); se não está (arquivado, fora da lista), entra primeiro, marcado,
+ * com `rotuloFora`. Sem valor (nulo, vazio), as opções como vieram.
+ */
+export function comOAtual(ops, valor, rotuloFora) {
+  if (valor === null || valor === undefined || valor === '') return ops;
+  const v = esc(String(valor));
+  // só o atributo, dentro da tag <option ...>: o texto das opções (escapado, sem "<" nem ">")
+  // nunca muda, nem um nome com "selected" (re-revisão da rodada 21)
+  const desmarcadas = ops.replace(/(<option\b[^>]*?) selected(?=[\s>])/g, '$1');
+  const alvo = `<option value="${v}"`;
+  if (desmarcadas.includes(alvo)) return desmarcadas.replace(alvo, `${alvo} selected`);
+  return `<option value="${v}" selected>${esc(rotuloFora)}</option>${desmarcadas}`;
+}
+
+/** O ⋯ do cartão de um timer (rodada 21): Editar e "Mover para…". */
+export const botaoMenuTimer = (timer) =>
+  `<button class="km" data-acao="menu-timer" data-timer="${timer.id}" title="${esc(TEXTOS.mais)}" aria-label="${esc(TEXTOS.mais)}: ${esc(timer.nome)}" aria-haspopup="menu" aria-expanded="false">⋯</button>`;
 
 /**
  * A chave de um grupo na tela (abrir/fechar, o total do cabeçalho). Cada espaço tem o seu "Sem
@@ -367,10 +388,11 @@ export function cabecalhoGrupo(grupo, agora, aberto, classe = 'gh') {
   const n = grupo.timers.length;
   const links = linksDoGrupo(grupo);
   const selo = links ? esc(links) : aberto ? '' : `${n} ${n === 1 ? 'timer' : 'timers'}`;
+  // rodada 21: o ⋯ do grupo (Editar, Mover para outro espaço…, Arquivar), menos no "Sem grupo"
   const editar =
     grupo.id === null
       ? ''
-      : `<button class="ge" data-acao="editar-grupo" data-grupo="${grupo.id}" title="Editar grupo" aria-label="Editar o grupo ${esc(grupo.nome)}">✎</button>`;
+      : `<button class="ge" data-acao="menu-grupo" data-grupo="${grupo.id}" title="${esc(TEXTOS.mais)}" aria-label="${esc(TEXTOS.mais)}: ${esc(grupo.nome)}" aria-haspopup="menu" aria-expanded="false">⋯</button>`;
   return `<div class="${classe}">
     <button class="gd" data-acao="dobrar" data-grupo="${chave}" aria-expanded="${aberto}">
       <span class="fd" aria-hidden="true">${aberto ? '▾' : '▸'}</span><b>${esc(grupo.nome)}</b>${selo ? `<span class="lk">${selo}</span>` : ''}

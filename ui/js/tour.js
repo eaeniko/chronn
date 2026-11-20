@@ -120,9 +120,9 @@ export const NOMES_DAS_TELAS = { painel: 'Painel', foco: 'Foco', cartoes: 'Cart�
 export const MINI_TOURS = {
   painel: [
     { id: 'grupos', titulo: 'Grupos e cartões', texto: 'Cada grupo junta os timers de um projeto. O cartão mostra o tempo de hoje e os botões ▶ e ⏸.', alvo: '#grupos' },
-    { id: 'abas', titulo: TEXTOS.tourAbasTitulo, texto: TEXTOS.tourAbasTexto, alvo: '#grupos .abas', soComAbas: true },
+    { id: 'abas', titulo: TEXTOS.tourAbasTitulo, texto: TEXTOS.tourAbasTexto, alvo: '#abas .abas', soComAbas: true },
     { id: 'novo', titulo: TEXTOS.tourNovoTitulo, texto: TEXTOS.tourNovoTexto, alvo: '#bt-novo' },
-    { id: 'pausar-tudo', titulo: 'Pausar tudo', texto: 'Para de uma vez todos os timers que estão contando (com abas, os da aba).', alvo: '#grupos [data-acao="pausar-tudo"]' },
+    { id: 'pausar-tudo', titulo: 'Pausar tudo', texto: 'Para de uma vez todos os timers que estão contando (com abas, os da aba).', alvo: '#bt-pausar-tudo' },
     { id: 'painel', titulo: 'O painel do timer', texto: 'O timer escolhido, à direita: as atividades, o ajuste de hoje e as sessões do Claude ligadas a ele.', alvo: '#foco' },
   ],
   foco: [

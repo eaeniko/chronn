@@ -67,6 +67,8 @@ pub struct ConfigApp {
     /// A aba de espaço escolhida no Painel, nos Cartões e na Linha do tempo (rodada 20): o id do
     /// espaço, ou nulo para "Todos". Um espaço que sumiu (apagado, arquivado) vale como "Todos".
     pub espaco_aba: Option<i64>,
+    /// "Mostrar a linha do tempo no Painel" (Ajustes → Painel, rodada 21): ligado por padrão.
+    pub painel_linha: bool,
 }
 
 impl ConfigApp {
@@ -89,7 +91,8 @@ impl ConfigApp {
 impl Default for ConfigApp {
     fn default() -> Self {
         ConfigApp {
-            tema: "escuro".into(),
+            // rodada 21: "Sistema" (segue o claro/escuro do Windows) é o padrão
+            tema: TEMA_SISTEMA.into(),
             dock_botoes: "um".into(),
             ao_minimizar: AO_MINIMIZAR_PERGUNTAR.into(),
             iniciar_com_windows: false,
@@ -122,6 +125,7 @@ impl Default for ConfigApp {
             dicas_ligadas: true,
             dicas_vistas: vec![],
             espaco_aba: None,
+            painel_linha: true,
         }
     }
 }
@@ -134,6 +138,9 @@ pub const SESSAO_PARADA_PADRAO_S: u32 = 600;
 pub const INATIVIDADE_MAX_S: u32 = 30 * 60;
 /// No modo desenvolvedor, uso recente e sessão parada vão de 1 min a 24 h.
 pub const TEMPO_MAX_S: u32 = 24 * 60 * 60;
+
+/// O tema que segue o sistema (Ajustes → Aparência, rodada 21; "windows" é o nome de antes).
+pub const TEMA_SISTEMA: &str = "sistema";
 
 /// Valores de `ao_fechar`.
 pub const AO_FECHAR_PERGUNTAR: &str = "perguntar";

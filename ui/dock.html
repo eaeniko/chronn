@@ -8,10 +8,16 @@
 <meta name="generator" content="Chronn">
 <title></title>
 <script>
-  // Último tema usado pela janela principal, antes do primeiro desenho.
+  // O tema da janela principal antes do primeiro desenho (Sistema resolvido aqui, sem piscar).
   try {
-    const t = JSON.parse(localStorage.getItem('worktimer.tema'));
-    if (t === 'claro' || t === 'escuro') document.documentElement.dataset.tema = t;
+    const ler = (k) => JSON.parse(localStorage.getItem(k));
+    const escolhido = ler('worktimer.tema-escolhido');
+    const ultimo = ler('worktimer.tema');
+    const sistema = () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'escuro' : 'claro');
+    // claro ou escuro escolhidos valem; "sistema" (o padrão) segue o Windows; sem nada guardado, o
+    // último tema usado ou o do sistema
+    document.documentElement.dataset.tema =
+      escolhido === 'claro' || escolhido === 'escuro' ? escolhido : escolhido ? sistema() : ultimo === 'claro' || ultimo === 'escuro' ? ultimo : sistema();
   } catch {}
 </script>
 <link rel="stylesheet" href="css/tema.css">

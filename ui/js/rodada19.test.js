@@ -257,7 +257,7 @@ test('revisão da rodada 19 (M4): o menu fecha por qualquer caminho tirando os o
   // o clique fora ignora o botão do dono pelo dono (ação e timer), não pelo elemento: vale depois
   // de o painel ser redesenhado
   assert.match(abrir, /const b = ev\.target\.closest\?\.\('\[data-acao\]'\);\s*if \(b && donoDoMenu\(b\) === dono\) return;/);
-  assert.match(p, /const donoDoMenu = \(b\) => `\$\{b\.dataset\.acao\}:\$\{b\.dataset\.timer \?\? ''\}`;/);
+  assert.match(p, /const donoDoMenu = \(b\) => `\$\{b\.dataset\.acao\}:\$\{b\.dataset\.timer \?\? ''\}:\$\{b\.dataset\.grupo \?\? ''\}`;/);
   // o redesenho com o menu aberto mantém o aria-expanded
   assert.match(p, /if \(menuAberto\) marcarExpandido\(menuAberto\.dono, true\);/);
   // o menu do ? usa o mesmo caminho

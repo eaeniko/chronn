@@ -14,9 +14,37 @@ export const TEXTOS = {
   /** A dica do total do dia com mais de um espaço: o geral e o de cada espaço. */
   totalGeral: 'Total geral',
   /** "Zerar todos" e "Pausar tudo" de uma aba: "Zerar todos (Pessoal)". */
-  zerarTodos: '↺ Zerar todos',
+  zerarTodos: 'Zerar todos',
   pausarTudo: 'Pausar tudo',
   daAba: (texto, espaco) => (espaco ? `${texto} (${espaco})` : texto),
+  /** "2 rodando" na linha de baixo do cabeçalho (rodada 21). */
+  rodando: (n) => `${n} rodando`,
+  /** O texto ao lado do número (compacto, só o número fica; rodada 21). */
+  rodandoRotulo: 'rodando',
+  // Ajustes → Aparência (rodada 21: o tema saiu do cabeçalho)
+  temaClaro: 'Claro',
+  temaEscuro: 'Escuro',
+  temaSistema: 'Sistema',
+  temaRotulo: 'Tema',
+  // Ajustes → Painel e a seção da linha do tempo no Painel (rodada 21)
+  painelTitulo: 'Painel',
+  linhaDoTempo: 'Linha do tempo',
+  nadaContadoHoje: 'Nada contado hoje',
+  mostrarLinhaNoPainel: 'Mostrar a linha do tempo no Painel',
+  mostrarLinhaNoPainelDica: 'A linha de hoje, por timer, no fim do Painel. A tela “Linha do tempo” fica como está.',
+  // os menus ⋯ do grupo e do timer, e o mover (rodada 21)
+  mais: 'Mais',
+  editar: 'Editar',
+  moverParaOutroEspaco: 'Mover para outro espaço…',
+  moverPara: 'Mover para…',
+  ondeEsta: 'aqui',
+  /** O aviso depois de mover, com o Desfazer: o espaço só quando ele mudou. */
+  movido: (nome, destino, espaco) =>
+    espaco
+      ? `${nome} foi para ${destino}. As horas dele, também as de dias anteriores, agora contam em ${espaco}.`
+      : `${nome} foi para ${destino}.`,
+  arquivarGrupoTitulo: (nome) => `Arquivar o grupo ${nome}?`,
+  arquivarGrupoTexto: 'O grupo e os timers dele saem das listas. As horas ficam no histórico.',
   zeradosTodosDoEspaco: (espaco) => `Todos os timers de ${espaco} zerados.`,
   dicaZerarTodosDoEspaco: (espaco) =>
     `Zerar todos os timers de ${espaco}: o número de cada um volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão`,
@@ -35,6 +63,7 @@ export const TEXTOS = {
   tituloEditarEspaco: 'Editar espaço',
   espacoPlaceholder: 'Ex.: Pessoal',
   espacoDoTimerDica: 'O espaço do timer sem grupo (com grupo, vale o do grupo).',
+  espacoDoGrupoNovoDica: 'O espaço do grupo novo.',
   // Ajustes → Grupos e regras: os espaços
   espacosTitulo: 'Espaços',
   espacosDica: 'Um espaço junta grupos, como Trabalho e Pessoal. Com dois ou mais, o Painel, os Cartões e a Linha do tempo ganham abas.',

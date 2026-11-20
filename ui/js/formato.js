@@ -687,6 +687,16 @@ export function timersParaDock(snap, agora = snap.agora, comSituacao = false) {
  * Troca o texto do elemento só se mudou: o relógio anda a cada segundo, mas "1:32" e "6h 12min"
  * mudam uma vez por minuto, e escrever o mesmo texto ainda faz o WebView redesenhar.
  */
+/** O tema escolhido segue o sistema? "sistema" (rodada 21) e "windows" (o nome de antes). */
+export const segueOSistema = (tema) => tema !== 'claro' && tema !== 'escuro';
+
+/**
+ * O tema na tela: "claro" ou "escuro". "Sistema" (o padrão, rodada 21) segue o
+ * `prefers-color-scheme` (`escuroDoSistema`).
+ */
+export const temaResolvido = (tema, escuroDoSistema) =>
+  segueOSistema(tema) ? (escuroDoSistema ? 'escuro' : 'claro') : tema;
+
 export function trocarTexto(el, texto) {
   if (el.textContent !== texto) el.textContent = texto;
 }

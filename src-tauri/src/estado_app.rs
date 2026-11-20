@@ -149,6 +149,37 @@ pub const MOVA_OS_GRUPOS: &str = "Mova os grupos para outro espaço antes";
 /// A recusa de apagar ou arquivar o último espaço não arquivado.
 pub const ULTIMO_ESPACO: &str = "Precisa sobrar pelo menos um espaço";
 
+/// O que um "Mover" mudou (rodada 21), para o "Desfazer": o grupo ou o timer e onde ele estava.
+#[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
+pub struct Movido {
+    /// "grupo" ou "timer".
+    pub tipo: String,
+    pub id: i64,
+    /// Antes do mover: o grupo do timer (nulo: sem grupo; num grupo, nulo também).
+    pub grupo_id: Option<i64>,
+    /// Antes do mover: o espaço do grupo, ou o do timer.
+    pub espaco_id: i64,
+    /// Depois do mover: o grupo do timer (nulo: sem grupo; num grupo, nulo também). O "Desfazer" só
+    /// age se ele ainda está lá (revisão da rodada 21).
+    #[serde(default)]
+    pub para_grupo_id: Option<i64>,
+    /// Depois do mover: o espaço do grupo, ou o do timer.
+    #[serde(default)]
+    pub para_espaco_id: i64,
+}
+
+/// A recusa do "Desfazer" quando o grupo ou o timer já mudou de lugar depois do mover.
+pub const DESFAZER_JA_MUDOU: &str = "Não dá mais para desfazer: ele já mudou de lugar";
+
+/// A frase com a primeira letra minúscula (para entrar no meio de outra).
+fn minuscula(frase: &str) -> String {
+    let mut c = frase.chars();
+    match c.next() {
+        Some(p) => p.to_lowercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
 /// A recusa de ocultar a atividade padrão do timer no painel.
 pub const PADRAO_NAO_OCULTA: &str = "A atividade padrão do timer não pode ser ocultada";
 
@@ -648,6 +679,82 @@ impl Nucleo {
         }
     }
 
+    // ---- mover entre espaços (rodada 21) ----
+
+    /// "Mover para outro espaço…" do grupo: o grupo e os timers dele passam a contar no espaço
+    /// `espaco_id`, com todo o histórico (nenhum trecho muda; os totais dos espaços são pela
+    /// posição de agora). Devolve o de antes, para o "Desfazer".
+    pub fn mover_grupo(&mut self, grupo_id: i64, espaco_id: i64) -> Result<Movido, String> {
+        self.checar_banco()?;
+        self.checar_espaco(espaco_id, true)?;
+        let g = self.banco.grupos().map_err(texto)?.into_iter().find(|g| g.id == grupo_id).ok_or("Grupo não encontrado")?;
+        self.banco.mover_grupo(grupo_id, espaco_id).map_err(texto)?;
+        Ok(Movido { tipo: "grupo".into(), id: grupo_id, grupo_id: None, espaco_id: g.espaco_id, para_grupo_id: None, para_espaco_id: espaco_id })
+    }
+
+    /// "Mover para…" do timer: para o grupo `grupo_id` (de qualquer espaço) ou, sem grupo, para o
+    /// "Sem grupo" do espaço `espaco_id`. O histórico vai junto. Devolve o de antes.
+    pub fn mover_timer(&mut self, timer_id: i64, grupo_id: Option<i64>, espaco_id: i64) -> Result<Movido, String> {
+        self.checar_banco()?;
+        let t = self.banco.timers().map_err(texto)?.into_iter().find(|t| t.id == timer_id).ok_or("Timer não encontrado")?;
+        let antes = Movido {
+            tipo: "timer".into(),
+            id: timer_id,
+            grupo_id: t.grupo_id,
+            espaco_id: self.banco.espacos_dos_timers().map_err(texto)?.get(&timer_id).copied().unwrap_or(t.espaco_id),
+            para_grupo_id: None,
+            para_espaco_id: 0,
+        };
+        let espaco = match grupo_id {
+            Some(g) => {
+                let grupo = self.banco.grupos().map_err(texto)?.into_iter().find(|x| x.id == g).ok_or("Grupo não encontrado")?;
+                self.checar_espaco(grupo.espaco_id, true)?;
+                grupo.espaco_id
+            }
+            None => {
+                self.checar_espaco(espaco_id, true)?;
+                espaco_id
+            }
+        };
+        self.banco.mover_timer(timer_id, grupo_id, espaco).map_err(texto)?;
+        Ok(Movido { para_grupo_id: grupo_id, para_espaco_id: espaco, ..antes })
+    }
+
+    /// "Desfazer" do mover: o grupo ou o timer volta para onde estava. Só se ele ainda está onde o
+    /// mover o pôs e o lugar de antes não foi arquivado (revisão da rodada 21); senão, a recusa diz
+    /// por quê.
+    pub fn desfazer_mover(&mut self, m: &Movido) -> Result<(), String> {
+        self.checar_banco()?;
+        match m.tipo.as_str() {
+            "grupo" => {
+                let g = self.banco.grupos().map_err(texto)?.into_iter().find(|g| g.id == m.id).ok_or(DESFAZER_JA_MUDOU)?;
+                if g.espaco_id != m.para_espaco_id {
+                    return Err(DESFAZER_JA_MUDOU.into());
+                }
+                self.checar_espaco(m.espaco_id, true).map_err(|e| format!("Não dá para desfazer: {}", minuscula(&e)))?;
+                self.banco.mover_grupo(m.id, m.espaco_id).map_err(texto)?
+            }
+            "timer" => {
+                let t = self.banco.timers().map_err(texto)?.into_iter().find(|t| t.id == m.id).ok_or(DESFAZER_JA_MUDOU)?;
+                let espaco_agora = self.banco.espacos_dos_timers().map_err(texto)?.get(&m.id).copied().unwrap_or(t.espaco_id);
+                if t.grupo_id != m.para_grupo_id || espaco_agora != m.para_espaco_id {
+                    return Err(DESFAZER_JA_MUDOU.into());
+                }
+                match m.grupo_id {
+                    Some(g) => {
+                        let grupo = self.banco.grupos().map_err(texto)?.into_iter().find(|x| x.id == g);
+                        let grupo = grupo.ok_or("Não dá para desfazer: o grupo de antes foi arquivado")?;
+                        self.checar_espaco(grupo.espaco_id, true).map_err(|e| format!("Não dá para desfazer: {}", minuscula(&e)))?;
+                    }
+                    None => self.checar_espaco(m.espaco_id, true).map_err(|e| format!("Não dá para desfazer: {}", minuscula(&e)))?,
+                }
+                self.banco.mover_timer(m.id, m.grupo_id, m.espaco_id).map_err(texto)?
+            }
+            _ => return Err("Mover desconhecido".into()),
+        };
+        Ok(())
+    }
+
     // ---- espaços (rodada 20) ----
 
     /// Erro se o espaço não existe (ou, com `ativo`, se está arquivado).
@@ -786,6 +893,14 @@ impl Nucleo {
         agora: Ms,
     ) -> Result<i64, String> {
         self.checar_banco()?;
+        let atividade_id = self.checar_ajuste(timer_id, atividade_id, delta_ms, motivo)?;
+        let motivo = motivo.map(str::trim).filter(|m| !m.is_empty());
+        let dia = self.dia_texto(agora);
+        self.banco.criar_ajuste(timer_id, atividade_id, &dia, delta_ms, motivo, agora).map_err(texto)
+    }
+
+    /// Confere o "Ajustar hoje" sem gravar; devolve a atividade (a padrão do timer, sem uma).
+    pub fn checar_ajuste(&self, timer_id: i64, atividade_id: Option<i64>, delta_ms: Ms, motivo: Option<&str>) -> Result<i64, String> {
         self.checar_timer(timer_id)?;
         let atividade_id = atividade_id.unwrap_or_else(|| self.motor.atividade_padrao(Some(timer_id)));
         self.checar_atividade(atividade_id)?;
@@ -799,8 +914,7 @@ impl Nucleo {
         if motivo.is_some_and(|m| m.chars().count() > MOTIVO_MAX) {
             return Err(format!("O motivo vai até {MOTIVO_MAX} letras"));
         }
-        let dia = self.dia_texto(agora);
-        self.banco.criar_ajuste(timer_id, atividade_id, &dia, delta_ms, motivo, agora).map_err(texto)
+        Ok(atividade_id)
     }
 
     pub fn desfazer_ajuste(&mut self, id: i64) -> Result<(), String> {
@@ -843,6 +957,24 @@ impl Nucleo {
     /// (nulo: as de antes); a atividade padrão nova sai delas. Tudo é conferido antes e gravado
     /// numa transação só (revisão da rodada 20).
     pub fn editar_timer_com(&mut self, t: &Timer, agora: Ms, ocultas: Option<&[i64]>) -> Result<Vec<Mudanca>, String> {
+        let t = &self.checar_editar_timer(t, ocultas)?;
+        let antes = self.banco.atividades_ocultas().map_err(texto)?.remove(&t.id).unwrap_or_default();
+        let ocultas: Vec<i64> =
+            ocultas.map_or(antes, <[i64]>::to_vec).into_iter().filter(|a| *a != t.atividade_padrao_id).collect();
+        if t.arquivado && self.motor.abertos.iter().any(|a| a.timer_id == Some(t.id)) {
+            let mud = self.motor.pausar(t.id, agora);
+            self.aplicar(&mud)?;
+        }
+        self.banco.editar_timer_com_ocultas(t, &ocultas).map_err(texto)?;
+        self.motor.atividades_padrao = self.banco.atividades_padrao().map_err(texto)?;
+        Ok(vec![])
+    }
+
+    /// Confere o editar timer sem gravar nada (revisão da rodada 21: o diálogo confere tudo, o
+    /// "Ajustar hoje" junto, antes de gravar qualquer coisa). Devolve o timer com o espaço do grupo.
+    /// O espaço arquivado só recusa um destino novo: ficar onde já está (o "Sem grupo" de um
+    /// espaço arquivado, ao só renomear) vale.
+    pub fn checar_editar_timer(&self, t: &Timer, ocultas: Option<&[i64]>) -> Result<Timer, String> {
         self.checar_atividade(t.atividade_padrao_id)?;
         if let Some(o) = ocultas {
             if o.contains(&t.atividade_padrao_id) {
@@ -854,25 +986,26 @@ impl Nucleo {
             }
         }
         let mut t = t.clone();
-        match t.grupo_id {
-            Some(g) => {
-                if let Some(e) = self.banco.espacos_dos_grupos().map_err(texto)?.get(&g) {
-                    t.espaco_id = *e;
-                }
+        if let Some(g) = t.grupo_id {
+            if let Some(e) = self.banco.espacos_dos_grupos().map_err(texto)?.get(&g) {
+                t.espaco_id = *e;
             }
-            None => self.checar_espaco(t.espaco_id, true)?,
         }
-        let t = &t;
-        let antes = self.banco.atividades_ocultas().map_err(texto)?.remove(&t.id).unwrap_or_default();
-        let ocultas: Vec<i64> =
-            ocultas.map_or(antes, <[i64]>::to_vec).into_iter().filter(|a| *a != t.atividade_padrao_id).collect();
-        if t.arquivado && self.motor.abertos.iter().any(|a| a.timer_id == Some(t.id)) {
-            let mud = self.motor.pausar(t.id, agora);
-            self.aplicar(&mud)?;
+        let agora_em = self.banco.espacos_dos_timers().map_err(texto)?.get(&t.id).copied();
+        if agora_em != Some(t.espaco_id) {
+            self.checar_destino(t.espaco_id)?;
         }
-        self.banco.editar_timer_com_ocultas(t, &ocultas).map_err(texto)?;
-        self.motor.atividades_padrao = self.banco.atividades_padrao().map_err(texto)?;
-        Ok(vec![])
+        Ok(t)
+    }
+
+    /// Erro se o espaço de um destino novo (do timer, ou do grupo novo dele) não existe ou está
+    /// arquivado, com o que fazer.
+    pub fn checar_destino(&self, espaco: i64) -> Result<(), String> {
+        match self.banco.espacos().map_err(texto)?.iter().find(|e| e.id == espaco) {
+            Some(e) if e.arquivado => Err(format!("Escolha outro grupo: {} está arquivado.", e.nome)),
+            Some(_) => Ok(()),
+            None => Err("Espaço não encontrado".into()),
+        }
     }
 
     /// Erro se a atividade não existe ou está arquivada.
@@ -1744,6 +1877,163 @@ mod testes {
         // espaço que não existe
         assert!(n.zerar_todos(Some(999), h(10, 20)).is_err());
         assert!(n.pausar_tudo(Some(999), h(10, 20)).is_err());
+    }
+
+    /// Rodada 21: mover leva o histórico junto; os totais dos espaços são pela posição de agora.
+    #[test]
+    fn mover_grupo_e_timer_entre_espacos_com_os_totais_e_o_desfazer() {
+        let mut n = nucleo(h(8, 0));
+        let (pessoal, obra, leitura, flow) = dois_espacos(&mut n);
+        n.banco.zerar(None, 0).unwrap();
+        let ontem = |hh, mm| ms_local(2026, 11, 16, hh, mm, F);
+        for (t, i, f) in [(obra, ontem(9, 0), ontem(10, 0)), (leitura, ontem(11, 0), ontem(11, 30)), (flow, ontem(9, 0), ontem(9, 20))] {
+            n.banco.aplicar(&[Mudanca::Abriu { timer_id: Some(t), sessao_id: None, origem: Origem::Manual, inicio: i, atividade_id: 1 }]).unwrap();
+            n.banco.aplicar(&[Mudanca::Fechou { timer_id: Some(t), sessao_id: None, origem: Origem::Manual, fim: f, motivo: MotivoFim::Pausa }]).unwrap();
+        }
+        // hoje: Obra das 8:00 às 8:30
+        let m = n.motor.play(obra, h(8, 0));
+        n.aplicar(&m).unwrap();
+        let m = n.motor.pausar(obra, h(8, 30));
+        n.aplicar(&m).unwrap();
+        let trechos = |n: &Nucleo| n.banco.trechos_entre(0, h(23, 0)).unwrap();
+        let antes_de_tudo = trechos(&n);
+        // (a soma dos timers de cada espaço, o tempo real de cada espaço nos dias fechados)
+        let totais = |n: &Nucleo| {
+            let s = n.snapshot(h(9, 0)).unwrap();
+            let soma = |e: i64| -> Ms {
+                s.grupos.iter().filter(|g| g.espaco_id == e).flat_map(|g| &g.timers).map(|t| acumulado_na_tela(&s, t.id)).sum()
+            };
+            let real = |e: i64| s.espacos.iter().find(|x| x.id == e).unwrap().real_antes_ms;
+            ((soma(ESPACO_PRIMEIRO), soma(pessoal)), (real(ESPACO_PRIMEIRO), real(pessoal)))
+        };
+        assert_eq!(totais(&n), ((20 * MIN, 120 * MIN), (20 * MIN, 90 * MIN)), "antes: Flow no Geral; Obra e Leitura no Pessoal");
+        // o grupo Casa (com a Obra) vai para o Geral: as horas dela, de ontem também, vão junto
+        let casa = n.banco.grupos().unwrap().into_iter().find(|g| g.espaco_id == pessoal).unwrap().id;
+        let m = n.mover_grupo(casa, ESPACO_PRIMEIRO).unwrap();
+        assert_eq!(
+            m,
+            Movido { tipo: "grupo".into(), id: casa, grupo_id: None, espaco_id: pessoal, para_grupo_id: None, para_espaco_id: ESPACO_PRIMEIRO }
+        );
+        assert_eq!(totais(&n), ((110 * MIN, 30 * MIN), (60 * MIN, 30 * MIN)), "o tempo real do Geral: a união de Flow e Obra ontem");
+        assert_eq!(trechos(&n), antes_de_tudo, "nenhum trecho muda");
+        // o Desfazer volta tudo
+        n.desfazer_mover(&m).unwrap();
+        assert_eq!(totais(&n), ((20 * MIN, 120 * MIN), (20 * MIN, 90 * MIN)));
+        // o timer Leitura vai para o "Sem grupo" do Geral; depois, para o grupo Casa (Pessoal)
+        let m = n.mover_timer(leitura, None, ESPACO_PRIMEIRO).unwrap();
+        assert_eq!(
+            m,
+            Movido { tipo: "timer".into(), id: leitura, grupo_id: None, espaco_id: pessoal, para_grupo_id: None, para_espaco_id: ESPACO_PRIMEIRO }
+        );
+        assert_eq!(totais(&n), ((50 * MIN, 90 * MIN), (50 * MIN, 60 * MIN)));
+        assert_eq!(trechos(&n), antes_de_tudo);
+        n.desfazer_mover(&m).unwrap();
+        assert_eq!(totais(&n), ((20 * MIN, 120 * MIN), (20 * MIN, 90 * MIN)));
+        let m = n.mover_timer(flow, Some(casa), ESPACO_PRIMEIRO).unwrap();
+        assert_eq!((m.grupo_id, m.espaco_id), (None, ESPACO_PRIMEIRO));
+        assert_eq!(n.banco.espacos_dos_timers().unwrap()[&flow], pessoal, "o espaço do grupo vale");
+        assert_eq!(totais(&n).0, (0, 140 * MIN));
+        n.desfazer_mover(&m).unwrap();
+        assert_eq!(n.banco.timers().unwrap().into_iter().find(|t| t.id == flow).unwrap().grupo_id, None);
+        // recusas: espaço arquivado ou que não existe, grupo ou timer que não existe
+        let velho = n.criar_espaco("Velho", "#333").unwrap();
+        let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == velho).unwrap();
+        e.arquivado = true;
+        n.editar_espaco(&e, h(9, 0)).unwrap();
+        assert!(n.mover_grupo(casa, velho).is_err());
+        assert!(n.mover_grupo(casa, 999).is_err());
+        assert!(n.mover_grupo(999, ESPACO_PRIMEIRO).is_err());
+        assert!(n.mover_timer(leitura, None, velho).is_err());
+        assert!(n.mover_timer(leitura, Some(999), ESPACO_PRIMEIRO).is_err());
+        assert!(n.mover_timer(999, None, ESPACO_PRIMEIRO).is_err());
+        // o Movido vai e volta pelo JSON (o Desfazer da tela)
+        let ida = serde_json::to_string(&m).unwrap();
+        assert_eq!(serde_json::from_str::<Movido>(&ida).unwrap(), m);
+    }
+
+    #[test]
+    fn editar_timer_num_espaco_arquivado_so_recusa_destino_novo_e_nada_fica_pela_metade() {
+        let mut n = nucleo(h(8, 0));
+        let (pessoal, obra, leitura, flow) = dois_espacos(&mut n);
+        let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == pessoal).unwrap();
+        e.arquivado = true;
+        n.editar_espaco(&e, h(9, 0)).unwrap();
+        let timer = |n: &Nucleo, id: i64| n.banco.timers().unwrap().into_iter().find(|t| t.id == id).unwrap();
+        // a Leitura (Sem grupo do Pessoal, arquivado): renomear sem trocar o lugar funciona
+        let mut t = timer(&n, leitura);
+        t.nome = "Leitura nova".into();
+        n.editar_timer(&t, h(9, 0)).unwrap();
+        assert_eq!(timer(&n, leitura).nome, "Leitura nova");
+        assert_eq!(n.banco.espacos_dos_timers().unwrap()[&leitura], pessoal);
+        // a Obra (grupo Casa, do Pessoal) também
+        let mut o = timer(&n, obra);
+        o.nome = "Obra 2".into();
+        n.editar_timer(&o, h(9, 0)).unwrap();
+        // um destino novo num espaço arquivado: recusa, com o que fazer, e nada muda
+        let mut f = timer(&n, flow);
+        f.grupo_id = None;
+        f.espaco_id = pessoal;
+        f.nome = "Flow 2".into();
+        assert_eq!(n.checar_editar_timer(&f, None).map(|_| ()), Err("Escolha outro grupo: Pessoal está arquivado.".into()));
+        assert_eq!(n.editar_timer(&f, h(9, 0)), Err("Escolha outro grupo: Pessoal está arquivado.".into()));
+        assert_eq!(timer(&n, flow).nome, "Flow");
+        assert_eq!(n.banco.espacos_dos_timers().unwrap()[&flow], ESPACO_PRIMEIRO);
+        // o ajuste se confere sem gravar
+        assert!(n.checar_ajuste(leitura, None, 10 * MIN, None).is_ok());
+        assert!(n.checar_ajuste(leitura, None, 0, None).is_err());
+        assert!(n.checar_ajuste(999, None, 10 * MIN, None).is_err());
+        assert!(n.banco.ajustes_do_dia(&n.dia_texto(h(9, 0))).unwrap().is_empty(), "conferir não grava");
+        // o grupo novo num espaço arquivado também é destino novo
+        assert_eq!(n.checar_destino(pessoal), Err("Escolha outro grupo: Pessoal está arquivado.".into()));
+        assert!(n.checar_destino(ESPACO_PRIMEIRO).is_ok());
+    }
+
+    #[test]
+    fn desfazer_mover_so_com_ele_no_lugar_e_o_de_antes_ativo() {
+        let mut n = nucleo(h(8, 0));
+        let (pessoal, _obra, leitura, flow) = dois_espacos(&mut n);
+        let onde = |n: &Nucleo, id: i64| {
+            let t = n.banco.timers().unwrap().into_iter().find(|t| t.id == id).unwrap();
+            (t.grupo_id, n.banco.espacos_dos_timers().unwrap().get(&id).copied().unwrap_or(t.espaco_id))
+        };
+        // moveu de novo depois: o Desfazer do primeiro mover não age (nada muda) e diz por quê
+        let m = n.mover_timer(leitura, None, ESPACO_PRIMEIRO).unwrap();
+        assert_eq!((m.para_grupo_id, m.para_espaco_id), (None, ESPACO_PRIMEIRO));
+        n.mover_timer(leitura, None, pessoal).unwrap();
+        assert_eq!(n.desfazer_mover(&m), Err(DESFAZER_JA_MUDOU.into()));
+        assert_eq!(onde(&n, leitura), (None, pessoal));
+        // o espaço de antes foi arquivado: o Desfazer recusa e o timer fica onde está
+        let velho = n.criar_espaco("Velho", "#333").unwrap();
+        n.mover_timer(flow, None, velho).unwrap();
+        let m = n.mover_timer(flow, None, ESPACO_PRIMEIRO).unwrap();
+        assert_eq!(m.espaco_id, velho);
+        let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == velho).unwrap();
+        e.arquivado = true;
+        n.editar_espaco(&e, h(9, 0)).unwrap();
+        let recusa = n.desfazer_mover(&m).unwrap_err();
+        assert!(recusa.starts_with("Não dá para desfazer: o espaço Velho está arquivado"), "{recusa}");
+        assert_eq!(onde(&n, flow), (None, ESPACO_PRIMEIRO));
+        // o grupo: movido de novo, ou o espaço de antes arquivado, também não volta
+        let casa = n.banco.grupos().unwrap().into_iter().find(|g| g.espaco_id == pessoal).unwrap().id;
+        let m = n.mover_grupo(casa, ESPACO_PRIMEIRO).unwrap();
+        n.mover_grupo(casa, pessoal).unwrap();
+        assert_eq!(n.desfazer_mover(&m), Err(DESFAZER_JA_MUDOU.into()));
+        let m = n.mover_grupo(casa, ESPACO_PRIMEIRO).unwrap();
+        let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == pessoal).unwrap();
+        e.arquivado = true;
+        n.editar_espaco(&e, h(9, 0)).unwrap();
+        assert!(n.desfazer_mover(&m).unwrap_err().starts_with("Não dá para desfazer: o espaço"));
+        assert_eq!(n.banco.espacos_dos_grupos().unwrap()[&casa], ESPACO_PRIMEIRO);
+        // no lugar e com o de antes ativo: volta
+        let m = n.mover_timer(leitura, None, ESPACO_PRIMEIRO).unwrap();
+        e.arquivado = false;
+        n.editar_espaco(&e, h(9, 0)).unwrap();
+        n.desfazer_mover(&m).unwrap();
+        assert_eq!(onde(&n, leitura), (None, pessoal));
+        // um Movido sem o destino (de antes desta versão) não desfaz às cegas
+        let velho_json = format!(r#"{{"tipo":"timer","id":{leitura},"grupo_id":null,"espaco_id":{ESPACO_PRIMEIRO}}}"#);
+        let sem_destino: Movido = serde_json::from_str(&velho_json).unwrap();
+        assert_eq!(n.desfazer_mover(&sem_destino), Err(DESFAZER_JA_MUDOU.into()));
     }
 
     #[test]

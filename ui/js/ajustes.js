@@ -25,6 +25,7 @@ ${assinatura ? `<p class="aj-assinatura mono">${esc(assinatura)}</p>` : ''}`;
 
 const SECOES = [
   ['aparencia', 'Aparência'],
+  ['painel', 'Painel'],
   ['dock', 'Dock'],
   ['espera', 'Lembretes no dock'],
   ['sistema', 'Sistema'],
@@ -436,6 +437,18 @@ export function htmlConexaoClaude(h, encontrado = true, settings = '', comBotao 
 </div>`;
 }
 
+/**
+ * Ajustes → Aparência (rodada 21; o tema saiu do cabeçalho): Claro, Escuro e Sistema (o padrão,
+ * que segue o claro/escuro do Windows). O "windows" de antes vale como Sistema.
+ */
+export const htmlAparencia = (tema) => {
+  const t = tema === 'claro' || tema === 'escuro' ? tema : 'sistema';
+  return `<div class="seg" role="radiogroup" aria-label="${esc(TEXTOS.temaRotulo)}">${radio('tema', 'claro', TEXTOS.temaClaro, t)}${radio('tema', 'escuro', TEXTOS.temaEscuro, t)}${radio('tema', 'sistema', TEXTOS.temaSistema, t)}</div>`;
+};
+
+/** Ajustes → Painel (rodada 21): mostrar a linha do tempo no Painel (ligado por padrão). */
+export const htmlPainel = (c) => caixa('painel_linha', TEXTOS.mostrarLinhaNoPainel, TEXTOS.mostrarLinhaNoPainelDica, c?.painel_linha !== false);
+
 /** O nome de um espaço vai até isto de letras (o núcleo confere também). */
 export const ESPACO_NOME_MAX = 24;
 
@@ -537,8 +550,9 @@ function html(snap) {
   ${secao(
     'aparencia',
     'Aparência',
-    `<div class="seg" role="radiogroup" aria-label="Tema">${radio('tema', 'escuro', 'Escuro', c.tema)}${radio('tema', 'claro', 'Claro', c.tema)}${radio('tema', 'windows', 'Seguir o Windows', c.tema)}</div>`,
+    htmlAparencia(c.tema),
   )}
+  ${secao('painel', TEXTOS.painelTitulo, htmlPainel(c))}
   ${secao(
     'dock',
     'Dock',
@@ -838,7 +852,7 @@ async function aoMudar(ev) {
     const v = el.checked;
     return chamar('dicas_ligar', { ligadas: v });
   }
-  if (nome === 'dock_situacao' || nome === 'zerar_na_virada') {
+  if (nome === 'dock_situacao' || nome === 'zerar_na_virada' || nome === 'painel_linha') {
     const v = el.checked;
     return salvar((c) => (c[nome] = v));
   }
@@ -1136,7 +1150,7 @@ export function atualizarAjustes(snap) {
     const r = raiz.querySelector(`input[name="${nome}"][value="${valor}"]`);
     if (r && !r.checked) r.checked = true;
   }
-  for (const nome of ['dock_situacao', 'modo_dev', 'zerar_na_virada']) {
+  for (const nome of ['dock_situacao', 'modo_dev', 'zerar_na_virada', 'painel_linha']) {
     const cx = raiz.querySelector(`input[name="${nome}"]`);
     if (cx && cx !== document.activeElement) cx.checked = Boolean(c[nome]);
   }

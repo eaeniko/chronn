@@ -115,7 +115,9 @@ test('rodada 20 §1: as abas aparecem só com 2 ou mais espaços não arquivados
   assert.equal(htmlAbas(umEspaco(), null), '');
   assert.equal(abaAtual(umEspaco()), null);
   // as três telas desenham as abas
-  for (const f of ['painel.js', 'cartoes.js', 'linha.js']) assert.match(fonte(f), /htmlAbas\(snap, a(ba)?(DaTela\(\))?\)/, f);
+  // rodada 21: as abas moram no cabeçalho (#abas), para as três telas
+  assert.match(fonte('painel.js'), /const abas = TELAS_COM_ABAS\.includes\(visao\) \? htmlAbas\(snap, abaDaTela\(\)\) : '';/);
+  for (const f of ['cartoes.js', 'linha.js']) assert.doesNotMatch(fonte(f), /htmlAbas/, f);
 });
 
 test('rodada 20 §1: "Todos" mostra tudo, com o nome do espaço como cabeçalho acima dos grupos dele', () => {
@@ -154,8 +156,8 @@ test('rodada 20 §1: o total do dia é o da aba; a dica traz o geral e o de cada
   // com um espaço só, a dica de antes
   assert.equal(dicaDoTotalDaAba(umEspaco(), null, AGORA), 'tempo contado 2h 00min');
   // o "Zerar todos" e o "Pausar tudo" dizem a aba
-  assert.equal(textoZerarTodos(s, 2), '↺ Zerar todos (Pessoal)');
-  assert.equal(textoZerarTodos(s, null), '↺ Zerar todos');
+  assert.equal(textoZerarTodos(s, 2), 'Zerar todos (Pessoal)');
+  assert.equal(textoZerarTodos(s, null), 'Zerar todos');
   assert.equal(textoPausarTudo(s, 1), 'Pausar tudo (Trabalho)');
   assert.equal(textoZeradosDaAba(s, 2), 'Todos os timers de Pessoal zerados.');
   assert.equal(textoZeradosDaAba(s, null), null);
@@ -196,7 +198,7 @@ test('rodada 20 §2: o menu do "+ Novo" tem Timer, Grupo e Espaço', () => {
   );
   // o botão no topo, ao lado do total
   const idx = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(idx, /id="total-dia">0min<\/b><\/div>\s*<button class="novo" id="bt-novo" data-acao="novo-menu"[^>]*aria-haspopup="menu" aria-expanded="false">\+ Novo<\/button>/);
+  assert.match(idx, /<button class="novo principal" id="bt-novo" data-acao="novo-menu"[^>]*aria-haspopup="menu" aria-expanded="false">\+ Novo<\/button>/);
   // os cartões tracejados e o "+ Novo grupo" solto saíram
   for (const f of ['componentes.js', 'painel.js', 'cartoes.js', 'foco.js']) assert.doesNotMatch(fonte(f), /novoTimerBotao|novoGrupoBotao|k-novo/, f);
 });
@@ -216,11 +218,11 @@ test('rodada 20 §2: o grupo pré-escolhido do timer novo em cada caso', () => {
   assert.equal(espacoPreEscolhido(s, null), 1);
   // o campo Grupo do diálogo: o grupo marcado; sem grupo, o espaço do "Sem grupo" à vista
   const comGrupo = campoGrupo(s, 100, 1);
-  assert.match(comGrupo, /<optgroup label="Trabalho"><option value="100" selected>Empresa<\/option><\/optgroup><optgroup label="Pessoal"><option value="200">Casa<\/option><\/optgroup>/);
+  assert.match(comGrupo, /<optgroup label="Trabalho"><option value="100" selected>Empresa<\/option><option value="sem:1">Sem grupo<\/option><\/optgroup><optgroup label="Pessoal"><option value="200">Casa<\/option><option value="sem:2">Sem grupo<\/option><\/optgroup>/);
   assert.match(comGrupo, /<div class="timer-espaco" hidden>/);
   const semGrupo = campoGrupo(s, null, 2);
-  assert.match(semGrupo, /<option value="" selected>Sem grupo<\/option>/);
-  assert.match(semGrupo, /<div class="timer-espaco"><label class="campo"><span>Espaço<\/span><select name="espaco"><option value="1">Trabalho<\/option><option value="2" selected>Pessoal<\/option><\/select>/);
+  assert.match(semGrupo, /<option value="sem:2" selected>Sem grupo<\/option>/);
+  assert.match(semGrupo, /<div class="timer-espaco" hidden><label class="campo"><span>Espaço<\/span><select name="espaco"><option value="1">Trabalho<\/option><option value="2" selected>Pessoal<\/option><\/select>/);
   // o "Novo grupo" e o editar grupo têm o campo Espaço
   assert.match(campoEspaco(s, 2), /<option value="2" selected>Pessoal/);
   assert.doesNotMatch(campoEspaco(s, 1), /Velho/, 'o arquivado não é oferecido');
@@ -302,7 +304,7 @@ test('rodada 20 §3: "Atividades no painel" no editar timer; a padrão não ocul
   };
   assert.deepEqual(atividadesOcultasDoForm(form), [2]);
   assert.equal(atividadesOcultasDoForm({ querySelectorAll: () => [] }), null, 'sem a seção, ficam as de antes');
-  assert.match(fonte('editar.js'), /ocultas: atividadesOcultasDoForm\(form\),/);
+  assert.match(fonte('editar.js'), /const ocultas = atividadesOcultasDoForm\(form\);[\s\S]*chamar\('editar_timer', \{[\s\S]*?ocultas,\s*\}\);/);
 });
 
 test('rodada 20: os textos novos da interface ficam num lugar só', () => {
@@ -318,10 +320,10 @@ test('revisão da rodada 20 (I2): o escopo do "Zerar todos" e do "Pausar tudo" v
   const s = snapDe({ config: { espaco_aba: 2 } });
   // a pessoa está na aba Pessoal do Painel e troca de tela
   const painel = topoDaTela(s, 'painel');
-  assert.deepEqual(painel, { espaco: 2, texto: '↺ Zerar todos (Pessoal)', dica: TEXTOS.dicaZerarTodosDoEspaco('Pessoal'), pausar: 'Pausar tudo (Pessoal)' });
+  assert.deepEqual(painel, { espaco: 2, texto: 'Zerar todos (Pessoal)', dica: TEXTOS.dicaZerarTodosDoEspaco('Pessoal'), pausar: 'Pausar tudo (Pessoal)' });
   for (const visao of ['cartoes', 'linha', 'ajustes']) assert.deepEqual(topoDaTela(s, visao), painel, `${visao}: a aba lembrada e o texto dela`);
   // o Foco não tem abas: "Todos", e o texto diz isso
-  assert.deepEqual(topoDaTela(s, 'foco'), { espaco: null, texto: '↺ Zerar todos', dica: null, pausar: 'Pausar tudo' });
+  assert.deepEqual(topoDaTela(s, 'foco'), { espaco: null, texto: 'Zerar todos', dica: null, pausar: 'Pausar tudo' });
   // o clique lê o escopo gravado no botão junto com o texto: nunca outro
   const botao = (topo) => ({ dataset: { espaco: String(topo.espaco ?? '') }, textContent: topo.texto });
   for (const visao of ['painel', 'cartoes', 'linha', 'ajustes', 'foco']) {
@@ -336,7 +338,7 @@ test('revisão da rodada 20 (I2): o escopo do "Zerar todos" e do "Pausar tudo" v
   const p = fonte('painel.js');
   // o topo é redesenhado também nos Ajustes, e o botão leva o escopo do mesmo objeto do texto
   assert.match(p, /if \(visao === 'ajustes'\) \{[^}]*desenharTopoDaAba\(\);/);
-  assert.match(p, /const topo = topoDaTela\(snap, visao\);\s*zt\.dataset\.espaco = topo\.espaco \?\? '';\s*trocarTexto\(zt, topo\.texto\);/);
+  assert.match(p, /const topo = topoDaTela\(snap, visao\);\s*zt\.dataset\.espaco = topo\.espaco \?\? '';\s*trocarTexto\(zt\.querySelector\('\.rot'\), topo\.texto\);/);
   assert.match(p, /const a = espacoDoBotao\(alvo\);\s*const z = await agir\('zerar_todos', \{ espaco_id: a \}\);/);
 });
 

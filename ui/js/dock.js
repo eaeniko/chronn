@@ -81,7 +81,7 @@ async function agir(nome, args) {
 // ---- tema e lado da tela ----
 
 function aplicarTema() {
-  const t = snap?.config.tema ?? 'escuro';
+  const t = snap?.config.tema ?? 'sistema';
   const tema = t === 'claro' || t === 'escuro' ? t : escuroDoWindows.matches ? 'escuro' : 'claro';
   document.documentElement.dataset.tema = tema;
 }

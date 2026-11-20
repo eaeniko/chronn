@@ -15,7 +15,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::estado_app::{
-    agora_ms, fuso_local, texto, trava, Descartado, Estado, Nucleo, PedidoNovoTimer, RegraDto, Zerado,
+    agora_ms, fuso_local, texto, trava, Descartado, Estado, Movido, Nucleo, PedidoNovoTimer, RegraDto, Zerado,
 };
 use crate::janelas::{self, Lado};
 use crate::laco::avisar;
@@ -256,12 +256,77 @@ pub fn criar_timer(
     })
 }
 
+/// O "Ajustar hoje" que o diálogo do timer vai gravar (para conferir antes).
+#[derive(serde::Deserialize)]
+pub struct AjustePedido {
+    pub atividade_id: Option<i64>,
+    pub delta_ms: Ms,
+    pub motivo: Option<String>,
+}
+
+/// Confere o editar timer e o ajuste junto, sem gravar nada (revisão da rodada 21): uma recusa
+/// não deixa nada gravado pela metade. `grupo_novo_espaco`: o espaço do "+ Novo grupo…" (o
+/// timer vem no lugar de agora).
+#[tauri::command(rename_all = "snake_case")]
+pub fn checar_editar_timer(
+    estado: State<'_, Estado>,
+    timer: Timer,
+    ocultas: Option<Vec<i64>>,
+    ajuste: Option<AjustePedido>,
+    grupo_novo_espaco: Option<i64>,
+) -> Result<(), String> {
+    nome_valido(&timer.nome)?;
+    let n = trava(&estado);
+    n.checar_banco()?;
+    if let Some(e) = grupo_novo_espaco {
+        n.checar_destino(e)?;
+    }
+    if let Some(a) = &ajuste {
+        n.checar_ajuste(timer.id, a.atividade_id, a.delta_ms, a.motivo.as_deref())?;
+    }
+    n.checar_editar_timer(&timer, ocultas.as_deref())?;
+    Ok(())
+}
+
 /// `ocultas`: as atividades que o painel do timer não mostra (rodada 20; sem elas, ficam as de
 /// antes).
 #[tauri::command(rename_all = "snake_case")]
 pub fn editar_timer(app: AppHandle, estado: State<'_, Estado>, timer: Timer, ocultas: Option<Vec<i64>>) -> Result<Snapshot, String> {
     nome_valido(&timer.nome)?;
     agir(&app, &estado, |n, agora| n.editar_timer_com(&timer, agora, ocultas.as_deref()))
+}
+
+// ---- mover entre espaços (rodada 21) ----
+
+/// "Mover para outro espaço…" do grupo. Devolve o que o `desfazer_mover` precisa.
+#[tauri::command(rename_all = "snake_case")]
+pub fn mover_grupo(app: AppHandle, estado: State<'_, Estado>, grupo_id: i64, espaco_id: i64) -> Result<Movido, String> {
+    let m = trava(&estado).mover_grupo(grupo_id, espaco_id)?;
+    avisar(&app);
+    Ok(m)
+}
+
+/// "Mover para…" do timer: para um grupo (de qualquer espaço) ou para o "Sem grupo" de um espaço.
+#[tauri::command(rename_all = "snake_case")]
+pub fn mover_timer(
+    app: AppHandle,
+    estado: State<'_, Estado>,
+    timer_id: i64,
+    grupo_id: Option<i64>,
+    espaco_id: i64,
+) -> Result<Movido, String> {
+    let m = trava(&estado).mover_timer(timer_id, grupo_id, espaco_id)?;
+    avisar(&app);
+    Ok(m)
+}
+
+/// O "Desfazer" do aviso do mover.
+#[tauri::command(rename_all = "snake_case")]
+pub fn desfazer_mover(app: AppHandle, estado: State<'_, Estado>, movido: Movido) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, _| {
+        n.desfazer_mover(&movido)?;
+        Ok(vec![])
+    })
 }
 
 // ---- espaços (rodada 20) ----
@@ -1075,7 +1140,7 @@ mod testes {
     #[test]
     fn a_assinatura_vai_no_sobre() {
         assert_eq!(nucleo::ASSINATURA, "chronn-eaeniko-7f3a9c");
-        let info = AjustesInfo { versao: "0.2.0".into(), settings: String::new(), corte: "00:00".into(), assinatura: nucleo::ASSINATURA };
+        let info = AjustesInfo { versao: "0.3.0".into(), settings: String::new(), corte: "00:00".into(), assinatura: nucleo::ASSINATURA };
         assert_eq!(serde_json::to_value(&info).unwrap()["assinatura"], "chronn-eaeniko-7f3a9c");
     }
 

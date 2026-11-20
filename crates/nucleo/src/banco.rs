@@ -408,6 +408,21 @@ impl Banco {
         v.collect()
     }
 
+    /// "Mover para outro espaço…" do grupo (rodada 21): só muda o `grupos.espaco_id`. Os timers
+    /// do grupo vão junto (contam no espaço do grupo), com todo o histórico; nenhum trecho muda.
+    pub fn mover_grupo(&self, id: i64, espaco_id: i64) -> Result<bool> {
+        Ok(self.conn.execute("UPDATE grupos SET espaco_id = ?1 WHERE id = ?2", params![espaco_id, id])? > 0)
+    }
+
+    /// "Mover para…" do timer (rodada 21): só muda o `grupo_id` e o `espaco_id` do timer (com
+    /// grupo, o espaço do grupo). Nenhum trecho muda: o histórico vai junto.
+    pub fn mover_timer(&self, id: i64, grupo_id: Option<i64>, espaco_id: i64) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE timers SET grupo_id = ?1, espaco_id = ?2 WHERE id = ?3",
+            params![grupo_id, espaco_id, id],
+        )? > 0)
+    }
+
     /// O nome de cada grupo (os arquivados também).
     pub fn nomes_dos_grupos(&self) -> Result<BTreeMap<i64, String>> {
         let mut st = self.conn.prepare("SELECT id, nome FROM grupos")?;
@@ -1550,7 +1565,8 @@ mod testes {
         let b = Banco::abrir_memoria().unwrap();
         let c = b.config_app().unwrap();
         assert_eq!(c, ConfigApp::default());
-        assert_eq!(c.tema, "escuro");
+        assert_eq!(c.tema, "sistema", "rodada 21: o padrão segue o sistema");
+        assert!(c.painel_linha, "a linha do tempo no Painel, ligada");
         assert_eq!(c.uso_s, 180);
         assert_eq!(c.inatividade_s, 600);
         assert_eq!(c.sessao_parada_s, 600);
