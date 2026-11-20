@@ -30,7 +30,7 @@ test('rodada 17: o "Iniciar com o Windows" passa pelo núcleo, nunca pelo plugin
 test('rodada 17: o tour essencial tem 5 passos e é o padrão; o completo segue com 8', async () => {
   const { PASSOS_ESSENCIAL, PASSOS, passosDoTour, htmlDoBalao } = await import('./tour.js');
   assert.deepEqual(PASSOS_ESSENCIAL.map((p) => p.id), ['cartao', 'claude', 'pastas', 'dock', 'ajuda']);
-  assert.equal(PASSOS.length, 9, 'o completo, com o "+ Novo" da rodada 20');
+  assert.equal(PASSOS.length, 10, 'o completo, com o "+ Novo" da rodada 20 e o menu das telas da 22');
   assert.equal(passosDoTour('essencial'), PASSOS_ESSENCIAL);
   assert.equal(passosDoTour(), PASSOS_ESSENCIAL, 'sem tipo, o essencial');
   assert.equal(passosDoTour('completo'), PASSOS);

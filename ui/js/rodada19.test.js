@@ -261,5 +261,5 @@ test('revisão da rodada 19 (M4): o menu fecha por qualquer caminho tirando os o
   // o redesenho com o menu aberto mantém o aria-expanded
   assert.match(p, /if \(menuAberto\) marcarExpandido\(menuAberto\.dono, true\);/);
   // o menu do ? usa o mesmo caminho
-  assert.match(p, /function alternarMenuAjuda\(botao\) \{\s*abrirMenu\(botao, htmlDoMenuAjuda\(visao\), 'direita'/);
+  assert.match(p, /function alternarMenuAjuda\(botao\) \{\s*abrirMenu\(botao, htmlDoMenuAjuda\(visao\), 'esquerda'/);
 });

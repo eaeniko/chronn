@@ -38,17 +38,17 @@ test('rodada 16: o pedido leva a sessão, a pergunta e o que mostrar fora das re
 
 test('rodada 16: os passos do tour, na ordem', async () => {
   const { PASSOS, htmlDoBalao } = await import('./tour.js');
-  assert.deepEqual(PASSOS.map((p) => p.id), ['cartao', 'etiquetas', 'hoje', 'perguntas', 'painel', 'dock', 'novo', 'zerar', 'ajustes']);
+  assert.deepEqual(PASSOS.map((p) => p.id), ['cartao', 'etiquetas', 'hoje', 'telas', 'perguntas', 'painel', 'dock', 'novo', 'zerar', 'ajustes']);
   assert.equal(PASSOS.find((p) => p.dock).id, 'dock', 'o dock pisca só no passo dele');
   for (const p of PASSOS) assert.ok(p.texto.split(/[.!?](\s|$)/).filter((x) => x && x.trim()).length <= 3, p.id);
   const primeiro = htmlDoBalao(0);
-  assert.match(primeiro, /Passo 1 de 9/);
+  assert.match(primeiro, /Passo 1 de 10/);
   assert.match(primeiro, /<h3 id="tour-t">O cartão do timer<\/h3>/);
   assert.match(primeiro, /data-tour="voltar" disabled>Voltar/);
   assert.match(primeiro, /data-tour="proximo">Próximo/);
   assert.match(primeiro, /data-tour="pular">Pular tour/);
   assert.match(primeiro, /data-tour="fechar"[^>]*aria-label="Fechar o tour">×/);
-  assert.match(htmlDoBalao(8), /data-tour="proximo">Concluir/);
+  assert.match(htmlDoBalao(PASSOS.length - 1), /data-tour="proximo">Concluir/);
   assert.doesNotMatch(htmlDoBalao(3), /disabled/);
 });
 
@@ -323,18 +323,19 @@ test('revisão da rodada 16: com timers e os hooks desligados, a faixa "Conectar
 });
 
 test('revisão da rodada 16: um diálogo por cima pausa o tour, que volta no mesmo passo', async () => {
-  const { criarTour } = await import('./tour.js');
+  const { criarTour, PASSOS: P } = await import('./tour.js');
   const r = { desenhos: [], gravou: 0, pisca: [] };
   const t = criarTour({ desenhar: (i) => r.desenhos.push(i), gravar: () => r.gravou++, piscarDock: (s) => r.pisca.push(s) });
-  t.ir(5);
+  const DOCK = P.findIndex((p) => p.dock);
+  t.ir(DOCK);
   assert.deepEqual(r.pisca, [true], 'o passo do dock pisca');
   t.pausar();
   assert.deepEqual(r.pisca, [true, false], 'pausado: o dock para de piscar');
   assert.equal(t.aberto, true);
   assert.equal(r.gravou, 0, 'pausar não fecha');
   t.retomar();
-  assert.equal(t.passo, 5, 'o mesmo passo');
-  assert.equal(r.desenhos.at(-1), 5);
+  assert.equal(t.passo, DOCK, 'o mesmo passo');
+  assert.equal(r.desenhos.at(-1), DOCK);
   assert.deepEqual(r.pisca, [true, false, true]);
   // a tela pausa sozinha com um diálogo no body e solta o teclado
   const tour = fonte('tour.js');

@@ -48,6 +48,20 @@ export const TEXTOS = {
   zeradosTodosDoEspaco: (espaco) => `Todos os timers de ${espaco} zerados.`,
   dicaZerarTodosDoEspaco: (espaco) =>
     `Zerar todos os timers de ${espaco}: o número de cada um volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão`,
+  // o cabeçalho "opção A" (rodada 22, 0.3.1): as telas num menu, o "+ Novo" e o "Lançar o dia" na
+  // linha de cima
+  telasRotulo: 'Telas',
+  telasDica: 'Trocar de tela',
+  telaPainel: 'Painel',
+  telaFoco: 'Foco',
+  telaCartoes: 'Cartões',
+  telaAjustes: 'Ajustes',
+  novoRotulo: 'Novo',
+  lancarDia: 'Lançar o dia',
+  emBreve: 'em breve',
+  lancarDiaDica: 'Lançar o dia: disponível numa próxima versão',
+  tourTelasTitulo: 'As telas',
+  tourTelasTexto: 'Painel, Foco, Cartões e Linha do tempo: troque de tela por este menu.',
   // o "+ Novo"
   novo: '+ Novo',
   novoDica: 'Novo timer, grupo ou espaço (tecla N)',

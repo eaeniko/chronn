@@ -82,6 +82,7 @@ import { vigiarTitulos, trocarTitulo } from './titulos.js';
 import { iniciarTour, mostrarFaixaTour, tourAtivo, passosDoTour, htmlDoMenuAjuda, redesenharTour } from './tour.js';
 import { DICAS, gatilhos, criarFila, balaoDeDica, fecharDicaAVista } from './dicas.js';
 import { TEXTOS } from './textos.js';
+import { htmlDoMenuTelas, rotuloDaTela, proximoNoMenu } from './telas.js';
 
 // as dicas longas em linhas curtas (rodada 19)
 vigiarTitulos();
@@ -147,12 +148,8 @@ function mostrarVisao() {
   $('#bt-ajustes').classList.toggle('on', visao === 'ajustes');
   // o cabeçalho segue a tela (as abas só nas telas com abas; o escopo do topo)
   desenharTopoDaAba();
-  for (const b of document.querySelectorAll('.views [data-visao]')) {
-    const on = b.dataset.visao === visao;
-    b.classList.toggle('on', on);
-    if (on) b.setAttribute('aria-current', 'page');
-    else b.removeAttribute('aria-current');
-  }
+  // rodada 22: as telas num menu; o botão diz a tela de agora
+  trocarTexto($('#bt-telas .tn'), rotuloDaTela(visao));
   for (const el of document.querySelectorAll('.vis')) {
     const on = el.dataset.v === visao;
     el.hidden = !on;
@@ -355,16 +352,21 @@ function desenharTopoDaAba() {
 }
 
 /**
- * Antes de a linha de baixo do cabeçalho quebrar, as ações viram ícones (com o texto na dica);
- * o "+ Novo" mantém o texto. Só depois, se ainda não couber, a linha quebra (rodada 21).
+ * Sem lugar no cabeçalho (rodada 22). Linha 2: antes de quebrar, as ações viram ícones (com o
+ * texto na dica); só depois, se ainda não couber, a linha quebra. Linha 1: primeiro sai o "em
+ * breve" do "Lançar o dia", depois o texto dele; o "+ Novo" mantém o texto sempre.
  */
 function ajustarCabecalho() {
   const top = $('.top');
-  const views = $('.top-l2 .views');
+  const telas = $('.top-l2 .telas');
   const acoes = $('.top-l2 .acoes');
-  if (!top || !views || !acoes) return;
-  top.classList.remove('compacta');
-  if (acoes.offsetTop > views.offsetTop + 4) top.classList.add('compacta');
+  const l1 = $('.top-l1');
+  if (!top || !telas || !acoes || !l1) return;
+  top.classList.remove('compacta', 'l1-apertada', 'l1-sem-texto');
+  if (acoes.offsetTop > telas.offsetTop + 4) top.classList.add('compacta');
+  const sobra = () => l1.scrollWidth > l1.clientWidth + 1;
+  if (sobra()) top.classList.add('l1-apertada');
+  if (sobra()) top.classList.add('l1-sem-texto');
 }
 window.addEventListener('resize', ajustarCabecalho);
 
@@ -418,10 +420,13 @@ function andar() {
   // o total do dia é o da aba (rodada 20); de onde vem o número, o geral e o de cada espaço na dica
   const total = curto(totalDaAba(snap, abaDoTopo(snap, visao), agora));
   const dicaTotal = dicaDoTotalDaAba(snap, abaDoTopo(snap, visao), agora);
+  // o total mudou de largura: o cabeçalho confere de novo se cabe (rodada 22)
+  const totalAntes = $('#total-dia').textContent;
   for (const el of [$('#total-dia'), ...document.querySelectorAll('[data-total-dia]')]) {
     trocarTexto(el, total);
     trocarTitulo(el, dicaTotal);
   }
+  if (totalAntes.length !== total.length) ajustarCabecalho();
   for (const t of ts) {
     // o número do timer (o acumulado desde o zerar), com "desde …" na dica
     const ms = msDoTimer(t, agora);
@@ -490,8 +495,8 @@ async function aoClicar(ev) {
   const id = Number(alvo.dataset.timer);
   const grupoId = alvo.dataset.grupo === '' || alvo.dataset.grupo === undefined ? null : Number(alvo.dataset.grupo);
   switch (acao) {
-    case 'visao':
-      await trocarVisao(alvo.dataset.visao);
+    case 'telas-menu':
+      alternarMenuTelas(alvo);
       break;
     case 'play':
       selecionado = id;
@@ -846,7 +851,8 @@ async function moverTimer(t, grupoId, espacoId) {
 
 /** O menu do "+ Novo" (rodada 20): Timer, Grupo e Espaço. */
 function alternarMenuNovo(botao) {
-  abrirMenu(botao, htmlDoMenuNovo(), 'direita', (b) => criarNovo(b.dataset.novo));
+  // (rodada 22: o "+ Novo" e o ? ficam à esquerda; os menus abrem alinhados pela esquerda)
+  abrirMenu(botao, htmlDoMenuNovo(), 'esquerda', (b) => criarNovo(b.dataset.novo));
 }
 
 /**
@@ -868,9 +874,22 @@ async function criarNovo(tipo) {
   }
 }
 
+/** O menu das telas ("Painel ▾", rodada 22): a escolhida troca a tela. */
+function alternarMenuTelas(botao, foco = null) {
+  abrirMenu(
+    botao,
+    htmlDoMenuTelas(visao),
+    'esquerda',
+    (b) => {
+      if (b.dataset.visao) trocarVisao(b.dataset.visao);
+    },
+    foco,
+  );
+}
+
 /** O menu do ? (abre e fecha; Esc e o clique fora fecham). */
 function alternarMenuAjuda(botao) {
-  abrirMenu(botao, htmlDoMenuAjuda(visao), 'direita', (b) => {
+  abrirMenu(botao, htmlDoMenuAjuda(visao), 'esquerda', (b) => {
     if (b.dataset.ajuda) verTour(b.dataset.ajuda);
   });
 }
@@ -897,7 +916,7 @@ function marcarExpandido(dono, aberto) {
  * clicado, depois de fechar. Fechar por qualquer caminho tira os ouvintes; o clique no botão do
  * dono (mesmo redesenhado) com o menu aberto só fecha.
  */
-function abrirMenu(botao, html, lado, aoEscolher) {
+function abrirMenu(botao, html, lado, aoEscolher, foco = null) {
   const dono = donoDoMenu(botao);
   if (menuAberto) {
     const era = menuAberto.dono;
@@ -918,7 +937,12 @@ function abrirMenu(botao, html, lado, aoEscolher) {
     const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - m.width - 8));
     Object.assign(menu.style, { top: `${Math.round(top)}px`, left: `${Math.round(left)}px` });
   }
-  menu.querySelector('button:not(:disabled)')?.focus();
+  // o foco vai na opção marcada (a tela de agora), ou na primeira habilitada; aberto pelas setas
+  // (`foco`), na primeira ou na última
+  const habilitadas = [...menu.querySelectorAll('button:not(:disabled)')];
+  const inicial =
+    foco === 'primeira' ? habilitadas[0] : foco === 'ultima' ? habilitadas.at(-1) : menu.querySelector('[aria-checked="true"]:not(:disabled)') ?? habilitadas[0];
+  inicial?.focus();
   const fechar = () => {
     menu.remove();
     document.removeEventListener('mousedown', fora, true);
@@ -934,12 +958,37 @@ function abrirMenu(botao, html, lado, aoEscolher) {
     fechar();
   };
   const tecla = (ev) => {
+    // com o foco fora do menu (num campo, por exemplo), as teclas são dele: só o Esc fecha, sem
+    // mexer no foco (revisão da rodada 22)
+    const dentro = menu.contains(document.activeElement);
     if (ev.key === 'Escape') {
       ev.preventDefault();
       fechar();
-      botaoDoDono(dono)?.focus();
+      if (dentro) botaoDoDono(dono)?.focus();
+      return;
     }
+    if (!dentro) return;
+    // Tab fecha; o foco volta ao botão do menu e o Tab segue dali
+    if (ev.key === 'Tab') {
+      fechar();
+      botaoDoDono(dono)?.focus();
+      return;
+    }
+    // as setas andam pelas opções habilitadas (Home e End vão às pontas; rodada 22)
+    const opcoes = [...menu.querySelectorAll('button:not(:disabled)')];
+    const i = proximoNoMenu(opcoes.length, opcoes.indexOf(document.activeElement), ev.key);
+    if (i === null) return;
+    ev.preventDefault();
+    opcoes[i].focus();
   };
+  // o foco saiu do menu para outro lugar: fecha, sem puxar o foco de volta (o botão do dono fica
+  // com o clique dele, que só fecha)
+  menu.addEventListener('focusout', (ev) => {
+    const para = ev.relatedTarget;
+    if (!para || menu.contains(para) || !menu.isConnected) return;
+    if (para.closest?.('[data-acao]') && donoDoMenu(para.closest('[data-acao]')) === dono) return;
+    fechar();
+  });
   menuAberto = { dono, fechar };
   marcarExpandido(dono, true);
   menu.addEventListener('click', (ev) => {
@@ -1144,6 +1193,12 @@ async function verLigarSessao() {
 }
 
 function aoTeclar(ev) {
+  // ↓ ou ↑ no botão das telas fechado abre o menu na primeira ou na última opção (revisão da rodada 22)
+  if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && ev.target.matches?.('#bt-telas') && ev.target.getAttribute('aria-expanded') !== 'true') {
+    ev.preventDefault();
+    alternarMenuTelas(ev.target, ev.key === 'ArrowDown' ? 'primeira' : 'ultima');
+    return;
+  }
   if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('.corpo [data-timer][tabindex]')) {
     ev.preventDefault();
     selecionar(Number(ev.target.dataset.timer));
@@ -1161,6 +1216,9 @@ function aoTeclar(ev) {
 // ---- início ----
 
 nomearPagina(document);
+for (const el of document.querySelectorAll('[data-texto]')) trocarTexto(el, TEXTOS[el.dataset.texto]);
+for (const el of document.querySelectorAll('[data-dica]')) trocarTitulo(el, TEXTOS[el.dataset.dica]);
+trocarTitulo($('#bt-telas'), TEXTOS.telasDica);
 document.addEventListener('click', aoClicar);
 document.addEventListener('keydown', aoTeclar);
 document.addEventListener('visibilitychange', ligarRelogio);

@@ -9,7 +9,8 @@ import { NOME_APP } from './nome.js';
 import { TEXTOS } from './textos.js';
 
 /**
- * O tour completo (rodada 16, 8 passos; 9 com o "+ Novo" da rodada 20), na ordem. `alvo`: o seletor da parte da tela; `dock`: o
+ * O tour completo (rodada 16, 8 passos; 9 com o "+ Novo" da rodada 20; 10 com o menu das telas
+ * da rodada 22), na ordem. `alvo`: o seletor da parte da tela; `dock`: o
  * dock pisca neste passo.
  */
 export const PASSOS = [
@@ -30,6 +31,13 @@ export const PASSOS = [
     titulo: 'O total de hoje',
     texto: 'Quanto você trabalhou hoje. Passe o mouse em cima para ver de onde vem o número.',
     alvo: '#total-dia',
+  },
+  {
+    // rodada 22: as telas foram para um menu ("Painel ▾"); o passo aponta para ele
+    id: 'telas',
+    titulo: TEXTOS.tourTelasTitulo,
+    texto: TEXTOS.tourTelasTexto,
+    alvo: '#bt-telas',
   },
   {
     id: 'perguntas',

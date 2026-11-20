@@ -34,27 +34,28 @@
   <header class="top">
     <div class="top-l1">
       <div class="logo"><b aria-hidden="true"></b><span data-nome-app></span></div>
+      <div class="l1-criar">
+        <button class="novo principal" id="bt-novo" data-acao="novo-menu" title="Novo timer, grupo ou espaço (tecla N)" aria-haspopup="menu" aria-expanded="false"><svg class="bi" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg><span data-texto="novoRotulo">Novo</span></button>
+        <span class="cta-dica" title="Lançar o dia: disponível numa próxima versão" data-dica="lancarDiaDica"><button class="lancar" id="bt-lancar" disabled><svg class="bi" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 11V3M4.5 6.5 8 3l3.5 3.5M3 13h10"/></svg><span class="rot" data-texto="lancarDia">Lançar o dia</span><span class="breve" data-texto="emBreve">em breve</span></button></span>
+      </div>
+      <div class="l1-ajuda">
+        <button class="ic" id="bt-tour" data-acao="tour" title="Tour de 1 minuto" aria-label="Ver o tour" aria-haspopup="menu" aria-expanded="false">?</button>
+        <button class="ic" id="bt-ajustes" data-acao="ajustes" title="Ajustes" aria-label="Ajustes">⚙&#xFE0E;</button>
+      </div>
       <div class="sp"></div>
-      <button class="ic" id="bt-tour" data-acao="tour" title="Tour de 1 minuto" aria-label="Ver o tour" aria-haspopup="menu" aria-expanded="false">?</button>
-      <button class="ic" id="bt-ajustes" data-acao="ajustes" title="Ajustes" aria-label="Ajustes">⚙&#xFE0E;</button>
       <div class="day"><small id="data"></small><b class="mono" id="total-dia">0min</b></div>
     </div>
     <div class="top-l2">
-      <nav class="views" aria-label="Visões">
-        <button data-acao="visao" data-visao="painel">Painel</button>
-        <button data-acao="visao" data-visao="foco">Foco</button>
-        <button data-acao="visao" data-visao="cartoes">Cartões</button>
-        <button data-acao="visao" data-visao="linha">Linha do tempo</button>
+      <nav class="telas" aria-label="Telas">
+        <button class="telas-bt" id="bt-telas" data-acao="telas-menu" title="Trocar de tela" aria-haspopup="menu" aria-expanded="false"><span class="tn">Painel</span><span class="seta" aria-hidden="true">▾</span></button>
       </nav>
       <span class="sep-v" id="abas-sep" aria-hidden="true" hidden></span>
       <div class="abas-topo" id="abas"></div>
       <div class="sp"></div>
       <div class="acoes">
-        <span class="rodando-n" id="rodando" hidden><b class="rn mono"></b><span class="rt"></span></span>
+        <span class="rodando-n" id="rodando" hidden><i class="pt-on" aria-hidden="true"></i><b class="rn mono"></b><span class="rt"></span></span>
         <button class="acao" id="bt-pausar-tudo" data-acao="pausar-tudo" title="Pausar tudo" hidden><span class="ai" aria-hidden="true">⏸&#xFE0E;</span><span class="rot">Pausar tudo</span></button>
         <button class="acao" id="bt-zerar-todos" data-acao="zerar-todos" title="Zerar todos: o número de cada timer volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão"><span class="ai" aria-hidden="true">↺</span><span class="rot">Zerar todos</span></button>
-        <span class="cta-dica" title="Lançar o dia: disponível numa próxima versão"><button class="acao" disabled><span class="ai" aria-hidden="true">⇪</span><span class="rot">Lançar o dia · em breve</span></button></span>
-        <button class="novo principal" id="bt-novo" data-acao="novo-menu" title="Novo timer, grupo ou espaço (tecla N)" aria-haspopup="menu" aria-expanded="false">+ Novo</button>
       </div>
     </div>
   </header>

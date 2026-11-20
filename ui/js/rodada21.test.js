@@ -150,20 +150,10 @@ test('rodada 21 §1: o aviso de mover, com o Desfazer por 10 s', () => {
   assert.equal((p.match(/chamar\('desfazer_mover', \{ movido: m \}\)/g) ?? []).length, 2);
 });
 
-test('rodada 21 §2: o cabeçalho em duas linhas, na ordem, com o "+ Novo" principal', () => {
-  const l1 = INDEX.slice(INDEX.indexOf('<div class="top-l1">'), INDEX.indexOf('<div class="top-l2">'));
+test('rodada 21 §2: o cabeçalho em duas linhas, com o "+ Novo" principal (a ordem nova está na rodada 22)', () => {
   const l2 = INDEX.slice(INDEX.indexOf('<div class="top-l2">'), INDEX.indexOf('</header>'));
-  const ordem = (trecho, marcas) => marcas.map((m) => trecho.indexOf(m));
-  // linha 1: o nome, o meio vazio, ? e ⚙, e o total (com a data em cima) por último
-  const p1 = ordem(l1, ['class="logo"', 'class="sp"', 'id="bt-tour"', 'id="bt-ajustes"', 'id="data"', 'id="total-dia"']);
-  assert.ok(p1.every((x) => x >= 0), String(p1));
-  assert.deepEqual([...p1].sort((a, b) => a - b), p1);
-  // linha 2: a navegação, o separador e as abas; depois as ações, com o "+ Novo" por último
-  const p2 = ordem(l2, ['class="views"', 'id="abas-sep"', 'id="abas"', 'class="sp"', 'id="rodando"', 'id="bt-pausar-tudo"', 'id="bt-zerar-todos"', 'Lançar o dia', 'id="bt-novo"']);
-  assert.ok(p2.every((x) => x >= 0), String(p2));
-  assert.deepEqual([...p2].sort((a, b) => a - b), p2);
   // o "+ Novo" é o botão principal; o tema saiu do cabeçalho
-  assert.match(l2, /<button class="novo principal" id="bt-novo"[^>]*>\+ Novo<\/button>/);
+  assert.match(INDEX, /<button class="novo principal" id="bt-novo"/);
   assert.doesNotMatch(INDEX, /bt-tema|data-acao="tema"/);
   const css = readFileSync(new URL('../css/app.css', import.meta.url), 'utf8');
   assert.match(css, /\.novo\.principal \{[^}]*background: var\(--acento\); color: #fff;/);
@@ -171,13 +161,12 @@ test('rodada 21 §2: o cabeçalho em duas linhas, na ordem, com o "+ Novo" princ
   // o total é o maior texto do cabeçalho
   const px = (sel) => Number(css.match(new RegExp(`${sel} \\{[^}]*font-size: (\\d+)px`))[1]);
   assert.ok(px('\\.day b') > px('\\.logo') && px('\\.day b') > px('\\.novo'), 'o total é o maior');
-  // sem espaço, as ações viram ícones antes de a linha quebrar (o "+ Novo" mantém o texto)
-  assert.match(css, /\.top\.compacta \.acao \{ width: 32px;[^}]*\}\s*\.top\.compacta \.acao \.rot \{ display: none; \}/);
-  assert.doesNotMatch(css, /\.novo[^{]*\.rot|compacta \.novo/);
-  const p = fonte('painel.js');
-  assert.match(p, /top\.classList\.remove\('compacta'\);\s*if \(acoes\.offsetTop > views\.offsetTop \+ 4\) top\.classList\.add\('compacta'\);/);
+  // sem espaço, as ações da linha 2 viram ícones antes de a linha quebrar (o "+ Novo" mantém o texto)
+  assert.match(css, /\.top\.compacta \.acao \{ width: 30px;[^}]*\}\s*\.top\.compacta \.acao \.rot \{ display: none; \}/);
+  assert.doesNotMatch(css, /\.novo[^{]*\.rot|compacta \.novo|l1-[a-z-]+ \.novo/);
+  assert.match(fonte('painel.js'), /if \(acoes\.offsetTop > telas\.offsetTop \+ 4\) top\.classList\.add\('compacta'\);/);
   // cada ação tem o texto na dica (o ícone sozinho continua dizendo o que faz)
-  for (const id of ['bt-pausar-tudo', 'bt-zerar-todos']) assert.match(INDEX, new RegExp(`id="${id}"[^>]*title="`), id);
+  for (const id of ['bt-pausar-tudo', 'bt-zerar-todos']) assert.match(l2, new RegExp(`id="${id}"[^>]*title="`), id);
   // "N rodando" e "Pausar tudo" saíram do corpo do Painel
   assert.doesNotMatch(fonte('painel.js'), /barraRodando/);
 });
@@ -310,7 +299,8 @@ test('revisão 21 M2: o Desfazer do mover que não age mostra a recusa na faixa'
 });
 
 test('revisão 21 M3: compacto, o "N rodando" fica só o número (com a dica); o nome da atividade antes do "rodando"', () => {
-  assert.match(INDEX, /<span class="rodando-n" id="rodando" hidden><b class="rn mono"><\/b><span class="rt"><\/span><\/span>/);
+  // (rodada 22: com o ponto verde antes do número)
+  assert.match(INDEX, /<span class="rodando-n" id="rodando" hidden><i class="pt-on" aria-hidden="true"><\/i><b class="rn mono"><\/b><span class="rt"><\/span><\/span>/);
   const css = readFileSync(new URL('../css/app.css', import.meta.url), 'utf8');
   assert.match(css, /\.top\.compacta \.rodando-n \.rt \{ display: none; \}/);
   assert.doesNotMatch(css, /\.top\.compacta \.rodando-n \{ display: none/);
@@ -334,7 +324,8 @@ test('revisão 21 M4: o Sistema resolvido no <head>, antes de pintar (sem piscar
 });
 
 test('revisão 21 M5: o "Mover para…" põe o foco na primeira opção habilitada', () => {
-  assert.match(fonte('painel.js'), /menu\.querySelector\('button:not\(:disabled\)'\)\?\.focus\(\);/);
+  // (rodada 22: a opção marcada, como a tela de agora no menu das telas, vem antes)
+  assert.match(fonte('painel.js'), /const habilitadas = \[\.\.\.menu\.querySelectorAll\('button:not\(:disabled\)'\)\];[\s\S]*?\?\? habilitadas\[0\];\s*inicial\?\.focus\(\);/);
 });
 
 test('re-revisão 21 R1: o editar timer confere tudo (o ajuste e o lugar) antes de gravar qualquer coisa', () => {

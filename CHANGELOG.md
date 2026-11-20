@@ -3,6 +3,20 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.3.1] - 2026-11-20
+
+### Changed
+- Header, first row: "+ New" is now the main button, next to "Log the day" (coming soon), Help and
+  Settings, all on the left. The day total stands alone on the right.
+- Header, second row: a screens menu (Panel, Focus, Cards, Timeline) with the current screen
+  checked, then the space tabs. "N running", "Pause all" and "Reset all" become quiet text buttons
+  on the right.
+- On narrow windows the header compacts step by step instead of cutting or overlapping.
+- Small menus work with the arrow keys, Home and End, and show a visible focus outline.
+
+### Added
+- A tour step that shows the screens menu.
+
 ## [0.3.0] - 2026-11-20
 
 ### Added

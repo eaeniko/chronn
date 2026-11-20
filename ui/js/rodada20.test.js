@@ -198,7 +198,7 @@ test('rodada 20 §2: o menu do "+ Novo" tem Timer, Grupo e Espaço', () => {
   );
   // o botão no topo, ao lado do total
   const idx = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.match(idx, /<button class="novo principal" id="bt-novo" data-acao="novo-menu"[^>]*aria-haspopup="menu" aria-expanded="false">\+ Novo<\/button>/);
+  assert.match(idx, /<button class="novo principal" id="bt-novo" data-acao="novo-menu"[^>]*aria-haspopup="menu" aria-expanded="false"><svg class="bi"[^>]*>.*?<\/svg><span data-texto="novoRotulo">Novo<\/span><\/button>/);
   // os cartões tracejados e o "+ Novo grupo" solto saíram
   for (const f of ['componentes.js', 'painel.js', 'cartoes.js', 'foco.js']) assert.doesNotMatch(fonte(f), /novoTimerBotao|novoGrupoBotao|k-novo/, f);
 });

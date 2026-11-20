@@ -1140,7 +1140,7 @@ mod testes {
     #[test]
     fn a_assinatura_vai_no_sobre() {
         assert_eq!(nucleo::ASSINATURA, "chronn-eaeniko-7f3a9c");
-        let info = AjustesInfo { versao: "0.3.0".into(), settings: String::new(), corte: "00:00".into(), assinatura: nucleo::ASSINATURA };
+        let info = AjustesInfo { versao: "0.3.1".into(), settings: String::new(), corte: "00:00".into(), assinatura: nucleo::ASSINATURA };
         assert_eq!(serde_json::to_value(&info).unwrap()["assinatura"], "chronn-eaeniko-7f3a9c");
     }
 
