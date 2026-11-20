@@ -164,6 +164,18 @@
 .lista { display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow-y: auto; margin: 0 -6px; padding: 2px 6px; scrollbar-width: thin; }
 .lista-g { font-size: 10.5px; color: var(--mu); text-transform: uppercase; letter-spacing: .06em; margin: 8px 4px 2px; }
 .lista-g:first-child { margin-top: 0; }
+/* rodada 20: o espaço acima dos grupos dele no "Ligar a um timer" */
+.lista-e { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; color: var(--tx); margin: 10px 4px 2px; }
+.lista-e:first-child { margin-top: 0; }
+.lista-e i { width: 8px; height: 8px; border-radius: 3px; background: var(--e); }
+/* rodada 20: editar timer → "Atividades no painel" */
+.at-painel-g { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.at-painel-g legend { font-size: 12px; color: var(--tx2); margin-bottom: 6px; padding: 0; }
+.at-painel-g small { flex-basis: 100%; }
+.chk.at-painel { align-items: center; }
+.chk.at-painel > span { flex-direction: row; align-items: center; gap: 6px; }
+.chk.at-painel > span i { width: 8px; height: 8px; border-radius: 50%; background: var(--a); flex-shrink: 0; }
+.at-painel input:disabled + span { opacity: .75; }
 .it {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 1px; align-items: baseline;
   padding: 8px 10px; border-radius: 10px; text-align: left; transition: background .15s;

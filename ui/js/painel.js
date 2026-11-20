@@ -11,8 +11,7 @@ import {
   msDoTimer,
   chaveGrupo,
   cor,
-  novoGrupoBotao,
-  novoTimerBotao,
+  semTimerNenhum,
   barraRodando,
   usarAtividades,
   usarCorte,
@@ -24,10 +23,30 @@ import {
   htmlDoMenuZerar,
 } from './componentes.js';
 import { linhaCompacta, visaoLinha } from './linha.js';
+import {
+  abaAtual,
+  comAbas,
+  gruposDaAba,
+  timersDaAba,
+  htmlAbas,
+  secoesDaAba,
+  totalDaAba,
+  dicaDoTotalDaAba,
+  textoPausarTudo,
+  textoZeradosDaAba,
+  topoDaTela,
+  espacoDoBotao,
+  abaDoTopo,
+  grupoPreEscolhido,
+  espacoPreEscolhido,
+  htmlDoMenuNovo,
+  teclaDoNovo,
+} from './espacos.js';
 import { visaoCartoes } from './cartoes.js';
 import { visaoFoco } from './foco.js';
 import {
   novoGrupo,
+  novoEspaco,
   editarGrupo,
   novoTimer,
   editarTimer,
@@ -183,8 +202,15 @@ const lerSnap = () => snap;
 // a régua conta as horas desde a meia-noite, mesmo com o corte do dia depois dela
 const meiaNoite = () => snap.dia_inicio - snap.config.corte_min * 60_000;
 
+/** As telas com as abas de espaço (rodada 20). */
+const TELAS_COM_ABAS = ['painel', 'cartoes', 'linha'];
+
+/** A aba de espaço desta tela (nulo: "Todos", e sempre nas telas sem abas). */
+const abaDaTela = () => (snap && TELAS_COM_ABAS.includes(visao) ? abaAtual(snap) : null);
+
+/** O timer do painel: o escolhido, se está na aba; senão, o primeiro rodando ou o primeiro da aba. */
 function timerSelecionado() {
-  const ts = todosTimers();
+  const ts = snap ? timersDaAba(snap, abaDaTela()) : [];
   return ts.find((t) => t.id === selecionado) ?? ts.find((t) => t.rodando) ?? ts[0] ?? null;
 }
 
@@ -273,6 +299,8 @@ function desenhar() {
   desenharPerguntas();
   if (visao === 'ajustes') {
     $('#data').textContent = dataDoDia(snap.dia);
+    // o topo dos Ajustes vale para a aba lembrada (revisão da rodada 20)
+    desenharTopoDaAba();
     atualizarAjustes(snap);
     andar();
     return;
@@ -284,23 +312,41 @@ function desenhar() {
 
   preservando(() => {
     if (visao === 'painel') desenharPainel(atual, agora);
-    else if (visao === 'cartoes') $('#v-cartoes').innerHTML = visaoCartoes(snap, agora, fechados, selecionado);
+    else if (visao === 'cartoes') $('#v-cartoes').innerHTML = visaoCartoes(snap, agora, fechados, selecionado, abaDaTela());
     else if (visao === 'foco') desenharFoco(atual, agora);
-    else $('#v-linha').innerHTML = visaoLinha(snap, meiaNoite(), agora);
+    else $('#v-linha').innerHTML = visaoLinha(snap, meiaNoite(), agora, abaDaTela());
   });
+  desenharTopoDaAba();
   minutoDesenhado = Math.floor(agora / 60_000);
   // o botão redesenhado com o menu dele aberto segue marcado (revisão da rodada 19)
   if (menuAberto) marcarExpandido(menuAberto.dono, true);
   andar();
 }
 
+/**
+ * O "Zerar todos" do topo diz a aba ("↺ Zerar todos (Pessoal)", rodada 20). O escopo vai no botão
+ * (`data-espaco`), da mesma fonte do texto (`topoDaTela`): o clique lê dali.
+ */
+function desenharTopoDaAba() {
+  const zt = $('#bt-zerar-todos');
+  if (!zt || !snap) return;
+  if (zt.dataset.padrao === undefined) zt.dataset.padrao = zt.title;
+  const topo = topoDaTela(snap, visao);
+  zt.dataset.espaco = topo.espaco ?? '';
+  trocarTexto(zt, topo.texto);
+  trocarTitulo(zt, topo.dica ?? zt.dataset.padrao);
+}
+
 function desenharPainel(atual, agora) {
+  const a = abaDaTela();
+  const grupos = gruposDaAba(snap, a);
+  const rodando = grupos.flatMap((g) => g.timers).filter((t) => t.rodando).length;
   $('#grupos').innerHTML =
-    barraRodando(snap.rodando) +
-    (snap.grupos.length
-      ? snap.grupos.map((g) => secaoGrupo(g, agora, !fechados.has(chaveGrupo(g)), selecionado)).join('')
-      : `<p class="vazio">Nenhum timer ainda.</p><div class="grid">${novoTimerBotao(null)}</div>`) +
-    novoGrupoBotao();
+    htmlAbas(snap, a) +
+    barraRodando(rodando, textoPausarTudo(snap, a), a) +
+    (grupos.length
+      ? secoesDaAba(snap, a, (g) => secaoGrupo(g, agora, !fechados.has(chaveGrupo(g)), selecionado), agora)
+      : semTimerNenhum());
   const foco = $('#foco');
   if (atual) {
     const g = grupoDe(atual);
@@ -309,7 +355,7 @@ function desenharPainel(atual, agora) {
   } else {
     foco.innerHTML = '';
   }
-  $('#linha').innerHTML = linhaCompacta(snap.grupos, meiaNoite(), agora);
+  $('#linha').innerHTML = linhaCompacta(grupos, meiaNoite(), agora);
 }
 
 function desenharFoco(atual, agora) {
@@ -319,10 +365,10 @@ function desenharFoco(atual, agora) {
 /** Uma vez por minuto: as réguas e o que mostra minutos (blocos abertos crescem). */
 function desenharMinuto(agora) {
   preservando(() => {
-    if (visao === 'painel') $('#linha').innerHTML = linhaCompacta(snap.grupos, meiaNoite(), agora);
-    else if (visao === 'linha') $('#v-linha').innerHTML = visaoLinha(snap, meiaNoite(), agora);
+    if (visao === 'painel') $('#linha').innerHTML = linhaCompacta(gruposDaAba(snap, abaDaTela()), meiaNoite(), agora);
+    else if (visao === 'linha') $('#v-linha').innerHTML = visaoLinha(snap, meiaNoite(), agora, abaDaTela());
     else if (visao === 'foco') desenharFoco(timerSelecionado(), agora);
-    else if (visao === 'cartoes') $('#v-cartoes').innerHTML = visaoCartoes(snap, agora, fechados, selecionado);
+    else if (visao === 'cartoes') $('#v-cartoes').innerHTML = visaoCartoes(snap, agora, fechados, selecionado, abaDaTela());
   });
 }
 
@@ -336,9 +382,9 @@ function andar() {
     desenharMinuto(agora);
   }
   const ts = todosTimers();
-  const total = curto(totalDeTimers(ts, agora));
-  // de onde vem o número: o tempo contado e os ajustes à mão (rodada 12)
-  const dicaTotal = dicaDoTotalDoDia(ts, agora);
+  // o total do dia é o da aba (rodada 20); de onde vem o número, o geral e o de cada espaço na dica
+  const total = curto(totalDaAba(snap, abaDoTopo(snap, visao), agora));
+  const dicaTotal = dicaDoTotalDaAba(snap, abaDoTopo(snap, visao), agora);
   for (const el of [$('#total-dia'), ...document.querySelectorAll('[data-total-dia]')]) {
     trocarTexto(el, total);
     trocarTitulo(el, dicaTotal);
@@ -359,6 +405,16 @@ function andar() {
     // a soma dos timers do grupo; o tempo real (a união) do mesmo período na dica
     const { texto, dica } = totalDoGrupo(g.timers, agora, g.real_antes_ms ?? 0);
     for (const el of document.querySelectorAll(`[data-total-grupo="${chaveGrupo(g)}"]`)) {
+      trocarTexto(el, texto);
+      trocarTitulo(el, dica);
+    }
+  }
+  // o cabeçalho de cada espaço em "Todos": a soma dos timers dele, com o tempo real na dica
+  for (const e of snap.espacos ?? []) {
+    const els = document.querySelectorAll(`[data-total-espaco="${e.id}"]`);
+    if (!els.length) continue;
+    const { texto, dica } = totalDoGrupo(timersDaAba(snap, e.id), agora, e.real_antes_ms ?? 0);
+    for (const el of els) {
       trocarTexto(el, texto);
       trocarTitulo(el, dica);
     }
@@ -434,8 +490,23 @@ async function aoClicar(ev) {
       if (await agir('encerrar', { timer_id: id })) faixaEncerrado(id, nome);
       break;
     }
+    // "Pausar tudo" vale para a aba (rodada 20; em "Todos", para tudo)
     case 'pausar-tudo':
-      await agir('pausar_tudo');
+      // o escopo é o do botão (o mesmo do texto dele)
+      await agir('pausar_tudo', { espaco_id: espacoDoBotao(alvo) });
+      break;
+    // as abas de espaço: a escolhida fica na config
+    case 'aba': {
+      const id = alvo.dataset.espaco === '' ? null : Number(alvo.dataset.espaco);
+      if (id === abaDaTela()) break;
+      snap.config = { ...snap.config, espaco_aba: id };
+      desenhar();
+      await agir('salvar_config', { config: snap.config });
+      break;
+    }
+    // o "+ Novo" do topo: o menu com Timer, Grupo e Espaço
+    case 'novo-menu':
+      alternarMenuNovo(alvo);
       break;
     case 'selecionar':
       selecionar(id);
@@ -472,9 +543,11 @@ async function aoClicar(ev) {
       break;
     // "Zerar todos" da barra do topo: todos os timers no mesmo instante, sem diálogo
     case 'zerar-todos': {
-      const z = await agir('zerar_todos');
+      // o escopo é o do botão, gravado junto com o texto dele (revisão da rodada 20)
+      const a = espacoDoBotao(alvo);
+      const z = await agir('zerar_todos', { espaco_id: a });
       if (z) {
-        faixaZerado(z, TEXTO_ZERADOS_TODOS);
+        faixaZerado(z, textoZeradosDaAba(snap, a) ?? TEXTO_ZERADOS_TODOS);
         dicas.oferecer('zerar');
       }
       break;
@@ -498,7 +571,8 @@ async function aoClicar(ev) {
         await agir('pedir_novo_timer', { sessao_id: alvo.dataset.sessao });
         break;
       }
-      const novo = await novoTimer(snap, grupoId);
+      // a linha "Grupo vazio · + Timer": o timer novo já nesse grupo
+      const novo = await novoTimer(snap, grupoId, null, { espacoId: Number(alvo.dataset.espaco || 1) });
       if (novo !== null) selecionar(novo);
       break;
     }
@@ -643,7 +717,7 @@ async function verTour(tipo = 'essencial') {
   fecharDicaAVista();
   const daTela = tipo === 'tela';
   if (!daTela && visao !== 'painel') await trocarVisao('painel');
-  const passos = passosDoTour(tipo, visao);
+  const passos = passosDoTour(tipo, visao, { abas: comAbas(snap) });
   const dockEscondido = snap?.config?.dock_modo === 'perguntas';
   // o passo das pastas troca para "Conectar o Claude Code" com os hooks desligados; relido a cada
   // desenho, e o tour se redesenha depois do "Ligar" (revisão)
@@ -681,6 +755,30 @@ function alternarMenuZerar(botao, timer, itens) {
     if (b.dataset.zerar === 'timer') zerarTimer(timer.id);
     else if (b.dataset.zerar === 'atividade') zerarAtividade(timer.id, Number(b.dataset.atividade));
   });
+}
+
+/** O menu do "+ Novo" (rodada 20): Timer, Grupo e Espaço. */
+function alternarMenuNovo(botao) {
+  abrirMenu(botao, htmlDoMenuNovo(), 'direita', (b) => criarNovo(b.dataset.novo));
+}
+
+/**
+ * O que o "+ Novo" cria. O timer vem no grupo do timer aberto no painel, ou no "Sem grupo" do
+ * espaço da aba (em "Todos", do primeiro espaço); o grupo, no espaço da aba.
+ */
+async function criarNovo(tipo) {
+  if (!snap) return;
+  const a = abaDaTela();
+  if (tipo === 'timer') {
+    const aberto = visao === 'painel' ? timerSelecionado() : null;
+    const { grupoId, espacoId } = grupoPreEscolhido(snap, a, aberto);
+    const novo = await novoTimer(snap, grupoId, null, { espacoId });
+    if (novo !== null) selecionar(novo);
+  } else if (tipo === 'grupo') {
+    await novoGrupo(snap, espacoPreEscolhido(snap, a));
+  } else if (tipo === 'espaco') {
+    await novoEspaco(snap);
+  }
 }
 
 /** O menu do ? (abre e fecha; Esc e o clique fora fecham). */
@@ -961,6 +1059,14 @@ function aoTeclar(ev) {
   if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('.corpo [data-timer][tabindex]')) {
     ev.preventDefault();
     selecionar(Number(ev.target.dataset.timer));
+    return;
+  }
+  // a tecla N abre o "+ Novo" (rodada 20), com o foco fora de campo e sem diálogo nem tour
+  if (snap && teclaDoNovo(ev, document.activeElement, dialogoAberto() || tourAtivo())) {
+    const b = $('#bt-novo');
+    if (!b) return;
+    ev.preventDefault();
+    alternarMenuNovo(b);
   }
 }
 

@@ -5,9 +5,11 @@
 // Também mora aqui o "Conectar o Claude Code" (prévia exata → Conectar), usado no primeiro uso.
 import { chamar, iniciarComWindows } from './api.js';
 import { esc, cor } from './componentes.js';
-import { abrirDialogo, faixa, textoDoErro, grupoParaSalvar, PALETA } from './editar.js';
+import { abrirDialogo, faixa, textoDoErro, grupoParaSalvar, PALETA, novoEspaco } from './editar.js';
 import { linhas, minutosDeSegundos, segundosDeMinutos, tamanho, abreviarCaminho } from './formato.js';
 import { NOME_APP, PERFIL_TESTE } from './nome.js';
+import { TEXTOS } from './textos.js';
+import { podeApagarEspaco, textoAoApagar } from './espacos.js';
 
 export const CREDITOS = 'Criado por @eaeniko (Nikolai Cinotti)';
 
@@ -434,6 +436,42 @@ export function htmlConexaoClaude(h, encontrado = true, settings = '', comBotao 
 </div>`;
 }
 
+/** O nome de um espaço vai até isto de letras (o núcleo confere também). */
+export const ESPACO_NOME_MAX = 24;
+
+/**
+ * Ajustes → Grupos e regras: a lista dos espaços (rodada 20), com a cor, o nome (muda ao sair do
+ * campo), subir e descer, Arquivar e Apagar. O último que sobra não arquiva nem apaga; um espaço
+ * com grupos ou timers não apaga (mova os grupos antes). Os arquivados ficam no fim, apagados.
+ */
+export function htmlEspacos(snap) {
+  const todos = [...(snap.espacos ?? [])].sort((a, b) => Number(a.arquivado) - Number(b.arquivado) || a.ordem - b.ordem || a.id - b.id);
+  const ativos = todos.filter((e) => !e.arquivado);
+  const item = (e, i) => {
+    const grupos = snap.grupos.filter((g) => (g.espaco_id ?? 1) === e.id);
+    const nGrupos = grupos.filter((g) => g.id !== null).length;
+    const nTimers = grupos.reduce((s, g) => s + g.timers.length, 0);
+    const uso = `<small>${nGrupos === 1 ? '1 grupo' : `${nGrupos} grupos`} · ${nTimers === 1 ? '1 timer' : `${nTimers} timers`}</small>`;
+    const ultimo = !e.arquivado && ativos.length === 1;
+    const desab = (cond, dica) => (cond ? ` disabled title="${esc(dica)}"` : '');
+    const ordem = e.arquivado
+      ? ''
+      : `<button type="button" class="bt mini ic-ord" data-aj="espaco-subir" data-id="${e.id}" aria-label="${esc(TEXTOS.subir)}: ${esc(e.nome)}"${desab(i === 0, TEXTOS.subir)}>↑</button>` +
+        `<button type="button" class="bt mini ic-ord" data-aj="espaco-descer" data-id="${e.id}" aria-label="${esc(TEXTOS.descer)}: ${esc(e.nome)}"${desab(i === ativos.length - 1, TEXTOS.descer)}>↓</button>`;
+    const arquivar = e.arquivado
+      ? `<button type="button" class="bt mini" data-aj="desarquivar-espaco" data-id="${e.id}">${esc(TEXTOS.desarquivar)}</button>`
+      : `<button type="button" class="bt mini" data-aj="arquivar-espaco" data-id="${e.id}"${desab(ultimo, TEXTOS.ultimoEspaco)}>${esc(TEXTOS.arquivar)}</button>`;
+    // o mesmo que o núcleo decide (revisão da rodada 20): sem nada à vista e nunca o último
+    const ap = podeApagarEspaco(snap, e);
+    const apagar = `<button type="button" class="bt mini" data-aj="apagar-espaco" data-id="${e.id}"${desab(!ap.pode, ap.dica)}>${esc(TEXTOS.apagar)}</button>`;
+    return `<li class="aj-at aj-esp${e.arquivado ? ' arq' : ''}"><input type="color" name="esp_cor" data-id="${e.id}" value="${esc(cor(e.cor))}" aria-label="Cor de ${esc(e.nome)}"><input type="text" class="aj-at-nome" name="esp_nome" data-id="${e.id}" value="${esc(e.nome)}" maxlength="${ESPACO_NOME_MAX}" autocomplete="off" aria-label="Nome do espaço"${e.arquivado ? ' disabled' : ''}>${uso}${ordem}${arquivar}${apagar}</li>`;
+  };
+  return `<h4>${esc(TEXTOS.espacosTitulo)}</h4><p class="aj-dica">${esc(TEXTOS.espacosDica)}</p><ul class="aj-lista" data-lista="espacos">${todos
+    .map((e) => item(e, ativos.indexOf(e)))
+    .join('')}</ul>
+<button type="button" class="bt" data-aj="novo-espaco">${esc(TEXTOS.acrescentarEspaco)}</button>`;
+}
+
 function htmlGrupos(snap) {
   const grupos = snap.grupos.filter((g) => g.id !== null);
   const lg = grupos.length
@@ -450,7 +488,7 @@ function htmlGrupos(snap) {
         )
         .join('')
     : '<li class="aj-vazio">Nenhuma regra ainda. Elas nascem ao ligar uma sessão com “Sempre que for nesta pasta” e no editar timer, em “Pastas deste timer”.</li>';
-  return `<h4>Grupos</h4><ul class="aj-lista" data-lista="grupos">${lg}</ul>
+  return `${htmlEspacos(snap)}<h4>Grupos</h4><ul class="aj-lista" data-lista="grupos">${lg}</ul>
 <h4>Regras de pasta</h4><p class="aj-dica">Sessões do Claude nestas pastas (e subpastas) entram sozinhas no timer.</p><ul class="aj-lista" data-lista="regras">${lr}</ul>`;
 }
 
@@ -674,6 +712,54 @@ async function salvarAtividade(a, mudar) {
   }
 }
 
+/** O espaço como o núcleo grava (`editar_espaco`). */
+const espacoParaSalvar = (e) => ({ id: e.id, nome: e.nome, cor: e.cor, ordem: e.ordem, arquivado: Boolean(e.arquivado) });
+
+/** Grava o espaço mudado; a recusa do núcleo vai para a faixa. */
+async function salvarEspaco(e, mudar) {
+  try {
+    await chamar('editar_espaco', { espaco: { ...espacoParaSalvar(e), ...mudar } });
+    mostrarSalvo();
+  } catch (erro) {
+    faixa(textoDoErro(erro));
+  } finally {
+    gruposDesenhados = '';
+    desenharGrupos();
+  }
+}
+
+/** Sobe (`passo` −1) ou desce (+1) um espaço na lista: regrava a ordem de cada um que mudou. */
+async function moverEspaco(id, passo) {
+  const ativos = [...(lerSnap()?.espacos ?? [])].filter((e) => !e.arquivado).sort((a, b) => a.ordem - b.ordem || a.id - b.id);
+  const i = ativos.findIndex((e) => e.id === id);
+  const j = i + passo;
+  if (i < 0 || j < 0 || j >= ativos.length) return;
+  [ativos[i], ativos[j]] = [ativos[j], ativos[i]];
+  try {
+    for (const [k, e] of ativos.entries()) {
+      if (e.ordem !== k) await chamar('editar_espaco', { espaco: { ...espacoParaSalvar(e), ordem: k } });
+    }
+    mostrarSalvo();
+  } catch (erro) {
+    faixa(textoDoErro(erro));
+  }
+}
+
+/** Apagar um espaço (vazio): confirma antes; a recusa do núcleo (grupos arquivados nele) vai para a faixa. */
+function confirmarApagarEspaco(id) {
+  const e = (lerSnap()?.espacos ?? []).find((x) => x.id === id);
+  if (!e) return;
+  abrirDialogo({
+    titulo: esc(TEXTOS.confirmarApagarEspaco(e.nome)),
+    corpo: `<p class="dlg-p">${esc(textoAoApagar(lerSnap(), e))}</p>`,
+    enviar: TEXTOS.apagar,
+    perigo: true,
+    async aoEnviar() {
+      await chamar('apagar_espaco', { id });
+    },
+  });
+}
+
 /** "+ Acrescentar atividade": nome e cor. */
 function novaAtividade() {
   const usadas = (lerSnap()?.atividades ?? []).map((a) => a.cor);
@@ -707,6 +793,17 @@ async function aoMudar(ev) {
   const el = ev.target;
   const nome = el.name;
   if (!nome) return;
+  if (nome === 'esp_nome' || nome === 'esp_cor') {
+    const e = (lerSnap()?.espacos ?? []).find((x) => x.id === Number(el.dataset.id));
+    if (!e) return;
+    const v = nome === 'esp_nome' ? el.value.trim() : el.value;
+    if (nome === 'esp_nome' && (v === e.nome || !v)) {
+      el.value = e.nome;
+      if (!v) faixa('O nome não pode ficar vazio');
+      return;
+    }
+    return salvarEspaco(e, nome === 'esp_nome' ? { nome: v } : { cor: v });
+  }
   if (nome === 'at_nome' || nome === 'at_cor') {
     const a = (lerSnap()?.atividades ?? []).find((x) => x.id === Number(el.dataset.id));
     if (!a) return;
@@ -955,6 +1052,23 @@ async function aoClicar(ev) {
     }
     case 'nova-atividade':
       novaAtividade();
+      break;
+    // os espaços (rodada 20)
+    case 'novo-espaco':
+      await novoEspaco(lerSnap());
+      break;
+    case 'espaco-subir':
+    case 'espaco-descer':
+      await moverEspaco(id, alvo.dataset.aj === 'espaco-subir' ? -1 : 1);
+      break;
+    case 'arquivar-espaco':
+    case 'desarquivar-espaco': {
+      const e = (lerSnap()?.espacos ?? []).find((x) => x.id === id);
+      if (e) await salvarEspaco(e, { arquivado: alvo.dataset.aj === 'arquivar-espaco' });
+      break;
+    }
+    case 'apagar-espaco':
+      confirmarApagarEspaco(id);
       break;
   }
 }

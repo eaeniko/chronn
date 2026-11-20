@@ -139,6 +139,9 @@ pub struct Acumulado {
     pub por_atividade: BTreeMap<(i64, i64), Ms>,
     /// Grupo (`None` = sem grupo) → o tempo real dos timers dele no período de cada um.
     pub real_por_grupo: BTreeMap<Option<i64>, Ms>,
+    /// Espaço → o tempo real dos timers dele no período de cada um (rodada 20): a união de cada
+    /// dia, como a do grupo, com os timers do espaço.
+    pub real_por_espaco: BTreeMap<i64, Ms>,
 }
 
 impl Acumulado {
@@ -184,12 +187,15 @@ impl From<BTreeMap<i64, Ms>> for Zerados {
 /// atividade deles, cada um
 /// no dia dele, e só os dos dias que começam antes de `ate`. Ignora os descartados, os sem timer e
 /// os de timer fora de `timers`. Com `ate` no início de hoje, é o que os dias fechados somam.
+/// `timers` leva a chave do grupo de cada timer; `espacos`, o espaço de cada um (um timer fora
+/// dele não entra no `real_por_espaco`).
 #[allow(clippy::too_many_arguments)]
 pub fn acumulado(
     trechos: &[Trecho],
     ajustes: &[Ajuste],
     zerados: &Zerados,
     timers: &BTreeMap<i64, Option<i64>>,
+    espacos: &BTreeMap<i64, i64>,
     ate: Ms,
     agora: Ms,
     corte_min: u32,
@@ -238,8 +244,25 @@ pub fn acumulado(
         for a in ajs {
             grupos.entry(grupo(a.timer_id)).or_default().1.push(a);
         }
+        // o do espaço, do mesmo jeito, com os timers dele
+        let mut por_espaco: BTreeMap<i64, (Vec<Trecho>, Vec<Ajuste>)> = BTreeMap::new();
+        for (ps, aj) in grupos.values() {
+            for p in ps {
+                if let Some(e) = p.timer_id.and_then(|t| espacos.get(&t)) {
+                    por_espaco.entry(*e).or_default().0.push(p.clone());
+                }
+            }
+            for a in aj {
+                if let Some(e) = espacos.get(&a.timer_id) {
+                    por_espaco.entry(*e).or_default().1.push(a.clone());
+                }
+            }
+        }
         for (g, (ps, aj)) in grupos {
             *r.real_por_grupo.entry(g).or_default() += com_ajustes(totais(&ps, de, fim, agora), &aj).dia_ms;
+        }
+        for (e, (ps, aj)) in por_espaco {
+            *r.real_por_espaco.entry(e).or_default() += com_ajustes(totais(&ps, de, fim, agora), &aj).dia_ms;
         }
     }
     r
@@ -431,15 +454,15 @@ mod testes {
         ];
         let z = zer(&[(1, d(16, 0, 0))]);
         let agora = d(17, 15, 0);
-        let tudo = acumulado(&v, &[], &z, &so(&[(1, None)]), d(18, 0, 0), agora, 0, F);
+        let tudo = acumulado(&v, &[], &z, &so(&[(1, None)]), &BTreeMap::new(), d(18, 0, 0), agora, 0, F);
         assert_eq!((tudo.por_atividade[&(1, W)], tudo.por_atividade[&(1, R)]), (4 * 60 * MIN, 70 * MIN));
         assert_eq!(tudo.por_timer()[&1], 5 * 60 * MIN + 10 * MIN, "a soma das atividades");
         assert_eq!(tudo.real_por_grupo[&None], 130 * MIN + 2 * 60 * MIN, "o tempo real: a união de cada dia");
         // só os dias fechados (o que a tela recebe; hoje ela soma)
-        let antes = acumulado(&v, &[], &z, &so(&[(1, None)]), d(17, 0, 0), agora, 0, F);
+        let antes = acumulado(&v, &[], &z, &so(&[(1, None)]), &BTreeMap::new(), d(17, 0, 0), agora, 0, F);
         assert_eq!(antes.por_timer()[&1], 190 * MIN);
         // zerado hoje: os dias fechados não somam nada
-        let hoje = acumulado(&v, &[], &zer(&[(1, d(17, 0, 0))]), &so(&[(1, None)]), d(17, 0, 0), agora, 0, F);
+        let hoje = acumulado(&v, &[], &zer(&[(1, d(17, 0, 0))]), &so(&[(1, None)]), &BTreeMap::new(), d(17, 0, 0), agora, 0, F);
         assert_eq!(hoje, Acumulado::default());
     }
 
@@ -449,11 +472,11 @@ mod testes {
             tr(1, 1, Origem::Claude, W, d(17, 9, 0), Some(d(17, 11, 0))),
             tr(2, 1, Origem::Manual, W, d(17, 9, 30), None),
         ];
-        let a = acumulado(&v, &[], &zer(&[(1, d(17, 10, 0))]), &so(&[(1, None)]), d(18, 0, 0), d(17, 12, 0), 0, F);
+        let a = acumulado(&v, &[], &zer(&[(1, d(17, 10, 0))]), &so(&[(1, None)]), &BTreeMap::new(), d(18, 0, 0), d(17, 12, 0), 0, F);
         assert_eq!(a.por_timer()[&1], 2 * 60 * MIN, "10:00 às 12:00, e não 3h");
         // o trecho que passa da meia-noite (não deveria) fica em dois dias
         let v = vec![tr(1, 1, Origem::Manual, W, d(16, 23, 0), Some(d(17, 1, 0)))];
-        let a = acumulado(&v, &[aj_dia(1, W, -90 * MIN, "2026-11-16", d(16, 23, 30))], &zer(&[(1, 0)]), &so(&[(1, None)]), d(18, 0, 0), d(17, 12, 0), 0, F);
+        let a = acumulado(&v, &[aj_dia(1, W, -90 * MIN, "2026-11-16", d(16, 23, 30))], &zer(&[(1, 0)]), &so(&[(1, None)]), &BTreeMap::new(), d(18, 0, 0), d(17, 12, 0), 0, F);
         assert_eq!(a.por_timer()[&1], 60 * MIN, "o −1h 30min do dia 16 tira só a hora daquele dia");
     }
 
@@ -470,13 +493,13 @@ mod testes {
         ];
         let timers = so(&[(1, None)]);
         // zerado às 10:00 do 17: fica o dia 17 depois do zerar, com os dois ajustes feitos depois
-        let a = acumulado(&v, &ajs, &zer(&[(1, d(17, 10, 0))]), &timers, d(18, 0, 0), d(17, 12, 0), 0, F);
+        let a = acumulado(&v, &ajs, &zer(&[(1, d(17, 10, 0))]), &timers, &BTreeMap::new(), d(18, 0, 0), d(17, 12, 0), 0, F);
         assert_eq!((a.por_atividade[&(1, W)], a.por_atividade[&(1, R)]), (75 * MIN, 20 * MIN));
         // zerado no dia 16: o −2h do dia 16 para em zero naquele dia, e o 17 conta inteiro
-        let a = acumulado(&v, &ajs, &zer(&[(1, d(16, 0, 0))]), &timers, d(18, 0, 0), d(17, 12, 0), 0, F);
+        let a = acumulado(&v, &ajs, &zer(&[(1, d(16, 0, 0))]), &timers, &BTreeMap::new(), d(18, 0, 0), d(17, 12, 0), 0, F);
         assert_eq!(a.por_atividade[&(1, W)], 60 * MIN + 45 * MIN);
         // só os dias fechados: os ajustes de hoje ficam para a tela
-        let a = acumulado(&v, &ajs, &zer(&[(1, d(16, 0, 0))]), &timers, d(17, 0, 0), d(17, 12, 0), 0, F);
+        let a = acumulado(&v, &ajs, &zer(&[(1, d(16, 0, 0))]), &timers, &BTreeMap::new(), d(17, 0, 0), d(17, 12, 0), 0, F);
         assert_eq!(a.por_timer()[&1], 0);
     }
 
@@ -491,15 +514,36 @@ mod testes {
         let mut z = zer(&[(1, 0)]);
         z.atividades.insert((1, R), d(16, 10, 30));
         assert_eq!((z.da_atividade(1, R), z.da_atividade(1, W)), (d(16, 10, 30), 0));
-        let a = acumulado(&v, &ajs, &z, &so(&[(1, Some(10))]), d(17, 0, 0), d(17, 9, 0), 0, F);
+        let a = acumulado(&v, &ajs, &z, &so(&[(1, Some(10))]), &BTreeMap::new(), d(17, 0, 0), d(17, 9, 0), 0, F);
         assert_eq!(a.por_atividade[&(1, W)], 2 * 60 * MIN, "o trabalho fica inteiro");
         assert_eq!(a.por_atividade[&(1, R)], 30 * MIN + 5 * MIN, "a reunião desde as 10:30, só com o ajuste feito depois");
         assert_eq!(a.por_timer()[&1], 155 * MIN, "o timer, a soma das atividades");
         assert_eq!(a.real_por_grupo[&Some(10)], 2 * 60 * MIN + 5 * MIN, "o tempo real do grupo: a união do que conta");
         // o zerar do timer mais novo que o da atividade vence
         z.timers.insert(1, d(16, 10, 40));
-        let a = acumulado(&v, &ajs, &z, &so(&[(1, None)]), d(17, 0, 0), d(17, 9, 0), 0, F);
+        let a = acumulado(&v, &ajs, &z, &so(&[(1, None)]), &BTreeMap::new(), d(17, 0, 0), d(17, 9, 0), 0, F);
         assert_eq!((a.por_atividade[&(1, W)], a.por_atividade[&(1, R)]), (20 * MIN, 20 * MIN + 5 * MIN));
+    }
+
+    #[test] fn tempo_real_do_espaco_e_a_uniao_dos_timers_dele() {
+        // dia 16: A (espaço 1) das 9:00 às 10:00, B (espaço 1, sem grupo) das 9:30 às 10:30 e C
+        // (espaço 2) das 9:00 às 9:20; um ajuste de +10 min no C
+        let v = vec![
+            tr(1, 1, Origem::Manual, W, d(16, 9, 0), Some(d(16, 10, 0))),
+            tr(2, 2, Origem::Manual, W, d(16, 9, 30), Some(d(16, 10, 30))),
+            tr(3, 3, Origem::Manual, W, d(16, 9, 0), Some(d(16, 9, 20))),
+        ];
+        let z = zer(&[(1, 0), (2, 0), (3, 0)]);
+        let grupos = so(&[(1, Some(10)), (2, Some(-1)), (3, Some(-2))]);
+        let espacos: BTreeMap<i64, i64> = [(1, 1), (2, 1), (3, 2)].into();
+        let ajs = [aj_dia(3, W, 10 * MIN, "2026-11-16", d(16, 12, 0))];
+        let a = acumulado(&v, &ajs, &z, &grupos, &espacos, d(17, 0, 0), d(17, 9, 0), 0, F);
+        assert_eq!(a.real_por_espaco[&1], 90 * MIN, "a união de A e B, e não 2h");
+        assert_eq!(a.real_por_espaco[&2], 30 * MIN, "com o ajuste");
+        // o espaço é a soma dos timers dele no número; o tempo real, a união
+        assert_eq!(a.por_timer()[&1] + a.por_timer()[&2], 2 * 60 * MIN);
+        // o "Sem grupo" de cada espaço tem a sua chave
+        assert_eq!((a.real_por_grupo[&Some(-1)], a.real_por_grupo[&Some(-2)]), (60 * MIN, 30 * MIN));
     }
 
     #[test] fn tempo_real_do_grupo_e_a_uniao_dos_timers_cada_um_desde_o_seu_zerar() {
@@ -512,7 +556,7 @@ mod testes {
         ];
         let z = zer(&[(1, 0), (2, d(16, 9, 30)), (3, 0), (4, 0)]);
         // o 4 não está na tela (arquivado): fica fora
-        let a = acumulado(&v, &[], &z, &so(&[(1, Some(10)), (2, Some(10)), (3, None)]), d(17, 0, 0), d(17, 9, 0), 0, F);
+        let a = acumulado(&v, &[], &z, &so(&[(1, Some(10)), (2, Some(10)), (3, None)]), &BTreeMap::new(), d(17, 0, 0), d(17, 9, 0), 0, F);
         assert_eq!((a.por_timer()[&1], a.por_timer()[&2]), (60 * MIN, 30 * MIN));
         assert_eq!(a.real_por_grupo[&Some(10)], 60 * MIN, "a soma é 1h 30min; o tempo real, 1h");
         assert_eq!(a.real_por_grupo[&None], 20 * MIN);

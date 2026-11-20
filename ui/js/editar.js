@@ -8,6 +8,8 @@ import { chamar } from './api.js';
 import { esc, cor, ESTADO_SESSAO, ajusteDoTimer, atividadesAtivas, atividadePorId } from './componentes.js';
 import { codigosDoLink, deltaDoAjuste, textoDoAjuste, TRABALHO } from './formato.js';
 import { NOME_APP } from './nome.js';
+import { espacosAtivos, comAbas, gruposPorEspaco, espacoPreEscolhido, ESPACO_PRIMEIRO } from './espacos.js';
+import { TEXTOS } from './textos.js';
 
 /** Paleta fixa dos timers e grupos (a mesma dos mockups). */
 export const PALETA = [
@@ -354,25 +356,67 @@ export const NOVO_GRUPO = 'novo';
  * Seletor de grupo do timer, com "+ Novo grupo…" no fim: escolhido, aparecem ali mesmo o nome e a
  * cor do grupo novo, que é criado junto com o timer ao salvar.
  */
-export function campoGrupo(snap, grupoId) {
+export function campoGrupo(snap, grupoId, espacoId = espacoPreEscolhido(snap, null), grupoArquivado = null) {
   const grupos = snap.grupos.filter((g) => g.id !== null);
-  const ops = grupos
-    .map((g) => `<option value="${g.id}"${g.id === grupoId ? ' selected' : ''}>${esc(g.nome)}</option>`)
-    .join('');
-  return `<label class="campo"><span>Grupo</span><select name="grupo">${ops}<option value=""${grupoId === null ? ' selected' : ''}>Sem grupo</option><option value="${NOVO_GRUPO}">+ Novo grupo…</option></select></label>
+  const op = (g) => `<option value="${g.id}"${g.id === grupoId ? ' selected' : ''}>${esc(g.nome)}</option>`;
+  // o grupo atual fora da lista (arquivado): fica como opção marcada, para salvar sem mexer não
+  // trocar em silêncio (re-revisão da rodada 20)
+  const fora =
+    grupoId !== null && grupoId !== undefined && !grupos.some((g) => g.id === grupoId)
+      ? `<option value="${grupoId}" selected>${esc(grupoArquivado ?? TEXTOS.grupo)} (${esc(TEXTOS.arquivado)})</option>`
+      : '';
+  // com 2 ou mais espaços, os grupos vêm separados por espaço (rodada 20)
+  const ops = comAbas(snap)
+    ? gruposPorEspaco(snap)
+        .map(({ espaco, grupos: gs }) => {
+          const dele = gs.filter((g) => g.id !== null);
+          return dele.length ? `<optgroup label="${esc(espaco.nome)}">${dele.map(op).join('')}</optgroup>` : '';
+        })
+        .join('')
+    : grupos.map(op).join('');
+  return `<label class="campo"><span>Grupo</span><select name="grupo">${fora}${ops}<option value=""${grupoId === null ? ' selected' : ''}>${esc(TEXTOS.semGrupo)}</option><option value="${NOVO_GRUPO}">+ Novo grupo…</option></select></label>
+<div class="timer-espaco"${grupoId === null ? '' : ' hidden'}>${campoEspaco(snap, espacoId, 'espaco', TEXTOS.espacoDoTimerDica)}</div>
 <div class="grupo-novo" hidden>
   ${campoTexto('grupo_nome', 'Nome do grupo novo', '', '', 'placeholder="ex.: Clientes"')}
   ${campoCor(corLivre(grupos.map((g) => g.cor)), 'grupo_cor', 'Cor do grupo')}
 </div>`;
 }
 
+/**
+ * O seletor de espaço (rodada 20): os não arquivados, na ordem (e o atual, se arquivado, para não
+ * trocar sem querer). `dica`: o texto pequeno embaixo. Com um espaço só (revisão da rodada 20),
+ * não aparece: a tela fica como antes.
+ */
+export function campoEspaco(snap, espacoId, nome = 'espaco', dica = '') {
+  const lista = espacosAtivos(snap);
+  const atual = (snap.espacos ?? []).find((e) => e.id === espacoId);
+  if (lista.length < 2 && !atual?.arquivado) return '';
+  if (atual && atual.arquivado) lista.push(atual);
+  const ops = lista
+    .map((e) => `<option value="${e.id}"${e.id === espacoId ? ' selected' : ''}>${esc(e.nome)}${e.arquivado ? ` (${esc(TEXTOS.arquivado)})` : ''}</option>`)
+    .join('');
+  return `<label class="campo"><span>${esc(TEXTOS.espaco)}</span><select name="${nome}">${ops}</select>${dica ? `<small>${esc(dica)}</small>` : ''}</label>`;
+}
+
+/**
+ * O espaço escolhido no formulário (ou `padrao`, sem o campo; nulo deixa o núcleo usar o espaço
+ * padrão, o primeiro não arquivado).
+ */
+const espacoDoForm = (form, padrao = null) => {
+  const v = Number(ler(form, 'espaco'));
+  return Number.isInteger(v) && v > 0 ? v : padrao;
+};
+
 /** Mostra o nome e a cor do grupo novo quando "+ Novo grupo…" é escolhido. */
 function ligarNovoGrupo(form) {
   const sel = form.elements.grupo;
   const bloco = form.querySelector('.grupo-novo');
   if (!sel || !bloco) return;
+  // o espaço vale para o "Sem grupo" e para o grupo novo (rodada 20)
+  const espaco = form.querySelector('.timer-espaco');
   sel.addEventListener('change', () => {
     bloco.hidden = sel.value !== NOVO_GRUPO;
+    if (espaco) espaco.hidden = sel.value !== '' && sel.value !== NOVO_GRUPO;
     if (!bloco.hidden) form.elements.grupo_nome.focus();
   });
 }
@@ -421,7 +465,7 @@ async function grupoDoTimer(form, snap, feito) {
     }
     return feito.grupo.id;
   }
-  const s = await chamar('criar_grupo', { nome: g.novo.nome, cor: g.novo.cor });
+  const s = await chamar('criar_grupo', { nome: g.novo.nome, cor: g.novo.cor, espaco_id: espacoDoForm(form) });
   const novo = s.grupos.find((x) => x.id === maiorId(s.grupos));
   if (!novo) throw 'Não achei o grupo novo. Tente de novo.';
   feito.grupo = novo;
@@ -571,6 +615,7 @@ export const grupoParaSalvar = (g) => ({
   card_padrao_nome: g.card_padrao_nome ?? null,
   ordem: g.ordem,
   arquivado: Boolean(g.arquivado),
+  espaco_id: g.espaco_id ?? ESPACO_PRIMEIRO,
 });
 
 /** O timer como o núcleo grava (`editar_timer`), com o nome do card. */
@@ -584,6 +629,7 @@ export const timerParaSalvar = (t) => ({
   ordem: t.ordem,
   arquivado: Boolean(t.arquivado),
   atividade_padrao_id: t.atividade_padrao_id ?? TRABALHO,
+  espaco_id: t.espaco_id ?? ESPACO_PRIMEIRO,
 });
 
 const ler = (form, nome) => form.elements[nome]?.value ?? '';
@@ -608,20 +654,22 @@ const maiorId = (v) => v.reduce((m, x) => (x.id !== null && x.id > m ? x.id : m)
 
 // ---- grupos ----
 
-export function novoGrupo(snap) {
+/** "Novo grupo", com o campo Espaço (rodada 20; `espacoId`: o pré-escolhido, o da aba). */
+export function novoGrupo(snap, espacoId = espacoPreEscolhido(snap, null)) {
   return new Promise((ok) => {
     abrirDialogo({
       titulo: 'Novo grupo',
       enviar: 'Criar',
       corpo:
         campoTexto('nome', 'Nome', '', '', 'autofocus') +
+        campoEspaco(snap, espacoId) +
         campoCor(corLivre(snap.grupos.map((g) => g.cor))) +
         camposDoGrupo({}),
       aoMontar: ligarCodigos,
       async aoEnviar(form) {
         const nome = nomeObrigatorio(form);
         const c = ler(form, 'cor');
-        const s = await chamar('criar_grupo', { nome, cor: c });
+        const s = await chamar('criar_grupo', { nome, cor: c, espaco_id: espacoDoForm(form, espacoId) });
         const g = s.grupos.find((x) => x.id === maiorId(s.grupos));
         const links = linksDoGrupo(form);
         if (g && Object.values(links).some(Boolean)) {
@@ -667,6 +715,7 @@ export function editarGrupo(snap, grupoId) {
     titulo: 'Editar grupo',
     corpo:
       campoTexto('nome', 'Nome', g.nome, '', 'autofocus') +
+      campoEspaco(snap, g.espaco_id ?? ESPACO_PRIMEIRO) +
       campoCor(g.cor) +
       camposDoGrupo(g) +
       caixa('arquivado', 'Arquivar o grupo', 'O grupo e os timers dele saem das listas.'),
@@ -674,9 +723,37 @@ export function editarGrupo(snap, grupoId) {
     async aoEnviar(form) {
       const nome = nomeObrigatorio(form);
       await chamar('editar_grupo', {
-        grupo: grupoParaSalvar({ ...g, nome, cor: ler(form, 'cor'), ...linksDoGrupo(form), arquivado: marcado(form, 'arquivado') }),
+        grupo: grupoParaSalvar({
+          ...g,
+          nome,
+          cor: ler(form, 'cor'),
+          ...linksDoGrupo(form),
+          arquivado: marcado(form, 'arquivado'),
+          espaco_id: espacoDoForm(form, g.espaco_id ?? ESPACO_PRIMEIRO),
+        }),
       });
     },
+  });
+}
+
+// ---- espaços (rodada 20) ----
+
+/** "+ Novo → Espaço": nome e cor. Devolve se criou. */
+export function novoEspaco(snap) {
+  return new Promise((ok) => {
+    abrirDialogo({
+      titulo: TEXTOS.tituloNovoEspaco,
+      enviar: 'Criar',
+      corpo:
+        campoTexto('nome', 'Nome', '', '', `autofocus maxlength="24" placeholder="${esc(TEXTOS.espacoPlaceholder)}"`) +
+        campoCor(corLivre((snap.espacos ?? []).map((e) => e.cor))),
+      async aoEnviar(form) {
+        const nome = nomeObrigatorio(form);
+        await chamar('criar_espaco', { nome, cor: ler(form, 'cor') });
+        ok(true);
+      },
+      aoFechar: () => ok(false),
+    });
   });
 }
 
@@ -781,7 +858,7 @@ export function ligarAoExistente(timer, pedido, criarOutro) {
  * Ao criar, o estado é conferido de novo: com a pergunta já resolvida, nada é criado; com um
  * timer de mesmo nome (e sem `mesmoNome`), oferece ligar a ele (`ligarAoExistente`).
  */
-export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = false } = {}) {
+export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = false, espacoId = null } = {}) {
   const grupo = snap.grupos.find((g) => g.id === grupoId && g.id !== null) ?? null;
   const usadas = (grupo?.timers ?? todosTimers(snap)).map((t) => t.cor);
   const corInicial = grupo && !grupo.timers.length && PALETA.includes(grupo.cor) ? grupo.cor : corLivre(usadas);
@@ -795,7 +872,7 @@ export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = fal
       // com o "sempre nesta pasta" à vista)
       corpo:
         campoTexto('nome', 'Nome', pedido?.nome ?? '', '', 'autofocus') +
-        campoGrupo(snap, grupo?.id ?? null) +
+        campoGrupo(snap, grupo?.id ?? null, espacoId ?? espacoPreEscolhido(snap, null)) +
         campoCor(corInicial) +
         maisOpcoes((pedido ? camposDaSessao(pedido) : '') + campoCard({}), Boolean(pedido)),
       aoMontar(form) {
@@ -820,7 +897,7 @@ export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = fal
         }
         if (id === null) {
           const grupo_id = await grupoDoTimer(form, snap, feito);
-          const s = await chamar('criar_timer', { grupo_id, nome, cor: ler(form, 'cor') });
+          const s = await chamar('criar_timer', { grupo_id, nome, cor: ler(form, 'cor'), espaco_id: espacoDoForm(form, espacoId ?? espacoPreEscolhido(snap, null)) });
           await arquivarSobra(feito, grupo_id);
           const t = todosTimers(s).find((x) => x.id === maiorId(todosTimers(s)));
           id = t?.id ?? null;
@@ -879,6 +956,47 @@ export function campoAtividadePadrao(timer, ativas = atividadesAtivas()) {
   if (ativas.length < 2 && atividadePorId(timer.atividade_padrao_id ?? TRABALHO)?.arquivada !== true) return '';
   return `<label class="campo"><span>Atividade padrão</span><select name="atividade_padrao">${opcoesDeAtividade(ativas, timer.atividade_padrao_id ?? TRABALHO)}</select>
 <small>A do Claude trabalhando, da leitura e do ▶. O botão de reunião, ao lado do ▶, conta como Reunião.</small></label>`;
+}
+
+/**
+ * "Atividades no painel" do editar timer (rodada 20): uma caixa por atividade não arquivada,
+ * marcadas as que aparecem (o padrão é todas). A padrão do timer vem marcada e desabilitada, com a
+ * dica. Ocultar só esconde a linha no painel: com tempo desde o zerar ou rodando, ela aparece.
+ */
+export function campoAtividadesNoPainel(timer, ativas = atividadesAtivas()) {
+  if (ativas.length < 2) return '';
+  const ocultas = new Set(timer.atividades_ocultas ?? []);
+  const padrao = timer.atividade_padrao_id ?? TRABALHO;
+  const caixas = ativas
+    .map((a) => {
+      const ehPadrao = a.id === padrao;
+      const marcada = ehPadrao || !ocultas.has(a.id);
+      const dica = ehPadrao ? ` title="${esc(TEXTOS.atividadePadraoSempre)}"` : '';
+      return `<label class="chk at-painel"${dica}><input type="checkbox" name="at_painel" value="${a.id}"${marcada ? ' checked' : ''}${ehPadrao ? ' disabled' : ''}><span><i style="--a:${cor(a.cor)}"></i>${esc(a.nome)}</span></label>`;
+    })
+    .join('');
+  return `<fieldset class="campo at-painel-g"><legend>${esc(TEXTOS.atividadesNoPainel)}</legend>${caixas}<small>${esc(TEXTOS.atividadesNoPainelDica)}</small></fieldset>`;
+}
+
+/** As atividades desmarcadas em "Atividades no painel" (nulo sem a seção: ficam as de antes). */
+export function atividadesOcultasDoForm(form) {
+  const caixas = [...(form.querySelectorAll?.('input[name="at_painel"]') ?? [])];
+  if (!caixas.length) return null;
+  return caixas.filter((c) => !c.checked && !c.disabled).map((c) => Number(c.value));
+}
+
+/** Trocar a atividade padrão no editar timer troca a caixa desabilitada (a padrão aparece sempre). */
+function ligarAtividadesNoPainel(form) {
+  const sel = form.elements.atividade_padrao;
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    for (const c of form.querySelectorAll('input[name="at_painel"]')) {
+      const ehPadrao = c.value === sel.value;
+      if (ehPadrao) c.checked = true;
+      c.disabled = ehPadrao;
+      c.closest('label').title = ehPadrao ? TEXTOS.atividadePadraoSempre : '';
+    }
+  });
 }
 
 /** O que o "Mais opções" do editar timer já tem dentro, para ver sem abrir. */
@@ -1039,12 +1157,13 @@ export function editarTimer(snap, timerId) {
     titulo: 'Editar timer',
     corpo:
       campoTexto('nome', 'Nome', t.nome, '', 'autofocus') +
-      campoGrupo(snap, t.grupo_id) +
+      campoGrupo(snap, t.grupo_id, t.espaco_id ?? ESPACO_PRIMEIRO, t.grupo_arquivado ?? null) +
       campoCor(t.cor) +
       `<div class="campo pastas-timer" data-bloco="pastas-timer">${corpoPastasDoTimer([], t.id)}</div>` +
       maisOpcoes(
         campoCard(t) +
           campoAtividadePadrao(t) +
+          campoAtividadesNoPainel(t) +
           campoAjuste(t) +
           caixa('arquivado', 'Arquivar o timer', 'Ele sai das listas e o tempo dele sai do total do dia.'),
         false,
@@ -1055,6 +1174,7 @@ export function editarTimer(snap, timerId) {
       ligarNovoGrupo(form);
       ligarDescartar(form, snap, t, () => editarTimer(snap, t.id));
       ligarPastasDoTimer(form, t);
+      ligarAtividadesNoPainel(form);
     },
     async aoEnviar(form) {
       const nome = nomeObrigatorio(form);
@@ -1077,7 +1197,9 @@ export function editarTimer(snap, timerId) {
           ...cardDoTimer(form),
           arquivado: marcado(form, 'arquivado'),
           atividade_padrao_id: form.elements.atividade_padrao ? Number(ler(form, 'atividade_padrao')) : t.atividade_padrao_id,
+          espaco_id: espacoDoForm(form, t.espaco_id ?? ESPACO_PRIMEIRO),
         }),
+        ocultas: atividadesOcultasDoForm(form),
       });
       await arquivarSobra(feito, grupo_id);
     },
@@ -1552,19 +1674,26 @@ function ligarLinhaClaude(raizEl) {
 }
 
 export function corpoLigarATimer(snap, sessao, comNovo = false, estadoClaude = null) {
-  const grupos = snap.grupos
-    .filter((g) => g.timers.length)
-    .map(
-      (g) =>
-        `<div class="lista-g">${esc(g.nome)}</div>` +
-        g.timers
-          .map(
-            (t) =>
-              `<button type="button" class="it it-t1" data-timer="${t.id}" style="--c:${cor(t.cor)}"${t.id === sessao.timer_id ? ' disabled' : ''}><i></i><span class="it-n">${esc(t.nome)}</span>${t.id === sessao.timer_id ? '<small class="it-t">já ligada</small>' : ''}</button>`,
-          )
-          .join(''),
-    )
-    .join('');
+  // por espaço e grupo (rodada 20; com um espaço só, por grupo, como antes)
+  const htmlDosGrupos = (gs) =>
+    gs
+      .filter((g) => g.timers.length)
+      .map(
+        (g) =>
+          `<div class="lista-g">${esc(g.nome)}</div>` +
+          g.timers
+            .map(
+              (t) =>
+                `<button type="button" class="it it-t1" data-timer="${t.id}" style="--c:${cor(t.cor)}"${t.id === sessao.timer_id ? ' disabled' : ''}><i></i><span class="it-n">${esc(t.nome)}</span>${t.id === sessao.timer_id ? '<small class="it-t">já ligada</small>' : ''}</button>`,
+            )
+            .join(''),
+      )
+      .join('');
+  const doEspaco = ({ espaco, grupos: gs }) => {
+    const html = htmlDosGrupos(gs);
+    return html && espaco ? `<div class="lista-e" style="--e:${cor(espaco.cor)}"><i></i>${esc(espaco.nome)}</div>${html}` : html;
+  };
+  const grupos = gruposPorEspaco(snap).map(doEspaco).join('');
   const novo = comNovo ? '<button type="button" class="it it-novo" data-novo="1"><span class="it-n">+ Novo timer…</span></button>' : '';
   const lista = grupos
     ? `<div class="lista">${grupos}${novo}</div>`

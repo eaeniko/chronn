@@ -220,6 +220,9 @@ fn main() {
             comandos::editar_grupo,
             comandos::criar_timer,
             comandos::editar_timer,
+            comandos::criar_espaco,
+            comandos::editar_espaco,
+            comandos::apagar_espaco,
             comandos::criar_atividade,
             comandos::editar_atividade,
             comandos::sessoes_recentes,
@@ -315,6 +318,28 @@ mod testes {
         assert!(i < des.find("Delete \"$INSTDIR\\${MAINBINARYNAME}.exe\"").unwrap(), "antes de apagar os arquivos");
         assert!(i > des.find("CheckIfAppIsRunning").unwrap(), "depois de fechar o app");
         assert_eq!(nsi.matches("--remover-hooks").count(), 1);
+    }
+
+    /// Rodada 20: a versão 0.2.0 no `tauri.conf.json` e nos `Cargo.toml`, e o instalador que o
+    /// `build.ps1` copia com o nome de exibição: `Chronn_0.2.0_x64-setup.exe`.
+    #[test]
+    fn versao_0_2_0_e_o_nome_do_instalador() {
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.2.0");
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["version"], "0.2.0");
+        for toml in [
+            include_str!("../../crates/fila/Cargo.toml"),
+            include_str!("../../crates/hook/Cargo.toml"),
+            include_str!("../../crates/nucleo/Cargo.toml"),
+            include_str!("../../crates/sinais/Cargo.toml"),
+        ] {
+            assert!(toml.replace("\r\n", "\n").contains("\nversion = \"0.2.0\"\n"), "{toml}");
+        }
+        // o build.ps1 troca o "Work Timer_" do nome gerado pelo nome de exibição
+        let ps1 = include_str!("../../scripts/build.ps1");
+        assert!(ps1.contains(r#"-replace '^Work Timer_', "${nome}_""#));
+        let gerado = format!("Work Timer_{}_x64-setup.exe", conf["version"].as_str().unwrap());
+        assert_eq!(gerado.replacen("Work Timer_", &format!("{APP_NOME}_"), 1), "Chronn_0.2.0_x64-setup.exe");
     }
 
     /// Rodada 18: o publisher "eaeniko" vai para o "Aplicativos instalados" e muda a chave do

@@ -13,7 +13,7 @@ use nucleo::config::{
 };
 use nucleo::dados;
 use nucleo::fim_do_transcript::{LeitorDoTranscript, TAREFA_MAX_MS};
-use nucleo::modelo::{Atividade, EstadoSessao, Grupo, Ligacao, Mudanca, Pergunta, Resposta, Timer};
+use nucleo::modelo::{Atividade, Espaco, EstadoSessao, Grupo, Ligacao, Mudanca, Pergunta, Resposta, Timer};
 use nucleo::motor::{raiz_do_projeto, sugestao_de_pasta, Motor};
 use nucleo::snapshot::{self, SessaoDto, Snapshot};
 use nucleo::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
@@ -138,6 +138,19 @@ pub struct Zerado {
     #[serde(default)]
     pub atividade: Option<(i64, i64, Option<Ms>)>,
 }
+
+/// O nome de um espaço vai até isto (rodada 20; como o das atividades).
+pub const ESPACO_NOME_MAX: usize = 24;
+
+/// A recusa de apagar um espaço com grupos ou timers à vista (revisão da rodada 20: o mesmo texto
+/// da dica do "Apagar" nos Ajustes).
+pub const MOVA_OS_GRUPOS: &str = "Mova os grupos para outro espaço antes";
+
+/// A recusa de apagar ou arquivar o último espaço não arquivado.
+pub const ULTIMO_ESPACO: &str = "Precisa sobrar pelo menos um espaço";
+
+/// A recusa de ocultar a atividade padrão do timer no painel.
+pub const PADRAO_NAO_OCULTA: &str = "A atividade padrão do timer não pode ser ocultada";
 
 /// Chave da config do banco com o corte do dia em que o "Zerar sozinho na virada" zerou pela
 /// última vez (ms). Vazia com a opção desligada.
@@ -610,10 +623,115 @@ impl Nucleo {
     }
 
     /// "Zerar todos" (barra do topo): o mesmo instante em todos os timers, os arquivados também.
-    pub fn zerar_todos(&mut self, agora: Ms) -> Result<Zerado, String> {
+    /// Com `espaco` (a aba de um espaço, rodada 20), só os timers dele.
+    pub fn zerar_todos(&mut self, espaco: Option<i64>, agora: Ms) -> Result<Zerado, String> {
         self.checar_banco()?;
-        let (antes, limpas) = self.banco.zerar_com_atividades(None, agora).map_err(texto)?;
+        let ids = self.timers_do_espaco(espaco)?;
+        let (antes, limpas) = self.banco.zerar_com_atividades(ids.as_deref(), agora).map_err(texto)?;
         Ok(Zerado { em: agora, antes, limpas, atividade: None })
+    }
+
+    /// Os timers do espaço (os arquivados também), ou nulo sem espaço (todos).
+    fn timers_do_espaco(&self, espaco: Option<i64>) -> Result<Option<Vec<i64>>, String> {
+        let Some(e) = espaco else { return Ok(None) };
+        self.checar_espaco(e, false)?;
+        let mapa = self.banco.espacos_dos_timers().map_err(texto)?;
+        Ok(Some(mapa.into_iter().filter(|(_, x)| *x == e).map(|(t, _)| t).collect()))
+    }
+
+    /// "Pausar tudo" (rodada 20: o da aba). Sem espaço, tudo, como antes; com espaço, só os timers
+    /// dele.
+    pub fn pausar_tudo(&mut self, espaco: Option<i64>, agora: Ms) -> Result<Vec<Mudanca>, String> {
+        match self.timers_do_espaco(espaco)? {
+            None => Ok(self.motor.pausar_tudo(agora)),
+            Some(ids) => Ok(self.motor.pausar_timers(&ids, agora)),
+        }
+    }
+
+    // ---- espaços (rodada 20) ----
+
+    /// Erro se o espaço não existe (ou, com `ativo`, se está arquivado).
+    pub fn checar_espaco(&self, id: i64, ativo: bool) -> Result<(), String> {
+        match self.banco.espacos().map_err(texto)?.iter().find(|e| e.id == id) {
+            Some(e) if ativo && e.arquivado => Err(format!("O espaço {} está arquivado", e.nome)),
+            Some(_) => Ok(()),
+            None => Err("Espaço não encontrado".into()),
+        }
+    }
+
+    /// Nome de espaço: não vazio, até `ESPACO_NOME_MAX` letras, sem repetir (sem diferenciar
+    /// maiúsculas).
+    fn checar_nome_de_espaco(&self, nome: &str, id: Option<i64>) -> Result<(), String> {
+        if nome.is_empty() {
+            return Err("O nome não pode ficar vazio".into());
+        }
+        if nome.chars().count() > ESPACO_NOME_MAX {
+            return Err(format!("O nome vai até {ESPACO_NOME_MAX} letras"));
+        }
+        let igual = nome.to_lowercase();
+        if self.banco.espacos().map_err(texto)?.iter().any(|e| Some(e.id) != id && e.nome.trim().to_lowercase() == igual) {
+            return Err(format!("Já existe o espaço {nome}"));
+        }
+        Ok(())
+    }
+
+    /// "+ Novo → Espaço" e Ajustes: acrescenta um espaço no fim da lista; devolve o id.
+    pub fn criar_espaco(&mut self, nome: &str, cor: &str) -> Result<i64, String> {
+        self.checar_banco()?;
+        let nome = nome.trim();
+        self.checar_nome_de_espaco(nome, None)?;
+        self.banco.criar_espaco(nome, cor).map_err(texto)
+    }
+
+    /// Ajustes → Espaços: renomear, cor, ordem, arquivar. Nunca arquiva o último que sobra.
+    /// Arquivar pausa os timers do espaço que estão rodando; a aba que era dele volta a "Todos".
+    pub fn editar_espaco(&mut self, e: &Espaco, agora: Ms) -> Result<Vec<Mudanca>, String> {
+        self.checar_banco()?;
+        self.checar_espaco(e.id, false)?;
+        let nome = e.nome.trim();
+        self.checar_nome_de_espaco(nome, Some(e.id))?;
+        let todos = self.banco.espacos().map_err(texto)?;
+        let mut mud = vec![];
+        if e.arquivado && !todos.iter().any(|x| x.id == e.id && x.arquivado) {
+            if !todos.iter().any(|x| x.id != e.id && !x.arquivado) {
+                return Err(ULTIMO_ESPACO.into());
+            }
+            let ids = self.timers_do_espaco(Some(e.id))?.unwrap_or_default();
+            mud = self.motor.pausar_timers(&ids, agora);
+            self.aplicar(&mud)?;
+            self.largar_aba(e.id)?;
+        }
+        self.banco.editar_espaco(&Espaco { nome: nome.to_string(), ..e.clone() }).map_err(texto)?;
+        Ok(vec![])
+    }
+
+    /// Para onde vão os itens arquivados de um espaço apagado: o primeiro outro espaço não
+    /// arquivado, na ordem (nulo: não sobra nenhum).
+    pub fn destino_ao_apagar(&self, id: i64) -> Result<Option<i64>, String> {
+        let mut outros: Vec<Espaco> = self.banco.espacos().map_err(texto)?.into_iter().filter(|x| x.id != id && !x.arquivado).collect();
+        outros.sort_by_key(|x| (x.ordem, x.id));
+        Ok(outros.first().map(|x| x.id))
+    }
+
+    /// Ajustes → Espaços: apaga um espaço sem grupo nem timer sem grupo à vista (revisão da rodada
+    /// 20). Os arquivados dele vão, ainda arquivados, para o primeiro outro espaço não arquivado
+    /// (`destino_ao_apagar`); devolve quantos foram. Com algo à vista, recusa (`MOVA_OS_GRUPOS`).
+    /// Nunca apaga o último espaço não arquivado.
+    pub fn apagar_espaco(&mut self, id: i64) -> Result<i64, String> {
+        self.checar_banco()?;
+        self.checar_espaco(id, false)?;
+        let destino = self.destino_ao_apagar(id)?.ok_or(ULTIMO_ESPACO)?;
+        let foram = self.banco.apagar_espaco(id, destino).map_err(texto)?.ok_or(MOVA_OS_GRUPOS)?;
+        self.largar_aba(id)?;
+        Ok(foram)
+    }
+
+    /// A aba escolhida era do espaço `id` (que saiu da tela): volta a "Todos".
+    fn largar_aba(&self, id: i64) -> Result<(), String> {
+        if self.banco.config_app().map_err(texto)?.espaco_aba == Some(id) {
+            self.guardar_dock(|c| c.espaco_aba = None)?;
+        }
+        Ok(())
     }
 
     /// "Desfazer" do zerar: cada timer volta ao valor de antes (se ninguém zerou de novo depois).
@@ -693,8 +811,10 @@ impl Nucleo {
         }
     }
 
-    /// Arquivar um grupo pausa os timers dele que estão rodando.
+    /// Arquivar um grupo pausa os timers dele que estão rodando. O espaço (rodada 20) tem de
+    /// existir e não estar arquivado.
     pub fn editar_grupo(&mut self, g: &Grupo, agora: Ms) -> Result<Vec<Mudanca>, String> {
+        self.checar_espaco(g.espaco_id, true)?;
         let mut mud = vec![];
         if g.arquivado {
             let ids: Vec<i64> =
@@ -712,13 +832,45 @@ impl Nucleo {
 
     /// Arquivar um timer rodando pausa ele antes. A atividade padrão nova vale para o que abrir
     /// depois (o que está aberto segue na que tinha).
+    /// `editar_timer_com` sem mexer nas ocultas (testes).
+    #[cfg(test)]
     pub fn editar_timer(&mut self, t: &Timer, agora: Ms) -> Result<Vec<Mudanca>, String> {
+        self.editar_timer_com(t, agora, None)
+    }
+
+    /// Sem grupo, o espaço do timer (rodada 20) tem de existir e não estar arquivado; com grupo,
+    /// o timer guarda o espaço do grupo. `ocultas`: as atividades que o painel do timer não mostra
+    /// (nulo: as de antes); a atividade padrão nova sai delas. Tudo é conferido antes e gravado
+    /// numa transação só (revisão da rodada 20).
+    pub fn editar_timer_com(&mut self, t: &Timer, agora: Ms, ocultas: Option<&[i64]>) -> Result<Vec<Mudanca>, String> {
         self.checar_atividade(t.atividade_padrao_id)?;
+        if let Some(o) = ocultas {
+            if o.contains(&t.atividade_padrao_id) {
+                return Err(PADRAO_NAO_OCULTA.into());
+            }
+            let existem = self.banco.atividades().map_err(texto)?;
+            if let Some(a) = o.iter().find(|a| !existem.iter().any(|x| x.id == **a)) {
+                return Err(format!("Atividade não encontrada: {a}"));
+            }
+        }
+        let mut t = t.clone();
+        match t.grupo_id {
+            Some(g) => {
+                if let Some(e) = self.banco.espacos_dos_grupos().map_err(texto)?.get(&g) {
+                    t.espaco_id = *e;
+                }
+            }
+            None => self.checar_espaco(t.espaco_id, true)?,
+        }
+        let t = &t;
+        let antes = self.banco.atividades_ocultas().map_err(texto)?.remove(&t.id).unwrap_or_default();
+        let ocultas: Vec<i64> =
+            ocultas.map_or(antes, <[i64]>::to_vec).into_iter().filter(|a| *a != t.atividade_padrao_id).collect();
         if t.arquivado && self.motor.abertos.iter().any(|a| a.timer_id == Some(t.id)) {
             let mud = self.motor.pausar(t.id, agora);
             self.aplicar(&mud)?;
         }
-        self.banco.editar_timer(t).map_err(texto)?;
+        self.banco.editar_timer_com_ocultas(t, &ocultas).map_err(texto)?;
         self.motor.atividades_padrao = self.banco.atividades_padrao().map_err(texto)?;
         Ok(vec![])
     }
@@ -1211,7 +1363,7 @@ impl Nucleo {
 mod testes {
     use super::*;
     use fila::EventoHook;
-    use nucleo::modelo::{MotivoFim, Origem, ATIVIDADE_REUNIAO, ATIVIDADE_TRABALHO};
+    use nucleo::modelo::{MotivoFim, Origem, ATIVIDADE_REUNIAO, ATIVIDADE_TRABALHO, ESPACO_PRIMEIRO};
     use nucleo::snapshot::ZeradoAtividadeDto;
     use nucleo::tempo::ms_local;
     use std::io::Write;
@@ -1398,7 +1550,7 @@ mod testes {
         }
         let s = n.snapshot(h(9, 0)).unwrap();
         assert_eq!((acumulado_na_tela(&s, a), acumulado_na_tela(&s, b)), (60 * MIN, 30 * MIN));
-        let z = n.zerar_todos(h(9, 0)).unwrap();
+        let z = n.zerar_todos(None, h(9, 0)).unwrap();
         assert_eq!(z.antes, vec![(a, h(0, 0)), (b, h(0, 0)), (arq, 5)], "os arquivados também");
         let s = n.snapshot(h(9, 10)).unwrap();
         assert_eq!((acumulado_na_tela(&s, a), acumulado_na_tela(&s, b)), (10 * MIN, 10 * MIN));
@@ -1543,12 +1695,191 @@ mod testes {
         assert_eq!((velho.limpas.len(), velho.atividade), (0, None));
     }
 
+    /// Rodada 20: o espaço "Pessoal" com um timer num grupo e um sem grupo; o "Geral" com um.
+    fn dois_espacos(n: &mut Nucleo) -> (i64, i64, i64, i64) {
+        let pessoal = n.criar_espaco("Pessoal", "#e86bd0").unwrap();
+        let casa = n.banco.criar_grupo_em("Casa", "#111", pessoal).unwrap();
+        let obra = timer_zerado(n, "Obra", h(0, 0));
+        let mut t = n.banco.timers().unwrap().into_iter().find(|t| t.id == obra).unwrap();
+        t.grupo_id = Some(casa);
+        n.editar_timer(&t, h(8, 0)).unwrap();
+        let leitura = n.banco.criar_timer_no(None, pessoal, "Leitura", "#222", h(8, 0), F).unwrap();
+        n.banco.zerar(Some(&[leitura]), h(0, 0)).unwrap();
+        let flow = timer_zerado(n, "Flow", h(0, 0));
+        (pessoal, obra, leitura, flow)
+    }
+
+    #[test]
+    fn zerar_todos_e_pausar_tudo_valem_para_o_espaco_da_aba() {
+        let mut n = nucleo(h(8, 0));
+        let (pessoal, obra, leitura, flow) = dois_espacos(&mut n);
+        assert_eq!(n.banco.espacos_dos_timers().unwrap()[&obra], pessoal, "o timer do grupo segue o espaço do grupo");
+        for id in [obra, leitura, flow] {
+            let m = n.motor.play(id, h(8, 0));
+            n.aplicar(&m).unwrap();
+        }
+        // "Zerar todos (Pessoal)": só os do Pessoal
+        let z = n.zerar_todos(Some(pessoal), h(9, 0)).unwrap();
+        assert_eq!(z.antes.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [obra, leitura]);
+        let s = n.snapshot(h(9, 30)).unwrap();
+        assert_eq!(
+            (acumulado_na_tela(&s, obra), acumulado_na_tela(&s, leitura), acumulado_na_tela(&s, flow)),
+            (30 * MIN, 30 * MIN, 90 * MIN)
+        );
+        // o Desfazer volta só os dois
+        n.desfazer_zerar(&z).unwrap();
+        assert_eq!(acumulado_na_tela(&n.snapshot(h(9, 30)).unwrap(), obra), 90 * MIN);
+        // "Pausar tudo (Pessoal)": o Flow segue rodando
+        let m = n.pausar_tudo(Some(pessoal), h(10, 0)).unwrap();
+        n.aplicar(&m).unwrap();
+        let s = n.snapshot(h(10, 0)).unwrap();
+        let rodando = |id: i64| s.grupos.iter().flat_map(|g| &g.timers).find(|t| t.id == id).unwrap().rodando;
+        assert_eq!((rodando(obra), rodando(leitura), rodando(flow)), (false, false, true));
+        // "Todos": tudo, como antes
+        let m = n.pausar_tudo(None, h(10, 5)).unwrap();
+        n.aplicar(&m).unwrap();
+        assert!(n.motor.abertos.is_empty());
+        let z = n.zerar_todos(None, h(10, 10)).unwrap();
+        assert_eq!(z.antes.len(), 3);
+        // espaço que não existe
+        assert!(n.zerar_todos(Some(999), h(10, 20)).is_err());
+        assert!(n.pausar_tudo(Some(999), h(10, 20)).is_err());
+    }
+
+    #[test]
+    fn apagar_espaco_so_sem_nada_a_vista_e_os_arquivados_vao_junto() {
+        let mut n = nucleo(h(8, 0));
+        let (pessoal, obra, leitura, _) = dois_espacos(&mut n);
+        // com grupo ou timer à vista: recusa, com o texto da dica dos Ajustes
+        assert_eq!(n.apagar_espaco(pessoal).unwrap_err(), MOVA_OS_GRUPOS);
+        let s = n.snapshot(h(8, 0)).unwrap();
+        let e = s.espacos.iter().find(|e| e.id == pessoal).unwrap();
+        assert_eq!((e.ativos, e.arquivados), (2, 0), "a tela sabe o mesmo que o núcleo");
+        // arquivar o grupo e o timer sem grupo: os dois vão, ainda arquivados, para o Geral
+        let mut g = n.banco.grupos().unwrap().into_iter().find(|g| g.espaco_id == pessoal).unwrap();
+        g.arquivado = true;
+        n.editar_grupo(&g, h(9, 0)).unwrap();
+        let mut t = n.banco.timers().unwrap().into_iter().find(|t| t.id == leitura).unwrap();
+        t.arquivado = true;
+        n.editar_timer(&t, h(9, 0)).unwrap();
+        let s = n.snapshot(h(9, 0)).unwrap();
+        let e = s.espacos.iter().find(|e| e.id == pessoal).unwrap();
+        assert_eq!((e.ativos, e.arquivados), (0, 2));
+        assert_eq!(n.destino_ao_apagar(pessoal).unwrap(), Some(ESPACO_PRIMEIRO));
+        n.guardar_dock(|c| c.espaco_aba = Some(pessoal)).unwrap();
+        assert_eq!(n.apagar_espaco(pessoal).unwrap(), 2);
+        assert_eq!(n.banco.espacos().unwrap().len(), 1);
+        assert_eq!(n.banco.espacos_dos_timers().unwrap()[&obra], ESPACO_PRIMEIRO, "o timer do grupo arquivado foi com ele");
+        assert_eq!(n.banco.espacos_dos_timers().unwrap()[&leitura], ESPACO_PRIMEIRO);
+        assert!(!n.banco.timers().unwrap().iter().any(|t| t.id == leitura), "segue arquivado");
+        assert_eq!(n.banco.config_app().unwrap().espaco_aba, None, "a aba dele volta a Todos");
+        // o último espaço não arquivado nunca: nem apagar nem arquivar
+        assert_eq!(n.apagar_espaco(ESPACO_PRIMEIRO).unwrap_err(), ULTIMO_ESPACO);
+        let mut e = n.banco.espacos().unwrap()[0].clone();
+        e.arquivado = true;
+        assert!(n.editar_espaco(&e, h(9, 0)).is_err());
+        // um arquivado pode ser apagado (os itens dele vão para o que sobra)
+        let velho = n.criar_espaco("Velho", "#333").unwrap();
+        let mut v = n.banco.espacos().unwrap().into_iter().find(|e| e.id == velho).unwrap();
+        v.arquivado = true;
+        n.editar_espaco(&v, h(9, 0)).unwrap();
+        assert_eq!(n.apagar_espaco(velho).unwrap(), 0);
+        // nome vazio ou repetido
+        assert!(n.criar_espaco("  ", "#111").is_err());
+        assert!(n.criar_espaco("geral", "#111").is_err());
+        // grupo num espaço arquivado ou que não existe: recusa
+        let outro = n.criar_espaco("Outro", "#222").unwrap();
+        let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == outro).unwrap();
+        e.arquivado = true;
+        n.editar_espaco(&e, h(9, 0)).unwrap();
+        g.arquivado = false;
+        g.espaco_id = outro;
+        assert!(n.editar_grupo(&g, h(9, 0)).is_err());
+        g.espaco_id = 999;
+        assert!(n.editar_grupo(&g, h(9, 0)).is_err());
+    }
+
+    /// Revisão da rodada 20: o timer rodando num grupo ou espaço arquivado segue à vista (no
+    /// "Sem grupo" do espaço dele), no dock e no total do dia.
+    #[test]
+    fn timer_rodando_em_grupo_ou_espaco_arquivado_segue_a_vista() {
+        let mut n = nucleo(h(8, 0));
+        let (pessoal, obra, leitura, _) = dois_espacos(&mut n);
+        let mut g = n.banco.grupos().unwrap().into_iter().find(|g| g.espaco_id == pessoal).unwrap();
+        g.arquivado = true;
+        n.editar_grupo(&g, h(8, 0)).unwrap();
+        // o Claude abre um trecho na Obra (o grupo dela está arquivado)
+        let m = n.motor.play(obra, h(9, 0));
+        n.aplicar(&m).unwrap();
+        let s = n.snapshot(h(9, 30)).unwrap();
+        let sem = s.grupos.iter().find(|x| x.id.is_none() && x.espaco_id == pessoal).unwrap();
+        assert_eq!(sem.timers.iter().map(|t| t.id).collect::<Vec<_>>(), [obra, leitura], "no Sem grupo do Pessoal");
+        // re-revisão: o timer leva o nome do grupo arquivado (o editar mostra esse grupo)
+        assert_eq!(sem.timers[0].grupo_arquivado.as_deref(), Some("Casa"));
+        assert_eq!(sem.timers[1].grupo_arquivado, None, "sem grupo");
+        // salvar o timer sem mexer no grupo mantém o grupo arquivado
+        let t = n.banco.timers().unwrap().into_iter().find(|t| t.id == obra).unwrap();
+        n.editar_timer(&t, h(9, 31)).unwrap();
+        assert_eq!(n.banco.timers().unwrap().into_iter().find(|t| t.id == obra).unwrap().grupo_id, Some(g.id));
+        // pausada, some de novo
+        let m = n.motor.pausar(obra, h(9, 30));
+        n.aplicar(&m).unwrap();
+        let s = n.snapshot(h(9, 40)).unwrap();
+        assert!(!s.grupos.iter().flat_map(|g| &g.timers).any(|t| t.id == obra));
+        // o espaço arquivado: a Leitura que voltar a rodar aparece no "Sem grupo" dele
+        let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == pessoal).unwrap();
+        e.arquivado = true;
+        n.editar_espaco(&e, h(9, 40)).unwrap();
+        let m = n.motor.play(leitura, h(10, 0));
+        n.aplicar(&m).unwrap();
+        let s = n.snapshot(h(10, 10)).unwrap();
+        let sem = s.grupos.iter().find(|x| x.espaco_id == pessoal).unwrap();
+        assert_eq!((sem.id, sem.timers.len(), sem.timers[0].rodando), (None, 1, true));
+    }
+
+    /// Revisão da rodada 20: com 2 ou mais espaços, o nome repetido leva o espaço no botão.
+    #[test]
+    fn pergunta_mostra_o_espaco_do_nome_repetido() {
+        let mut n = nucleo(h(8, 0));
+        let pessoal = n.criar_espaco("Pessoal", "#e86bd0").unwrap();
+        let estudos = timer_zerado(&n, "Estudos", h(0, 0));
+        n.banco.criar_timer_no(None, pessoal, "Estudos", "#222", h(8, 0), F).unwrap();
+        let mud = n.motor.evento(&ev(h(9, 0), "UserPromptSubmit", "s1", "G:\\Estudos"));
+        n.aplicar(&mud).unwrap();
+        let s = n.snapshot(h(9, 0)).unwrap();
+        let p = s.perguntas.iter().find(|p| p.tipo == "sessao_nova").unwrap();
+        let ligar = p.opcoes.iter().find(|(v, _)| v.starts_with("ligar:")).unwrap();
+        assert!(ligar.0.starts_with(&format!("ligar:{estudos}")));
+        assert_eq!(ligar.1, "Estudos · Geral · sempre nesta pasta");
+    }
+
+    #[test]
+    fn atividades_ocultas_nunca_a_padrao() {
+        let mut n = nucleo(h(8, 0));
+        let t = timer_zerado(&n, "A", h(0, 0));
+        let mut x = n.banco.timers().unwrap().into_iter().find(|x| x.id == t).unwrap();
+        n.editar_timer_com(&x, h(8, 0), Some(&[ATIVIDADE_REUNIAO, 3])).unwrap();
+        assert_eq!(n.banco.atividades_ocultas().unwrap()[&t], [ATIVIDADE_REUNIAO, 3]);
+        // recusado antes de gravar qualquer coisa (revisão da rodada 20): o nome não muda
+        x.nome = "Outro nome".into();
+        assert_eq!(n.editar_timer_com(&x, h(8, 0), Some(&[ATIVIDADE_TRABALHO])).unwrap_err(), PADRAO_NAO_OCULTA);
+        assert!(n.editar_timer_com(&x, h(8, 0), Some(&[999])).is_err());
+        assert_eq!(n.banco.timers().unwrap()[0].nome, "A");
+        assert_eq!(n.banco.atividades_ocultas().unwrap()[&t], [ATIVIDADE_REUNIAO, 3]);
+        // sem ocultas (nulo), ficam as de antes; a padrão nova sai delas
+        x.nome = "A".into();
+        x.atividade_padrao_id = 3;
+        n.editar_timer_com(&x, h(9, 0), None).unwrap();
+        assert_eq!(n.banco.atividades_ocultas().unwrap()[&t], [ATIVIDADE_REUNIAO]);
+        assert_eq!(n.snapshot(h(9, 0)).unwrap().grupos[0].timers[0].atividades_ocultas, [ATIVIDADE_REUNIAO]);
+    }
+
     #[test]
     fn zerar_todos_e_a_virada_limpam_os_zerados_por_atividade() {
         let mut n = nucleo(h(8, 0));
         let t = trabalho_e_reuniao(&mut n);
         n.zerar_atividade(t, ATIVIDADE_REUNIAO, h(10, 30)).unwrap();
-        let z = n.zerar_todos(h(10, 45)).unwrap();
+        let z = n.zerar_todos(None, h(10, 45)).unwrap();
         assert_eq!(z.limpas, [(t, ATIVIDADE_REUNIAO, h(10, 30))]);
         assert!(n.banco.zerados_atividade().unwrap().is_empty());
         assert_eq!(tr_reu(&n.snapshot(h(10, 50)).unwrap(), t), (0, 5 * MIN));

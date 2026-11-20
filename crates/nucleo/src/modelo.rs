@@ -196,6 +196,25 @@ const fn trabalho() -> i64 {
     ATIVIDADE_TRABALHO
 }
 
+/// O espaço da migração e do banco novo (rodada 20): "Trabalho" num banco com dados, "Geral" num
+/// novo. É o padrão das colunas `espaco_id`.
+pub const ESPACO_PRIMEIRO: i64 = 1;
+
+const fn espaco_primeiro() -> i64 {
+    ESPACO_PRIMEIRO
+}
+
+/// Um espaço (rodada 20): um nível acima dos grupos ("Trabalho", "Pessoal"). Cada espaço tem os
+/// seus grupos e o seu "Sem grupo".
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Espaco {
+    pub id: i64,
+    pub nome: String,
+    pub cor: String,
+    pub ordem: i64,
+    pub arquivado: bool,
+}
+
 /// O tipo de hora de um trecho (Trabalho, Reunião, Estudo...): cada trecho contado tem uma. A
 /// lista é editável em Ajustes (renomear, acrescentar, cor, arquivar); nunca se apaga uma
 /// atividade, porque trechos e ajustes apontam para ela.
@@ -223,6 +242,9 @@ pub struct Grupo {
     /// Nome dado ao card padrão (vale para os timers do grupo que herdam o card).
     #[serde(default)]
     pub card_padrao_nome: Option<String>,
+    /// O espaço do grupo (rodada 20).
+    #[serde(default = "espaco_primeiro")]
+    pub espaco_id: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -241,6 +263,10 @@ pub struct Timer {
     /// (Trabalho por padrão; um timer de curso pode ter Estudo).
     #[serde(default = "trabalho")]
     pub atividade_padrao_id: i64,
+    /// O espaço do timer sem grupo (o "Sem grupo" de cada espaço, rodada 20). Com grupo, vale o
+    /// espaço do grupo.
+    #[serde(default = "espaco_primeiro")]
+    pub espaco_id: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

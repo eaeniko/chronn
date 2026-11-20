@@ -2,6 +2,7 @@
 // Peças da interface. Cada função devolve HTML (texto); os cliques são tratados
 // por delegação em quem monta a tela, pelos atributos data-acao / data-timer / data-grupo.
 import { relogio, relogioGrande, curto, horaMin, msDoTimer, contasAcumuladas, hojeDesdeZerar, desdeTexto, totalDoGrupo, rotuloDeLink, rotuloDoDestino, textoDoAjuste, podeEncerrar, tempoPorAtividade, linhasDeAtividade, itensDoMenuZerar, trocarTexto, situacaoNaTela, etiquetaComposta, ehLembrete, SITUACAO, TRABALHO, REUNIAO } from './formato.js';
+import { TEXTOS } from './textos.js';
 
 export { msDoTimer, rotuloDeLink, rotuloDoDestino, podeEncerrar };
 
@@ -326,18 +327,34 @@ export function cartaoTimer(timer, agora, selecionado) {
 </div>`;
 }
 
-export const chaveGrupo = (grupo) => String(grupo.id ?? 'sem');
+/**
+ * A chave de um grupo na tela (abrir/fechar, o total do cabeçalho). Cada espaço tem o seu "Sem
+ * grupo" (rodada 20): o do primeiro espaço segue "sem", como antes; os outros, "sem-<espaço>".
+ */
+export const chaveGrupo = (grupo) =>
+  grupo.id !== null && grupo.id !== undefined
+    ? String(grupo.id)
+    : (grupo.espaco_id ?? 1) === 1
+      ? 'sem'
+      : `sem-${grupo.espaco_id}`;
 
-/** "+ Novo timer" no fim da grade de um grupo. */
-export const novoTimerBotao = (grupo, classe = 'k-novo') =>
-  `<button class="${classe}" data-acao="novo-timer" data-grupo="${grupo?.id ?? ''}">+ Novo timer</button>`;
+/**
+ * O grupo vazio (rodada 20; no lugar do cartão tracejado "+ Novo timer"): uma linha discreta,
+ * "Grupo vazio · + Timer", que abre o "Novo timer" já nesse grupo.
+ */
+export const linhaGrupoVazio = (grupo) =>
+  `<div class="g-vazio">${esc(TEXTOS.grupoVazio)} · <button type="button" data-acao="novo-timer" data-grupo="${grupo.id ?? ''}" data-espaco="${grupo.espaco_id ?? 1}">${esc(TEXTOS.grupoVazioTimer)}</button></div>`;
 
-export const novoGrupoBotao = () => '<button class="novo-grupo" data-acao="novo-grupo">+ Novo grupo</button>';
+/** Sem timer nenhum (na tela ou na aba): o texto que aponta para o "+ Novo". */
+export const semTimerNenhum = () => `<p class="vazio">${esc(TEXTOS.nenhumTimer)}</p>`;
 
-/** "2 rodando · Pausar tudo" no topo da coluna dos grupos; nada quando tudo está parado. */
-export const barraRodando = (rodando) =>
+/**
+ * "2 rodando · Pausar tudo" no topo da coluna dos grupos; nada quando tudo está parado. `texto`:
+ * o do botão (rodada 20: "Pausar tudo (Pessoal)" na aba de um espaço).
+ */
+export const barraRodando = (rodando, texto = TEXTOS.pausarTudo, espaco = null) =>
   rodando > 0
-    ? `<div class="rd"><span>${rodando} rodando</span><button class="pa" data-acao="pausar-tudo">Pausar tudo</button></div>`
+    ? `<div class="rd"><span>${rodando} rodando</span><button class="pa" data-acao="pausar-tudo" data-espaco="${espaco ?? ''}">${esc(texto)}</button></div>`
     : '';
 
 /**
@@ -365,9 +382,8 @@ export function cabecalhoGrupo(grupo, agora, aberto, classe = 'gh') {
 /** Seção do grupo; `cartao(timer)` desenha cada timer (padrão: o cartão do Painel). */
 export function secaoGrupo(grupo, agora, aberto, selecionado = null, cartao = null) {
   const desenhar = cartao ?? ((t) => cartaoTimer(t, agora, t.id === selecionado));
-  const grade = aberto
-    ? `<div class="grid">${grupo.timers.map(desenhar).join('')}${novoTimerBotao(grupo)}</div>`
-    : '';
+  const vazio = !grupo.timers.length && grupo.id !== null;
+  const grade = !aberto ? '' : vazio ? linhaGrupoVazio(grupo) : `<div class="grid">${grupo.timers.map(desenhar).join('')}</div>`;
   return `<section class="grp${aberto ? '' : ' fechado'}">
   ${cabecalhoGrupo(grupo, agora, aberto)}
   ${grade}

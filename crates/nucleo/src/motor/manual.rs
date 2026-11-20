@@ -251,6 +251,22 @@ impl Motor {
         out
     }
 
+    /// O "Pausar tudo" de um espaço (rodada 20): o ⏸ de cada timer dado que tem algo aberto (o
+    /// manual, o Claude, a leitura). Os timers de outros espaços seguem rodando.
+    pub fn pausar_timers(&mut self, ids: &[i64], agora: Ms) -> Vec<Mudanca> {
+        let mut out = self.corte_do_dia(agora);
+        let mut timers: Vec<i64> = vec![];
+        for id in self.abertos.iter().filter_map(|t| t.timer_id) {
+            if ids.contains(&id) && !timers.contains(&id) {
+                timers.push(id);
+            }
+        }
+        for id in timers {
+            out.extend(self.pausar(id, agora));
+        }
+        out
+    }
+
     fn tirar_da_ausencia(&mut self, timer_id: i64) {
         if let Some((_, ids, _)) = &mut self.ausencia {
             ids.retain(|i| *i != timer_id);

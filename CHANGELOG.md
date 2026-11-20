@@ -3,6 +3,25 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.2.0] - 2026-11-20
+
+### Added
+- Spaces above groups (for example Work and Personal), shown as tabs once there are two or more,
+  with an "All" tab. Day total, "Pause all" and "Reset all" follow the open tab.
+- A single "+ New" button (or the N key) to create a timer, group or space; a timer created without
+  a group goes to "No group".
+- Choose which activities show in each timer's panel. A hidden activity with time, or running,
+  still shows.
+- Reset a single activity (for example only Meeting) from the timer's reset menu.
+
+### Changed
+- The timer panel lists every non-archived activity, including Study.
+- Long tooltips wrap into lines instead of being cut at the screen edge.
+- A running timer is never hidden, even inside an archived group or space.
+
+### Removed
+- Import from the previous internal version.
+
 ## [0.1.0] - 2026-11-20
 
 First public version.

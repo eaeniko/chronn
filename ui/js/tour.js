@@ -6,9 +6,10 @@
 // centro, com a mesma explicação: o tour nunca quebra nem pula sozinho.
 import { chamar } from './api.js';
 import { NOME_APP } from './nome.js';
+import { TEXTOS } from './textos.js';
 
 /**
- * O tour completo (rodada 16, 8 passos), na ordem. `alvo`: o seletor da parte da tela; `dock`: o
+ * O tour completo (rodada 16, 8 passos; 9 com o "+ Novo" da rodada 20), na ordem. `alvo`: o seletor da parte da tela; `dock`: o
  * dock pisca neste passo.
  */
 export const PASSOS = [
@@ -50,6 +51,12 @@ export const PASSOS = [
     textoEscondido: 'A janela pequena que mostra o que está rodando. Agora ela aparece só quando há uma pergunta; em Ajustes → Dock, dá para deixá-la sempre à vista.',
     alvo: null,
     dock: true,
+  },
+  {
+    id: 'novo',
+    titulo: TEXTOS.tourNovoTitulo,
+    texto: TEXTOS.tourNovoTexto,
+    alvo: '#bt-novo',
   },
   {
     id: 'zerar',
@@ -113,7 +120,9 @@ export const NOMES_DAS_TELAS = { painel: 'Painel', foco: 'Foco', cartoes: 'Cart�
 export const MINI_TOURS = {
   painel: [
     { id: 'grupos', titulo: 'Grupos e cartões', texto: 'Cada grupo junta os timers de um projeto. O cartão mostra o tempo de hoje e os botões ▶ e ⏸.', alvo: '#grupos' },
-    { id: 'pausar-tudo', titulo: 'Pausar tudo', texto: 'Para de uma vez todos os timers que estão contando.', alvo: '#grupos [data-acao="pausar-tudo"]' },
+    { id: 'abas', titulo: TEXTOS.tourAbasTitulo, texto: TEXTOS.tourAbasTexto, alvo: '#grupos .abas', soComAbas: true },
+    { id: 'novo', titulo: TEXTOS.tourNovoTitulo, texto: TEXTOS.tourNovoTexto, alvo: '#bt-novo' },
+    { id: 'pausar-tudo', titulo: 'Pausar tudo', texto: 'Para de uma vez todos os timers que estão contando (com abas, os da aba).', alvo: '#grupos [data-acao="pausar-tudo"]' },
     { id: 'painel', titulo: 'O painel do timer', texto: 'O timer escolhido, à direita: as atividades, o ajuste de hoje e as sessões do Claude ligadas a ele.', alvo: '#foco' },
   ],
   foco: [
@@ -153,10 +162,13 @@ export const htmlDoMenuAjuda = (visao) =>
     .map((it) => `<button type="button" role="menuitem" data-ajuda="${it.id}">${esc(it.rotulo)}</button>`)
     .join('')}</div>`;
 
-/** Os passos de cada tour: `essencial`, `completo` ou `tela` (o mini-tour da tela `visao`). */
-export function passosDoTour(tipo, visao = 'painel') {
+/**
+ * Os passos de cada tour: `essencial`, `completo` ou `tela` (o mini-tour da tela `visao`). O passo
+ * das abas de espaço (rodada 20) só entra com `abas` (2 ou mais espaços).
+ */
+export function passosDoTour(tipo, visao = 'painel', { abas = false } = {}) {
   if (tipo === 'completo') return PASSOS;
-  if (tipo === 'tela') return MINI_TOURS[visao] ?? MINI_TOURS.painel;
+  if (tipo === 'tela') return (MINI_TOURS[visao] ?? MINI_TOURS.painel).filter((p) => abas || !p.soComAbas);
   return PASSOS_ESSENCIAL;
 }
 

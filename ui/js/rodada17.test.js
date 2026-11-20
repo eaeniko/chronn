@@ -30,7 +30,7 @@ test('rodada 17: o "Iniciar com o Windows" passa pelo núcleo, nunca pelo plugin
 test('rodada 17: o tour essencial tem 5 passos e é o padrão; o completo segue com 8', async () => {
   const { PASSOS_ESSENCIAL, PASSOS, passosDoTour, htmlDoBalao } = await import('./tour.js');
   assert.deepEqual(PASSOS_ESSENCIAL.map((p) => p.id), ['cartao', 'claude', 'pastas', 'dock', 'ajuda']);
-  assert.equal(PASSOS.length, 8, 'o completo sem mudanças');
+  assert.equal(PASSOS.length, 9, 'o completo, com o "+ Novo" da rodada 20');
   assert.equal(passosDoTour('essencial'), PASSOS_ESSENCIAL);
   assert.equal(passosDoTour(), PASSOS_ESSENCIAL, 'sem tipo, o essencial');
   assert.equal(passosDoTour('completo'), PASSOS);
@@ -66,18 +66,21 @@ test('rodada 17: cada mini-tour tem os passos certos, de 2 a 4', async () => {
   const { MINI_TOURS, passosDoTour } = await import('./tour.js');
   const ids = Object.fromEntries(Object.entries(MINI_TOURS).map(([t, ps]) => [t, ps.map((p) => p.id)]));
   assert.deepEqual(ids, {
-    painel: ['grupos', 'pausar-tudo', 'painel'],
+    painel: ['grupos', 'abas', 'novo', 'pausar-tudo', 'painel'],
     foco: ['relogio', 'lista'],
     cartoes: ['cartoes', 'zoho'],
     linha: ['trechos', 'cores', 'ajuste'],
     ajustes: ['dock', 'claude', 'grupos', 'ajuda'],
   });
   for (const ps of Object.values(MINI_TOURS)) {
-    assert.ok(ps.length >= 2 && ps.length <= 4);
+    // o passo das abas (rodada 20) só entra com 2 ou mais espaços
+    const sem = ps.filter((p) => !p.soComAbas);
+    assert.ok(sem.length >= 2 && sem.length <= 4);
     for (const p of ps) assert.ok(p.alvo && p.titulo && p.texto, p.id);
   }
-  assert.equal(passosDoTour('tela', 'cartoes'), MINI_TOURS.cartoes);
-  assert.equal(passosDoTour('tela', 'nada'), MINI_TOURS.painel);
+  assert.deepEqual(passosDoTour('tela', 'cartoes'), MINI_TOURS.cartoes);
+  assert.deepEqual(passosDoTour('tela', 'nada'), MINI_TOURS.painel.filter((p) => !p.soComAbas), 'sem abas, sem o passo delas');
+  assert.deepEqual(passosDoTour('tela', 'painel', { abas: true }), MINI_TOURS.painel);
   // os Ajustes: cada seção em uma frase (inatividade, dock, lembretes, Claude Code, grupos e regras, backups, ajuda)
   const textos = MINI_TOURS.ajustes.map((p) => p.texto).join(' ');
   for (const s of ['Inatividade', 'Dock', 'Lembretes', 'Claude Code', 'Grupos e regras', 'Backups', 'dicas']) assert.ok(textos.includes(s), s);

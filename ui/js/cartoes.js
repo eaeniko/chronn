@@ -10,8 +10,7 @@ import {
   botaoEncerrar,
   secaoGrupo,
   chaveGrupo,
-  novoGrupoBotao,
-  novoTimerBotao,
+  semTimerNenhum,
   rotuloDoDestino,
   destinoDoGrupo,
   ajusteDoTimer,
@@ -23,6 +22,7 @@ import {
   botaoZerar,
   etiquetaSituacao,
 } from './componentes.js';
+import { gruposDaAba, secoesDaAba, htmlAbas } from './espacos.js';
 
 /** Motivo → dica do "auto" (o timer ligou sozinho). */
 const AUTO = {
@@ -87,20 +87,18 @@ function barraDoDia(timers, agora) {
   return `<div class="kb" aria-hidden="true">${partes}</div>`;
 }
 
-export function visaoCartoes(snap, agora, fechados, selecionado) {
-  const grupos = snap.grupos;
-  const corpo = grupos.length
-    ? grupos
-        .map((g) =>
-          secaoGrupo(g, agora, !fechados.has(chaveGrupo(g)), selecionado, (t) =>
-            cartaoGrande(t, g, agora, t.id === selecionado),
-          ),
-        )
-        .join('')
-    : `<p class="vazio">Nenhum timer ainda.</p><div class="grid">${novoTimerBotao(null)}</div>`;
+/**
+ * A visão Cartões da aba `aba` (rodada 20: nulo é "Todos"; com abas, "Todos" põe o nome de cada
+ * espaço acima dos grupos dele). A barra do dia é a da aba.
+ */
+export function visaoCartoes(snap, agora, fechados, selecionado, aba = null) {
+  const grupos = gruposDaAba(snap, aba);
+  const desenhar = (g) =>
+    secaoGrupo(g, agora, !fechados.has(chaveGrupo(g)), selecionado, (t) => cartaoGrande(t, g, agora, t.id === selecionado));
+  const corpo = grupos.length ? secoesDaAba(snap, aba, desenhar, agora) : semTimerNenhum();
   return `<div class="kv" data-rolagem="cartoes">
+  ${htmlAbas(snap, aba)}
   ${barraDoDia(grupos.flatMap((g) => g.timers), agora)}
   ${corpo}
-  ${novoGrupoBotao()}
 </div>`;
 }

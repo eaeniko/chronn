@@ -232,13 +232,18 @@ export function itensDoMenuZerar(timer, atividades, agora) {
  * desde o zerar ou está rodando. [{ id, nome, cor, ms, rodando, manual, arquivada }]: `ms`, o
  * acumulado desde o zerar; `rodando`, algum trecho aberto dela no timer (o ▶, o 👥, o Claude ou a
  * leitura); `manual`, o play manual aberto é dela.
+ * Rodada 20: as atividades ocultas do timer (`atividades_ocultas`, do editar timer) não aparecem,
+ * a não ser com tempo desde o zerar ou rodando (nenhum tempo contado fica invisível); a padrão do
+ * timer nunca é ocultada.
  */
 export function linhasDeAtividade(timer, atividades, agora) {
   const lista = atividades ?? [];
   const { porAtividade } = contasAcumuladas(timer, agora);
   const abertas = new Set(timer.trechos.filter((t) => t.fim === null || t.fim === undefined).map((t) => t.atividade_id ?? TRABALHO));
+  const ocultas = new Set(timer.atividades_ocultas ?? []);
+  ocultas.delete(timer.atividade_padrao_id ?? TRABALHO);
   const ids = new Set();
-  for (const a of lista) if (!a.arquivada) ids.add(a.id);
+  for (const a of lista) if (!a.arquivada && !ocultas.has(a.id)) ids.add(a.id);
   // sem a lista (não deveria), ao menos a padrão do timer
   if (!lista.length) ids.add(timer.atividade_padrao_id ?? TRABALHO);
   for (const [id, ms] of porAtividade) if (ms >= 1000) ids.add(id);

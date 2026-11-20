@@ -64,6 +64,9 @@ pub struct ConfigApp {
     pub dicas_ligadas: bool,
     /// As dicas já mostradas (cada uma aparece uma vez só); "Mostrar as dicas de novo" esvazia.
     pub dicas_vistas: Vec<String>,
+    /// A aba de espaço escolhida no Painel, nos Cartões e na Linha do tempo (rodada 20): o id do
+    /// espaço, ou nulo para "Todos". Um espaço que sumiu (apagado, arquivado) vale como "Todos".
+    pub espaco_aba: Option<i64>,
 }
 
 impl ConfigApp {
@@ -118,6 +121,7 @@ impl Default for ConfigApp {
             tour_visto: false,
             dicas_ligadas: true,
             dicas_vistas: vec![],
+            espaco_aba: None,
         }
     }
 }

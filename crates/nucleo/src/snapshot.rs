@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::banco::Banco;
 use crate::config::{texto_de_corte, ConfigApp};
-use crate::modelo::{Atividade, EstadoSessao, Ligacao, MotivoFim, Origem, Pergunta, Sessao, Timer, Trecho, ATIVIDADE_REUNIAO};
+use crate::modelo::{Atividade, EstadoSessao, Grupo, Ligacao, MotivoFim, Origem, Pergunta, Sessao, Timer, Trecho, ATIVIDADE_REUNIAO};
 use crate::motor::{raiz_do_projeto, sugestao_de_pasta, Motor, AVISO_LIGADA_MS};
 use crate::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
 use crate::APP_NOME;
@@ -30,7 +30,33 @@ pub struct Snapshot {
     /// Todas as atividades (Trabalho, Reunião, Estudo...), as arquivadas também (trechos antigos
     /// apontam para elas), por ordem.
     pub atividades: Vec<Atividade>,
+    /// Todos os espaços (rodada 20), os arquivados também (os Ajustes desarquivam), por ordem.
+    /// Os grupos e timers de um espaço arquivado ficam fora de `grupos`.
+    pub espacos: Vec<EspacoDto>,
     pub config: ConfigApp,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EspacoDto {
+    pub id: i64,
+    pub nome: String,
+    pub cor: String,
+    pub ordem: i64,
+    pub arquivado: bool,
+    /// O tempo real (a união) dos timers do espaço nos dias fechados, cada um desde o seu zerar
+    /// (`Acumulado::real_por_espaco`): a tela soma o de hoje para a dica do cabeçalho do espaço.
+    pub real_antes_ms: Ms,
+    /// Grupos e timers sem grupo não arquivados do espaço (revisão da rodada 20): com algum, o
+    /// "Apagar" dos Ajustes fica desabilitado, e o núcleo recusa do mesmo jeito.
+    pub ativos: i64,
+    /// Grupos e timers sem grupo arquivados: ao apagar o espaço, vão para outro.
+    pub arquivados: i64,
+}
+
+/// A chave do grupo de um timer no acumulado (rodada 20): o id do grupo, ou o negativo do espaço
+/// para o "Sem grupo" dele (cada espaço tem o seu; os ids dos grupos são positivos).
+pub fn chave_do_grupo(grupo_id: Option<i64>, espaco_id: i64) -> Option<i64> {
+    grupo_id.or(Some(-espaco_id))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -47,8 +73,10 @@ pub struct AvisoDto {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GrupoDto {
-    /// `None` = "Sem grupo".
+    /// `None` = "Sem grupo" (o do espaço `espaco_id`).
     pub id: Option<i64>,
+    /// O espaço do grupo (rodada 20).
+    pub espaco_id: i64,
     pub nome: String,
     pub cor: String,
     pub link_projeto: Option<String>,
@@ -114,6 +142,15 @@ pub struct TimerDto {
     /// O zerar só de uma atividade (rodada 19), das que foram zeradas depois do timer todo: a
     /// atividade conta desde ele (o mais recente entre os dois). As outras contam desde `zerado_em`.
     pub zerados_atividade: Vec<ZeradoAtividadeDto>,
+    /// O espaço do timer (rodada 20): o do grupo, ou o do timer sem grupo.
+    pub espaco_id: i64,
+    /// O nome do grupo do timer quando ele está arquivado (o timer rodando aparece no "Sem
+    /// grupo"; re-revisão da rodada 20): o editar timer mostra esse grupo, e salvar sem mexer o
+    /// mantém. Nulo com o grupo à vista ou sem grupo.
+    pub grupo_arquivado: Option<String>,
+    /// As atividades que o painel do timer não mostra (rodada 20; uma oculta com tempo ou rodando
+    /// aparece mesmo assim).
+    pub atividades_ocultas: Vec<i64>,
     /// O acumulado dos dias fechados (antes de `dia_inicio`) desde o zerar, por atividade
     /// (`relatorio::acumulado`); vazio com o timer zerado hoje.
     pub acumulado_antes: Vec<AtividadeMsDto>,
@@ -415,10 +452,12 @@ fn desde_o_corte(de: Ms, ate: Ms, dia_inicio: Ms, corte_min: u32) -> String {
 /// `dia_inicio` e `corte_min`: o "Contar" nunca atravessa o corte do dia, e o texto diz isso.
 /// `atividades`: o timer cujo play manual estava noutra atividade que não a padrão dele aparece
 /// com ela ("Cliente A (reunião)"): o "Contar" reabre nela.
+#[allow(clippy::too_many_arguments)]
 fn pergunta_dto(
     id: u64,
     p: &Pergunta,
     timers: &[Timer],
+    rotulos: &std::collections::BTreeMap<i64, String>,
     atividades: &[Atividade],
     dia_inicio: Ms,
     corte_min: u32,
@@ -466,6 +505,8 @@ fn pergunta_dto(
         _ => (None, None),
     };
     let curta = pasta.as_deref().map(pasta_curta);
+    // o nome do timer no botão (com o espaço, se o nome se repete noutro espaço)
+    let rotulo = |t: &Timer| rotulos.get(&t.id).cloned().unwrap_or_else(|| t.nome.clone());
     let (tipo, texto, opcoes) = match p {
         Pergunta::SessaoNova { cwd, sugestao, pasta_mae, .. } => {
             let mut opcoes = vec![];
@@ -477,12 +518,12 @@ fn pergunta_dto(
                 // numa pasta-mãe (vários projetos dentro; rodada 15), o botão liga só esta conversa:
                 // a regra continua possível pelo "Outro timer…" (a caixa vem desmarcada, com o aviso)
                 Some(t) if *pasta_mae => {
-                    opcoes.push((format!("ligar:{}", t.id), t.nome.clone()));
+                    opcoes.push((format!("ligar:{}", t.id), rotulo(t)));
                     "Outro timer…"
                 }
                 Some(t) => {
                     // o botão cria a regra de pasta: o rótulo diz isso
-                    opcoes.push((format!("ligar:{}:regra", t.id), format!("{} · sempre nesta pasta", t.nome)));
+                    opcoes.push((format!("ligar:{}:regra", t.id), format!("{} · sempre nesta pasta", rotulo(t))));
                     "Outro timer…"
                 }
                 None => "Escolher timer…",
@@ -564,13 +605,42 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
     let dia_inicio = inicio_do_dia(dia, corte, fuso);
     let dia_fim = proximo_corte(agora, corte, fuso);
 
-    let grupos = banco.grupos()?;
-    // Timers de grupo arquivado ficam fora, como o proprio grupo.
+    // Os espaços arquivados ficam fora, com os grupos e os timers deles (rodada 20).
+    let espacos = banco.espacos()?;
+    let ativos: Vec<i64> = espacos.iter().filter(|e| !e.arquivado).map(|e| e.id).collect();
+    let grupos: Vec<Grupo> = banco.grupos()?.into_iter().filter(|g| ativos.contains(&g.espaco_id)).collect();
+    // o espaço de cada grupo, os arquivados também (o timer rodando num deles)
+    let espaco_do_grupo = banco.espacos_dos_grupos()?;
+    let nome_do_grupo = banco.nomes_dos_grupos()?;
+    // o timer com algo aberto aparece sempre (revisão da rodada 20: rodando nunca fica invisível)
+    let rodando: std::collections::BTreeSet<i64> = motor.abertos.iter().filter_map(|a| a.timer_id).collect();
+    let no_grupo_a_vista = |t: &Timer| t.grupo_id.is_some_and(|g| grupos.iter().any(|x| x.id == g));
+    // Timers de grupo arquivado ficam fora, como o proprio grupo (menos os que estão rodando).
     let timers: Vec<Timer> = banco
         .timers()?
         .into_iter()
-        .filter(|t| t.grupo_id.is_none_or(|g| grupos.iter().any(|x| x.id == g)))
+        .filter(|t| {
+            rodando.contains(&t.id)
+                || match t.grupo_id {
+                    Some(_) => no_grupo_a_vista(t),
+                    None => ativos.contains(&t.espaco_id),
+                }
+        })
         .collect();
+    let espaco_de = |t: &Timer| t.grupo_id.and_then(|g| espaco_do_grupo.get(&g).copied()).unwrap_or(t.espaco_id);
+    // na pergunta "Em qual timer contar?", com 2 ou mais espaços, o nome repetido leva o espaço
+    // ("Estudos · Pessoal")
+    let rotulos: std::collections::BTreeMap<i64, String> = if ativos.len() < 2 {
+        Default::default()
+    } else {
+        let chave = |t: &Timer| t.nome.trim().to_lowercase();
+        timers
+            .iter()
+            .filter(|t| timers.iter().filter(|x| chave(x) == chave(t)).count() > 1)
+            .filter_map(|t| espacos.iter().find(|e| e.id == espaco_de(t)).map(|e| (t.id, format!("{} · {}", t.nome, e.nome))))
+            .collect()
+    };
+    let ocultas = banco.atividades_ocultas()?;
     // Trechos de timer arquivado ou desconhecido sao ignorados.
     let trechos = banco.trechos_entre(dia_inicio, dia_fim)?;
     let dia_texto = dia.format("%Y-%m-%d").to_string();
@@ -579,8 +649,10 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
     // o acumulado dos dias fechados dos timers da tela (guardado no banco: não varre o histórico a
     // cada ciclo)
     let zerados = banco.todos_os_zerados()?;
-    let na_tela: std::collections::BTreeMap<i64, Option<i64>> = timers.iter().map(|t| (t.id, t.grupo_id)).collect();
-    let antes = banco.acumulado_antes(&na_tela, dia_inicio, corte, fuso)?;
+    let na_tela: std::collections::BTreeMap<i64, Option<i64>> =
+        timers.iter().map(|t| (t.id, chave_do_grupo(t.grupo_id, espaco_de(t)))).collect();
+    let espaco_na_tela: std::collections::BTreeMap<i64, i64> = timers.iter().map(|t| (t.id, espaco_de(t))).collect();
+    let antes = banco.acumulado_antes(&na_tela, &espaco_na_tela, dia_inicio, corte, fuso)?;
 
     let timer_dto = |t: &Timer| {
         let meus: Vec<AjusteDto> = ajustes
@@ -657,6 +729,12 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
                 .filter(|(_, z)| **z > zerados.do_timer(t.id))
                 .map(|((_, a), z)| ZeradoAtividadeDto { atividade_id: *a, zerado_em: *z })
                 .collect(),
+            espaco_id: espaco_de(t),
+            grupo_arquivado: t
+                .grupo_id
+                .filter(|_| !no_grupo_a_vista(t))
+                .and_then(|g| nome_do_grupo.get(&g).cloned()),
+            atividades_ocultas: ocultas.get(&t.id).cloned().unwrap_or_default(),
             acumulado_antes: antes
                 .por_atividade
                 .range((t.id, i64::MIN)..=(t.id, i64::MAX))
@@ -665,10 +743,13 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
         }
     };
 
-    let mut grupos_dto: Vec<GrupoDto> = grupos
-        .iter()
-        .map(|g| GrupoDto {
+    // por espaço (na ordem dos espaços): os grupos dele e, no fim, o "Sem grupo" dele, com o timer
+    // rodando de um grupo arquivado; um espaço arquivado só entra com um timer rodando
+    let mut grupos_dto: Vec<GrupoDto> = vec![];
+    for e in &espacos {
+        grupos_dto.extend(grupos.iter().filter(|g| g.espaco_id == e.id).map(|g| GrupoDto {
             id: Some(g.id),
+            espaco_id: e.id,
             nome: g.nome.clone(),
             cor: g.cor.clone(),
             link_projeto: g.link_projeto.clone(),
@@ -678,12 +759,15 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
             ordem: g.ordem,
             timers: timers.iter().filter(|t| t.grupo_id == Some(g.id)).map(&timer_dto).collect(),
             real_antes_ms: antes.real_por_grupo.get(&Some(g.id)).copied().unwrap_or(0),
-        })
-        .collect();
-    let soltos: Vec<TimerDto> = timers.iter().filter(|t| t.grupo_id.is_none()).map(&timer_dto).collect();
-    if !soltos.is_empty() {
+        }));
+        let soltos: Vec<TimerDto> =
+            timers.iter().filter(|t| !no_grupo_a_vista(t) && espaco_de(t) == e.id).map(&timer_dto).collect();
+        if soltos.is_empty() {
+            continue;
+        }
         grupos_dto.push(GrupoDto {
             id: None,
+            espaco_id: e.id,
             nome: "Sem grupo".to_string(),
             cor: COR_SEM_GRUPO.to_string(),
             link_projeto: None,
@@ -692,8 +776,26 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
             card_padrao_nome: None,
             ordem: i64::MAX,
             timers: soltos,
-            real_antes_ms: antes.real_por_grupo.get(&None).copied().unwrap_or(0),
+            real_antes_ms: antes.real_por_grupo.get(&chave_do_grupo(None, e.id)).copied().unwrap_or(0),
         });
+    }
+    let espacos_dto: Vec<EspacoDto> = espacos
+        .iter()
+        .map(|e| EspacoDto {
+            id: e.id,
+            nome: e.nome.clone(),
+            cor: e.cor.clone(),
+            ordem: e.ordem,
+            arquivado: e.arquivado,
+            real_antes_ms: antes.real_por_espaco.get(&e.id).copied().unwrap_or(0),
+            ativos: 0,
+            arquivados: 0,
+        })
+        .collect();
+    let mut espacos_dto = espacos_dto;
+    for e in &mut espacos_dto {
+        let c = banco.conteudo_do_espaco(e.id)?;
+        (e.ativos, e.arquivados) = (c.ativos, c.arquivados);
     }
 
     Ok(Snapshot {
@@ -705,12 +807,13 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
         perguntas: motor
             .perguntas
             .iter()
-            .map(|(id, p)| pergunta_dto(*id, p, &timers, &atividades, dia_inicio, corte, motor))
+            .map(|(id, p)| pergunta_dto(*id, p, &timers, &rotulos, &atividades, dia_inicio, corte, motor))
             .collect(),
         lendo: motor.lendo_agora().map(str::to_string),
         escrevendo: motor.escrevendo_agora(),
         avisos: avisos(motor, &timers, agora),
         atividades,
+        espacos: espacos_dto,
         config: banco.config_app()?,
     })
 }
@@ -750,6 +853,58 @@ mod testes {
         assert_eq!(nomes(2), ["Solto"]);
         assert!(s.grupos.iter().flat_map(|g| &g.timers).all(|t| !t.rodando && t.motivo.is_none()));
         assert_eq!(s.config, ConfigApp::default());
+    }
+
+    /// Rodada 20: os grupos por espaço, o "Sem grupo" de cada espaço, o espaço arquivado fora, o
+    /// tempo real de cada espaço nos dias fechados e as atividades ocultas.
+    #[test]
+    fn snapshot_por_espaco_com_o_sem_grupo_de_cada_um() {
+        let b = Banco::abrir_memoria().unwrap();
+        let pessoal = b.criar_espaco("Pessoal", "#e86bd0").unwrap();
+        let velho = b.criar_espaco("Velho", "#888888").unwrap();
+        let casa = b.criar_grupo_em("Casa", "#111", pessoal).unwrap();
+        let empresa = b.criar_grupo_em("Empresa", "#222", ESPACO_PRIMEIRO).unwrap();
+        let antigo = b.criar_grupo_em("Antigo", "#333", velho).unwrap();
+        let obra = b.criar_timer(Some(casa), "Obra", "#a00").unwrap();
+        let leitura = b.criar_timer_no(None, pessoal, "Leitura", "#b00", h(0, 0), F).unwrap();
+        let flow = b.criar_timer(Some(empresa), "Flow", "#c00").unwrap();
+        let solto = b.criar_timer(None, "Solto", "#d00").unwrap();
+        b.criar_timer(Some(antigo), "Sumido", "#e00").unwrap();
+        b.criar_timer_no(None, velho, "Sumido solto", "#f00", h(0, 0), F).unwrap();
+        let mut e = b.espacos().unwrap().into_iter().find(|e| e.id == velho).unwrap();
+        e.arquivado = true;
+        b.editar_espaco(&e).unwrap();
+        b.guardar_atividades_ocultas(flow, &[ATIVIDADE_ESTUDO]).unwrap();
+        // ontem: Obra 9:00–10:00 e Leitura 9:30–10:30 (Pessoal); Flow 9:00–9:20 (Geral)
+        b.zerar(None, 0).unwrap();
+        let ontem = |hh, mm| ms_local(2026, 11, 16, hh, mm, F);
+        for (t, i, f) in [(obra, ontem(9, 0), ontem(10, 0)), (leitura, ontem(9, 30), ontem(10, 30)), (flow, ontem(9, 0), ontem(9, 20))] {
+            b.aplicar(&[Mudanca::Abriu { timer_id: Some(t), sessao_id: None, origem: Origem::Manual, inicio: i, atividade_id: 1 }]).unwrap();
+            b.aplicar(&[Mudanca::Fechou { timer_id: Some(t), sessao_id: None, origem: Origem::Manual, fim: f, motivo: MotivoFim::Pausa }]).unwrap();
+        }
+        let s = montar(&b, &motor(h(9, 0)), h(9, 0)).unwrap();
+        // na ordem dos espaços: Geral (Empresa e o Sem grupo dele), Pessoal (Casa e o Sem grupo dele)
+        assert_eq!(
+            s.grupos.iter().map(|g| (g.id, g.espaco_id, g.nome.as_str())).collect::<Vec<_>>(),
+            [
+                (Some(empresa), ESPACO_PRIMEIRO, "Empresa"),
+                (None, ESPACO_PRIMEIRO, "Sem grupo"),
+                (Some(casa), pessoal, "Casa"),
+                (None, pessoal, "Sem grupo"),
+            ]
+        );
+        let timer = |id: i64| s.grupos.iter().flat_map(|g| &g.timers).find(|t| t.id == id).unwrap();
+        assert_eq!((timer(obra).espaco_id, timer(leitura).espaco_id, timer(solto).espaco_id), (pessoal, pessoal, ESPACO_PRIMEIRO));
+        assert_eq!(s.grupos.iter().flat_map(|g| &g.timers).count(), 4, "o espaço arquivado fica fora");
+        assert_eq!(timer(flow).atividades_ocultas, [ATIVIDADE_ESTUDO]);
+        assert!(timer(obra).atividades_ocultas.is_empty());
+        // os espaços (o arquivado também, para os Ajustes) e o tempo real de cada um ontem
+        assert_eq!(
+            s.espacos.iter().map(|e| (e.id, e.arquivado, e.real_antes_ms)).collect::<Vec<_>>(),
+            [(ESPACO_PRIMEIRO, false, 20 * MIN), (pessoal, false, 90 * MIN), (velho, true, 0)]
+        );
+        // o Sem grupo de cada espaço tem o seu tempo real
+        assert_eq!((s.grupos[1].real_antes_ms, s.grupos[3].real_antes_ms), (0, 60 * MIN));
     }
 
     #[test]

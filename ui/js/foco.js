@@ -13,8 +13,7 @@ import {
   textoDoCard,
   marcaAjuste,
   marcaEncerrado,
-  novoTimerBotao,
-  novoGrupoBotao,
+  semTimerNenhum,
   linhasAtividades,
   atividadePorId,
   tituloDoTempo,
@@ -22,6 +21,7 @@ import {
   textoLembrete,
   motivoNaTela,
 } from './componentes.js';
+import { nomeDoGrupo } from './espacos.js';
 
 const ORIGEM = { claude: 'Claude trabalhando', leitura: 'Você lendo', manual: 'Play manual' };
 
@@ -38,14 +38,12 @@ function lista(snap, agora, fechados, selecionado) {
     .map((g) => {
       const aberto = !fechados.has(chaveGrupo(g));
       const itens = aberto ? g.timers.map((t) => item(t, agora, t.id === selecionado)).join('') : '';
-      return `<section class="fg${aberto ? '' : ' fechado'}">${cabecalhoGrupo(g, agora, aberto, 'gh fgh')}${itens}</section>`;
+      return `<section class="fg${aberto ? '' : ' fechado'}">${cabecalhoGrupo({ ...g, nome: nomeDoGrupo(snap, g) }, agora, aberto, 'gh fgh')}${itens}</section>`;
     })
     .join('');
   return `<nav class="fs" data-rolagem="foco-lista" aria-label="Timers">
   <h4>Hoje · <span class="mono" data-total-dia>${curto(total)}</span></h4>
-  ${grupos || '<p class="vazio">Nenhum timer ainda.</p>'}
-  ${novoTimerBotao(null, 'fn')}
-  ${novoGrupoBotao()}
+  ${grupos || semTimerNenhum()}
 </nav>`;
 }
 

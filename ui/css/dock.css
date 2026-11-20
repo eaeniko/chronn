@@ -37,6 +37,8 @@ html[data-lado-y="baixo"] .rec { flex-direction: column-reverse; }
 .dk { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--pn); font-size: 12px; }
 .dk i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 30%, transparent); flex-shrink: 0; }
 .dk .nm { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+/* rodada 20: com 2 ou mais espaços, o ponto pequeno na cor do espaço do timer */
+.dk i.desp, .dx-r i.desp { width: 5px; height: 5px; border-radius: 1.5px; background: var(--e); box-shadow: none; margin-left: -4px; flex-shrink: 0; }
 /* situação em cima do nome: coluna de largura fixa e linha da etiqueta sempre reservada, para o
    dock não mudar de tamanho quando a etiqueta troca, aparece ou some */
 .dk .tx { display: flex; flex-direction: column; width: 104px; min-width: 0; line-height: 1.2; }

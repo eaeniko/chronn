@@ -42,6 +42,7 @@ import { faixa, faixaEncerrado, usarFaixa } from './editar.js';
 import { DICAS, gatilhos, criarFila } from './dicas.js';
 import { nomearPagina, marcaDeTeste } from './nome.js';
 import { vigiarTitulos, trocarTitulo } from './titulos.js';
+import { pontoDoEspaco, nomeDoGrupo } from './espacos.js';
 
 // as dicas longas em linhas curtas (rodada 19)
 vigiarTitulos();
@@ -134,7 +135,9 @@ function timerRecolhido(t, sit) {
       ? botaoEncerrar(t, 'p')
       : '<span class="p lembrete" aria-hidden="true"></span>';
   const dica = t.rodando ? '' : ` title="${esc(dicaDoLembrete(t))}"`;
-  return `<div class="dk${t.rodando ? '' : ' parado'}" style="--c:${cor(t.cor)}${corDaReuniao()}"${dica}><i></i>${nomeRecolhido(t, sit)}<span class="t mono" data-hm="${t.id}"${t.desde ? ` title="${esc(t.desde)}"` : ''}>${horaMin(t.ms)}</span>${fim}</div>`;
+  // com 2 ou mais espaços, o ponto na cor do espaço do timer (rodada 20)
+  const ponto = pontoDoEspaco(snap, snap.grupos.flatMap((g) => g.timers).find((x) => x.id === t.id) ?? t);
+  return `<div class="dk${t.rodando ? '' : ' parado'}" style="--c:${cor(t.cor)}${corDaReuniao()}"${dica}><i></i>${ponto}${nomeRecolhido(t, sit)}<span class="t mono" data-hm="${t.id}"${t.desde ? ` title="${esc(t.desde)}"` : ''}>${horaMin(t.ms)}</span>${fim}</div>`;
 }
 
 function recolhido(agora) {
@@ -210,11 +213,11 @@ function expandidoHtml(agora) {
     .filter((g) => g.timers.length)
     .map(
       (g) =>
-        `<div class="dx-g">${esc(g.nome)}</div>` +
+        `<div class="dx-g">${esc(nomeDoGrupo(snap, g))}</div>` +
         g.timers
           .map(
             (t) =>
-              `<div class="dx-r${t.rodando ? ' on' : ''}" style="--c:${cor(t.cor)}${corDaReuniao()}"><i></i><span class="nm" title="${esc(t.nome)}">${esc(t.nome)}</span>${situacaoExpandido(t)}<span class="t mono" data-tempo="${t.id}"${tituloDoTempo(t, agora)}>${relogio(msDoTimer(t, agora))}</span>${botaoEncerrar(t, 'p', true)}${botaoReuniao(t, 'p')}${botaoPlay(t, 'p')}</div>` +
+              `<div class="dx-r${t.rodando ? ' on' : ''}" style="--c:${cor(t.cor)}${corDaReuniao()}"><i></i>${pontoDoEspaco(snap, t)}<span class="nm" title="${esc(t.nome)}">${esc(t.nome)}</span>${situacaoExpandido(t)}<span class="t mono" data-tempo="${t.id}"${tituloDoTempo(t, agora)}>${relogio(msDoTimer(t, agora))}</span>${botaoEncerrar(t, 'p', true)}${botaoReuniao(t, 'p')}${botaoPlay(t, 'p')}</div>` +
               // com mais de uma atividade no dia: o tempo de cada uma, numa sublinha pequena
               linhaDivisao(t, agora, 'dx-at'),
           )

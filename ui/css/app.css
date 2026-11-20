@@ -89,15 +89,40 @@ svg { display: block; fill: currentColor; }
 .gh .ge:hover { background: var(--btn); color: var(--tx2); }
 .gh .tt { margin-left: auto; color: var(--mu); padding-left: 8px; flex-shrink: 0; }
 
-/* "+ Novo timer" no fim da grade e "+ Novo grupo" no fim da lista */
-.k-novo {
-  border: 1px dashed color-mix(in srgb, var(--mu2) 80%, transparent); border-radius: 12px; background: none;
-  color: var(--mu); font-size: 12.5px; min-height: 72px; display: grid; place-items: center;
-  transition: color .15s, border-color .15s;
+/* rodada 20: o grupo vazio, uma linha discreta no lugar do cartão tracejado "+ Novo timer" */
+.g-vazio { font-size: 12px; color: var(--mu); padding: 2px 0 4px 16px; }
+.g-vazio button { font-size: 12px; color: var(--tx2); padding: 1px 4px; border-radius: 6px; }
+.g-vazio button:hover { background: var(--btn); color: var(--tx); }
+
+/* rodada 20: o "+ Novo" do topo (ao lado do total) */
+.novo {
+  font-size: 12.5px; font-weight: 600; color: var(--tx); background: var(--btn); padding: 7px 12px; border-radius: 9px;
+  white-space: nowrap; transition: background .15s;
 }
-.k-novo:hover { color: var(--tx2); border-color: var(--mu); }
-.novo-grupo { font-size: 12px; color: var(--mu); padding: 4px 0; margin-top: 2px; }
-.novo-grupo:hover { color: var(--tx2); }
+.novo:hover, .novo[aria-expanded="true"] { background: var(--btn-h); }
+
+/* rodada 20: as abas de espaço (Painel, Cartões e Linha do tempo) */
+.abas { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 12px; }
+.aba {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--mu); padding: 5px 11px;
+  border-radius: 999px; border: 1px solid transparent; transition: background .15s, color .15s;
+}
+.aba i { width: 7px; height: 7px; border-radius: 50%; background: var(--e); }
+.aba:hover { color: var(--tx2); background: var(--btn); }
+.aba.on { color: var(--tx); background: var(--btn); border-color: color-mix(in srgb, var(--mu2) 70%, transparent); font-weight: 600; }
+/* "Todos": o nome de cada espaço acima dos grupos dele */
+.esp + .esp { margin-top: 6px; }
+.esp-h {
+  display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--tx); margin: 2px 0 10px;
+  padding-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, var(--mu2) 50%, transparent);
+}
+.esp-h i { width: 9px; height: 9px; border-radius: 3px; background: var(--e); flex-shrink: 0; }
+.esp-h b { font-weight: 650; }
+.esp-h .tt { margin-left: auto; color: var(--mu); font-size: 12px; }
+.lt-esp { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; color: var(--tx); margin-top: 12px; }
+.lt-esp i { width: 8px; height: 8px; border-radius: 3px; background: var(--e); }
+.kv > .abas { margin-bottom: 14px; }
+.lt-vazio, .lt { margin-top: 0; }
 
 /* cartões */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }

@@ -66,9 +66,12 @@ test('o card na tela: código e nome, e o nome do card padrão vale para quem he
 });
 test('salvar grupo e timer leva os nomes dos links (sem eles, sumiriam)', () => {
   const g = grupoParaSalvar({ id: 1, nome: 'G', cor: '#111', link_projeto: 'p', card_padrao: 'c', link_projeto_nome: 'P', card_padrao_nome: 'C', ordem: 2, timers: [] });
-  assert.deepEqual(g, { id: 1, nome: 'G', cor: '#111', link_projeto: 'p', card_padrao: 'c', link_projeto_nome: 'P', card_padrao_nome: 'C', ordem: 2, arquivado: false });
+  assert.deepEqual(g, { id: 1, nome: 'G', cor: '#111', link_projeto: 'p', card_padrao: 'c', link_projeto_nome: 'P', card_padrao_nome: 'C', ordem: 2, arquivado: false, espaco_id: 1 });
   const t = timerParaSalvar({ id: 3, grupo_id: 1, nome: 'T', cor: '#222', link_card: 'l', link_card_nome: 'L', ordem: 0, rodando: true, trechos: [] });
-  assert.deepEqual(t, { id: 3, grupo_id: 1, nome: 'T', cor: '#222', link_card: 'l', link_card_nome: 'L', ordem: 0, arquivado: false, atividade_padrao_id: 1 });
+  assert.deepEqual(t, { id: 3, grupo_id: 1, nome: 'T', cor: '#222', link_card: 'l', link_card_nome: 'L', ordem: 0, arquivado: false, atividade_padrao_id: 1, espaco_id: 1 });
+  // rodada 20: o espaço não some ao salvar
+  assert.equal(grupoParaSalvar({ id: 1, espaco_id: 2 }).espaco_id, 2);
+  assert.equal(timerParaSalvar({ id: 3, espaco_id: 2 }).espaco_id, 2);
   assert.equal(timerParaSalvar({ id: 3, atividade_padrao_id: 3 }).atividade_padrao_id, 3, 'a atividade padrão não some ao salvar');
 });
 test('ajuste à mão: marca no painel do timer e o "Ajustar hoje"', () => {

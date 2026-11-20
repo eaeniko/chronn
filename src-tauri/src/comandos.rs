@@ -109,9 +109,10 @@ pub fn desfazer_encerrar(app: AppHandle, estado: State<'_, Estado>, timer_id: i6
     agir(&app, &estado, |n, agora| Ok(n.motor.desfazer_encerrar(timer_id, agora)))
 }
 
+/// "Pausar tudo": com `espaco_id` (a aba de um espaço, rodada 20), só os timers dele.
 #[tauri::command(rename_all = "snake_case")]
-pub fn pausar_tudo(app: AppHandle, estado: State<'_, Estado>) -> Result<Snapshot, String> {
-    agir(&app, &estado, |n, agora| Ok(n.motor.pausar_tudo(agora)))
+pub fn pausar_tudo(app: AppHandle, estado: State<'_, Estado>, espaco_id: Option<i64>) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, agora| n.pausar_tudo(espaco_id, agora))
 }
 
 /// "Pausar tudo" do menu da bandeja.
@@ -143,8 +144,8 @@ pub fn zerar_atividade(app: AppHandle, estado: State<'_, Estado>, timer_id: i64,
 
 /// "Zerar todos" (barra do topo): todos os timers, os arquivados também, no mesmo instante.
 #[tauri::command(rename_all = "snake_case")]
-pub fn zerar_todos(app: AppHandle, estado: State<'_, Estado>) -> Result<Zerado, String> {
-    let z = trava(&estado).zerar_todos(agora_ms())?;
+pub fn zerar_todos(app: AppHandle, estado: State<'_, Estado>, espaco_id: Option<i64>) -> Result<Zerado, String> {
+    let z = trava(&estado).zerar_todos(espaco_id, agora_ms())?;
     avisar(&app);
     Ok(z)
 }
@@ -209,10 +210,16 @@ pub fn desfazer_ajuste(app: AppHandle, estado: State<'_, Estado>, id: i64) -> Re
 
 // ---- grupos e timers ----
 
+/// `espaco_id`: o espaço do grupo novo (rodada 20; sem ele, o primeiro).
 #[tauri::command(rename_all = "snake_case")]
-pub fn criar_grupo(app: AppHandle, estado: State<'_, Estado>, nome: String, cor: String) -> Result<Snapshot, String> {
+pub fn criar_grupo(app: AppHandle, estado: State<'_, Estado>, nome: String, cor: String, espaco_id: Option<i64>) -> Result<Snapshot, String> {
     agir(&app, &estado, |n, _| {
-        n.banco.criar_grupo(nome_valido(&nome)?, &cor).map_err(texto)?;
+        let espaco = match espaco_id {
+            Some(e) => e,
+            None => n.banco.espaco_padrao().map_err(texto)?,
+        };
+        n.checar_espaco(espaco, true)?;
+        n.banco.criar_grupo_em(nome_valido(&nome)?, &cor, espaco).map_err(texto)?;
         Ok(vec![])
     })
 }
@@ -230,20 +237,58 @@ pub fn criar_timer(
     grupo_id: Option<i64>,
     nome: String,
     cor: String,
+    espaco_id: Option<i64>,
 ) -> Result<Snapshot, String> {
     agir(&app, &estado, |n, agora| {
         // o timer novo começa zerado no início do dia de trabalho (a sessão ligada a ele "desde o
-        // início" conta no número também o que veio antes da criação)
+        // início" conta no número também o que veio antes da criação); sem grupo, no "Sem grupo"
+        // do espaço dado (rodada 20)
         let fuso = n.fuso_min;
-        n.banco.criar_timer_em(grupo_id, nome_valido(&nome)?, &cor, agora, fuso).map_err(texto)?;
+        let espaco = match espaco_id {
+            Some(e) => e,
+            None => n.banco.espaco_padrao().map_err(texto)?,
+        };
+        if grupo_id.is_none() {
+            n.checar_espaco(espaco, true)?;
+        }
+        n.banco.criar_timer_no(grupo_id, espaco, nome_valido(&nome)?, &cor, agora, fuso).map_err(texto)?;
         Ok(vec![])
     })
 }
 
+/// `ocultas`: as atividades que o painel do timer não mostra (rodada 20; sem elas, ficam as de
+/// antes).
 #[tauri::command(rename_all = "snake_case")]
-pub fn editar_timer(app: AppHandle, estado: State<'_, Estado>, timer: Timer) -> Result<Snapshot, String> {
+pub fn editar_timer(app: AppHandle, estado: State<'_, Estado>, timer: Timer, ocultas: Option<Vec<i64>>) -> Result<Snapshot, String> {
     nome_valido(&timer.nome)?;
-    agir(&app, &estado, |n, agora| n.editar_timer(&timer, agora))
+    agir(&app, &estado, |n, agora| n.editar_timer_com(&timer, agora, ocultas.as_deref()))
+}
+
+// ---- espaços (rodada 20) ----
+
+/// "+ Novo → Espaço" e Ajustes → Espaços: acrescenta um no fim da lista.
+#[tauri::command(rename_all = "snake_case")]
+pub fn criar_espaco(app: AppHandle, estado: State<'_, Estado>, nome: String, cor: String) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, _| {
+        n.criar_espaco(&nome, &cor)?;
+        Ok(vec![])
+    })
+}
+
+/// Ajustes → Espaços: renomear, cor, ordem, arquivar (nunca o último).
+#[tauri::command(rename_all = "snake_case")]
+pub fn editar_espaco(app: AppHandle, estado: State<'_, Estado>, espaco: nucleo::modelo::Espaco) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, agora| n.editar_espaco(&espaco, agora))
+}
+
+/// Ajustes → Espaços: apaga um espaço sem grupo nem timer à vista; os arquivados dele vão para o
+/// primeiro outro espaço. Com algo à vista, recusa.
+#[tauri::command(rename_all = "snake_case")]
+pub fn apagar_espaco(app: AppHandle, estado: State<'_, Estado>, id: i64) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, _| {
+        n.apagar_espaco(id)?;
+        Ok(vec![])
+    })
 }
 
 // ---- atividades ----
@@ -1030,7 +1075,7 @@ mod testes {
     #[test]
     fn a_assinatura_vai_no_sobre() {
         assert_eq!(nucleo::ASSINATURA, "chronn-eaeniko-7f3a9c");
-        let info = AjustesInfo { versao: "0.1.0".into(), settings: String::new(), corte: "00:00".into(), assinatura: nucleo::ASSINATURA };
+        let info = AjustesInfo { versao: "0.2.0".into(), settings: String::new(), corte: "00:00".into(), assinatura: nucleo::ASSINATURA };
         assert_eq!(serde_json::to_value(&info).unwrap()["assinatura"], "chronn-eaeniko-7f3a9c");
     }
 

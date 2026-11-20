@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "fila"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "nucleo"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "fila",
@@ -3413,7 +3413,7 @@ checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "sinais"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "windows",
 ]
@@ -4947,7 +4947,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "work-timer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "fila",
@@ -4966,7 +4966,7 @@ dependencies = [
 
 [[package]]
 name = "work-timer-hook"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fila",
  "serde_json",

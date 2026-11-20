@@ -7,6 +7,7 @@
 // (o acumulado desde o zerar).
 import { trechosDoDia, reguaDoDia, horaMin, atividadesDosTrechos, msDeHoje } from './formato.js';
 import { esc, cor, botaoPlay, ajusteDoTimer, atividadesAtuais } from './componentes.js';
+import { gruposDaAba, comAbas, espacoPorId, htmlAbas } from './espacos.js';
 
 const H = 3_600_000;
 
@@ -73,14 +74,20 @@ export function linhaCompacta(grupos, diaInicio, agora) {
 }
 
 /** Visão "Linha do tempo": uma linha por timer, por grupo, com o total e o play. */
-export function visaoLinha(snap, diaInicio, agora) {
-  const grupos = snap.grupos.filter((g) => g.timers.length);
-  if (!grupos.length) return '<div class="lt-vazio"><p class="vazio">Nenhum timer ainda.</p></div>';
+export function visaoLinha(snap, diaInicio, agora, aba = null) {
+  const abas = htmlAbas(snap, aba);
+  const grupos = gruposDaAba(snap, aba).filter((g) => g.timers.length);
+  if (!grupos.length) return `${abas}<div class="lt-vazio"><p class="vazio">Nenhum timer ainda.</p></div>`;
+  // em "Todos" com abas, o nome do espaço antes do primeiro grupo dele (rodada 20)
+  const comEspacos = aba === null && comAbas(snap);
   const r = regua(grupos.flatMap((g) => g.timers), diaInicio, agora);
   const agoraEm = r.pAgora === null ? '' : `<i class="nw" style="left:${r.pAgora.toFixed(3)}%"></i>`;
   const linhas = grupos
-    .map((g) => {
-      const titulo = `<div class="lt-g">${esc(g.nome)}</div>`;
+    .map((g, i) => {
+      const novoEspaco = comEspacos && (i === 0 || grupos[i - 1].espaco_id !== g.espaco_id);
+      const esp = novoEspaco ? espacoPorId(snap, g.espaco_id) : null;
+      const cabEspaco = esp ? `<div class="lt-esp" style="--e:${cor(esp.cor)}"><i></i>${esc(esp.nome)}</div>` : '';
+      const titulo = `${cabEspaco}<div class="lt-g">${esc(g.nome)}</div>`;
       const timers = g.timers
         .map((t) => {
           const ms = msDeHoje(t, agora);
@@ -93,7 +100,7 @@ export function visaoLinha(snap, diaInicio, agora) {
       return titulo + timers;
     })
     .join('');
-  return `<div class="lt" data-rolagem="linha" style="--horas:${r.vao}">
+  return `${abas}<div class="lt" data-rolagem="linha" style="--horas:${r.vao}">
   <div class="lt-grade">
     <div></div><div class="lt-hrs mono">${marcas(r.ini, r.fim, r.vao > 16 ? 2 : 1)}</div><div></div><div></div>
     ${linhas}

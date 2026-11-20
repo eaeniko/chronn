@@ -66,7 +66,7 @@ const COLUNAS_V5: [(&str, &str); 3] =
 pub const CHAVE_ENCERRADOS: &str = "encerrados";
 
 /// Versão do esquema que este código conhece.
-pub const VERSAO_ESQUEMA: i64 = 8;
+pub const VERSAO_ESQUEMA: i64 = 9;
 
 /// A marca do app no banco (rodada 18): o `PRAGMA application_id` com "CHRN", gravado na
 /// criação e na abertura de um banco sem marca (0). Um banco com outra marca fica como está. Não
@@ -77,6 +77,46 @@ fn marcar_application_id(conn: &Connection) -> Result<()> {
         conn.pragma_update(None, "application_id", crate::APPLICATION_ID)?;
     }
     Ok(())
+}
+
+/// Cor do primeiro espaço (o "Trabalho" da migração, o "Geral" do banco novo).
+pub const COR_ESPACO_PRIMEIRO: &str = "#5b8def";
+
+/// A versão 9 (rodada 20): os espaços, um nível acima dos grupos.
+/// - a tabela `espacos` (id, nome, cor, ordem, arquivado);
+/// - `grupos.espaco_id` e `timers.espaco_id` (`INTEGER NOT NULL DEFAULT 1`; o do timer vale só
+///   sem grupo: o "Sem grupo" de cada espaço);
+/// - a tabela `timer_atividades_ocultas` (timer, atividade): as atividades que o painel do timer
+///   não mostra.
+///
+/// O primeiro espaço (id 1) é "Trabalho" num banco que já tem grupos ou timers (todos vão para
+/// ele pelo padrão das colunas) e "Geral" num banco novo. Cada passo confere se já está feito, então
+/// rodar de novo não muda nada; um app da versão 8 abre o banco (as colunas e as tabelas ficam de
+/// fora do que ele lê, e o que ele grava cai no espaço 1).
+fn migrar_v9(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS espacos (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, cor TEXT NOT NULL, ordem INTEGER NOT NULL DEFAULT 0, arquivado INTEGER NOT NULL DEFAULT 0);
+         CREATE TABLE IF NOT EXISTS timer_atividades_ocultas (timer_id INTEGER NOT NULL REFERENCES timers(id), atividade_id INTEGER NOT NULL, PRIMARY KEY (timer_id, atividade_id));",
+    )?;
+    let tem_espaco: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM espacos)", [], |r| r.get(0))?;
+    if !tem_espaco {
+        let com_dados: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM grupos) OR EXISTS (SELECT 1 FROM timers)",
+            [],
+            |r| r.get(0),
+        )?;
+        let nome = if com_dados { "Trabalho" } else { "Geral" };
+        conn.execute(
+            "INSERT INTO espacos (id, nome, cor, ordem) VALUES (?1, ?2, ?3, 0)",
+            params![ESPACO_PRIMEIRO, nome, COR_ESPACO_PRIMEIRO],
+        )?;
+    }
+    for tabela in ["grupos", "timers"] {
+        if !tem_coluna(conn, tabela, "espaco_id")? {
+            conn.execute_batch(&format!("ALTER TABLE {tabela} ADD COLUMN espaco_id INTEGER NOT NULL DEFAULT {ESPACO_PRIMEIRO};"))?;
+        }
+    }
+    conn.execute_batch("PRAGMA user_version = 9;")
 }
 
 /// A versão 8 (rodada 19): `zerados_atividade`, o último "Zerar" só de uma atividade de um timer
@@ -161,6 +201,14 @@ fn texto_invalido(col: usize, s: String) -> rusqlite::Error {
     )
 }
 
+/// O que um espaço tem (`Banco::conteudo_do_espaco`): grupos e timers sem grupo, não arquivados e
+/// arquivados.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ConteudoDoEspaco {
+    pub ativos: i64,
+    pub arquivados: i64,
+}
+
 pub struct Banco {
     conn: Connection,
     /// O acumulado dos dias fechados (`acumulado_antes`), guardado: o snapshot roda a cada ciclo
@@ -178,6 +226,8 @@ struct ChaveAcumulado {
     timers: Vec<(i64, Option<i64>, Ms)>,
     /// O zerar de cada atividade desses timers (rodada 19).
     atividades: Vec<((i64, i64), Ms)>,
+    /// O espaço de cada timer (rodada 20).
+    espacos: Vec<(i64, i64)>,
 }
 
 struct CacheAcumulado {
@@ -238,6 +288,7 @@ impl Banco {
             migrar_v6(&tx, inicio_hoje)?;
             migrar_v7(&tx)?;
             migrar_v8(&tx)?;
+            migrar_v9(&tx)?;
             tx.commit()?;
         }
         marcar_application_id(&conn)?;
@@ -317,27 +368,151 @@ impl Banco {
 
     // ---- grupos ----
 
+    /// Cria o grupo no espaço padrão (`espaco_padrao`; `criar_grupo_em` escolhe o espaço).
     pub fn criar_grupo(&self, nome: &str, cor: &str) -> Result<i64> {
-        self.conn.execute("INSERT INTO grupos (nome, cor) VALUES (?1, ?2)", params![nome, cor])?;
+        self.criar_grupo_em(nome, cor, self.espaco_padrao()?)
+    }
+
+    /// O espaço padrão (revisão da rodada 20): o primeiro não arquivado, na ordem (sem nenhum, o
+    /// primeiro que houver; sem espaço nenhum, o 1 das colunas). Vale para o que é criado sem
+    /// dizer o espaço: o primeiro uso, os comandos sem `espaco_id`.
+    pub fn espaco_padrao(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT id FROM espacos ORDER BY arquivado, ordem, id LIMIT 1", [], |r| r.get(0))
+            .optional()?
+            .unwrap_or(ESPACO_PRIMEIRO))
+    }
+
+    pub fn criar_grupo_em(&self, nome: &str, cor: &str, espaco_id: i64) -> Result<i64> {
+        self.conn.execute("INSERT INTO grupos (nome, cor, espaco_id) VALUES (?1, ?2, ?3)", params![nome, cor, espaco_id])?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn editar_grupo(&self, g: &Grupo) -> Result<()> {
         self.conn.execute(
             "UPDATE grupos SET nome=?1, cor=?2, link_projeto=?3, card_padrao=?4, ordem=?5, arquivado=?6,
-             link_projeto_nome=?7, card_padrao_nome=?8 WHERE id=?9",
+             link_projeto_nome=?7, card_padrao_nome=?8, espaco_id=?9 WHERE id=?10",
             params![
                 g.nome, g.cor, g.link_projeto, g.card_padrao, g.ordem, g.arquivado,
-                g.link_projeto_nome, g.card_padrao_nome, g.id
+                g.link_projeto_nome, g.card_padrao_nome, g.espaco_id, g.id
             ],
         )?;
         Ok(())
     }
 
+    /// O espaço de cada grupo (os arquivados também).
+    pub fn espacos_dos_grupos(&self) -> Result<BTreeMap<i64, i64>> {
+        let mut st = self.conn.prepare("SELECT id, espaco_id FROM grupos")?;
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        v.collect()
+    }
+
+    /// O nome de cada grupo (os arquivados também).
+    pub fn nomes_dos_grupos(&self) -> Result<BTreeMap<i64, String>> {
+        let mut st = self.conn.prepare("SELECT id, nome FROM grupos")?;
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        v.collect()
+    }
+
+    /// O espaço de cada timer (os arquivados também): o do grupo, ou o do timer sem grupo.
+    pub fn espacos_dos_timers(&self) -> Result<BTreeMap<i64, i64>> {
+        let mut st = self.conn.prepare(
+            "SELECT t.id, coalesce(g.espaco_id, t.espaco_id) FROM timers t LEFT JOIN grupos g ON g.id = t.grupo_id",
+        )?;
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        v.collect()
+    }
+
+    // ---- espaços (rodada 20) ----
+
+    /// Todos os espaços (os arquivados também), por `ordem`, `id`.
+    pub fn espacos(&self) -> Result<Vec<Espaco>> {
+        let mut st = self.conn.prepare("SELECT id, nome, cor, ordem, arquivado FROM espacos ORDER BY ordem, id")?;
+        let v = st.query_map([], |r| {
+            Ok(Espaco { id: r.get(0)?, nome: r.get(1)?, cor: r.get(2)?, ordem: r.get(3)?, arquivado: r.get(4)? })
+        })?;
+        v.collect()
+    }
+
+    /// Acrescenta um espaço no fim da lista; devolve o id.
+    pub fn criar_espaco(&self, nome: &str, cor: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO espacos (nome, cor, ordem) VALUES (?1, ?2, (SELECT coalesce(max(ordem), -1) + 1 FROM espacos))",
+            params![nome, cor],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn editar_espaco(&self, e: &Espaco) -> Result<()> {
+        self.conn.execute(
+            "UPDATE espacos SET nome=?1, cor=?2, ordem=?3, arquivado=?4 WHERE id=?5",
+            params![e.nome, e.cor, e.ordem, e.arquivado, e.id],
+        )?;
+        Ok(())
+    }
+
+    /// O que o espaço tem: os grupos e os timers sem grupo, os não arquivados (`ativos`) e os
+    /// arquivados (`arquivados`). Um timer num grupo vai com o grupo.
+    pub fn conteudo_do_espaco(&self, id: i64) -> Result<ConteudoDoEspaco> {
+        self.conn.query_row(
+            "SELECT (SELECT count(*) FROM grupos WHERE espaco_id = ?1 AND arquivado = 0)
+                  + (SELECT count(*) FROM timers WHERE grupo_id IS NULL AND espaco_id = ?1 AND arquivado = 0),
+                    (SELECT count(*) FROM grupos WHERE espaco_id = ?1 AND arquivado = 1)
+                  + (SELECT count(*) FROM timers WHERE grupo_id IS NULL AND espaco_id = ?1 AND arquivado = 1)",
+            params![id],
+            |r| Ok(ConteudoDoEspaco { ativos: r.get(0)?, arquivados: r.get(1)? }),
+        )
+    }
+
+    /// Apaga o espaço (revisão da rodada 20), só sem grupo nem timer sem grupo não arquivado. O
+    /// que é arquivado nele (grupos, timers sem grupo) vai, ainda arquivado, para o espaço
+    /// `destino`; tudo numa transação só. Devolve quantos itens arquivados foram, ou nulo se o
+    /// espaço tem algo à vista (nada muda).
+    pub fn apagar_espaco(&self, id: i64, destino: i64) -> Result<Option<i64>> {
+        let c = self.conteudo_do_espaco(id)?;
+        if c.ativos > 0 {
+            return Ok(None);
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("UPDATE grupos SET espaco_id = ?1 WHERE espaco_id = ?2", params![destino, id])?;
+        tx.execute("UPDATE timers SET espaco_id = ?1 WHERE espaco_id = ?2", params![destino, id])?;
+        tx.execute("DELETE FROM espacos WHERE id = ?1", params![id])?;
+        tx.commit()?;
+        Ok(Some(c.arquivados))
+    }
+
+    // ---- atividades ocultas no painel do timer (rodada 20) ----
+
+    /// Timer → as atividades que o painel dele não mostra.
+    pub fn atividades_ocultas(&self) -> Result<BTreeMap<i64, Vec<i64>>> {
+        let mut st = self.conn.prepare("SELECT timer_id, atividade_id FROM timer_atividades_ocultas ORDER BY timer_id, atividade_id")?;
+        let v = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut m: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+        for x in v {
+            let (t, a) = x?;
+            m.entry(t).or_default().push(a);
+        }
+        Ok(m)
+    }
+
+    /// Troca as atividades ocultas do timer pelas dadas.
+    pub fn guardar_atividades_ocultas(&self, timer_id: i64, ocultas: &[i64]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM timer_atividades_ocultas WHERE timer_id = ?1", params![timer_id])?;
+        for a in ocultas {
+            tx.execute(
+                "INSERT OR IGNORE INTO timer_atividades_ocultas (timer_id, atividade_id) VALUES (?1, ?2)",
+                params![timer_id, a],
+            )?;
+        }
+        tx.commit()
+    }
+
     /// Grupos nao arquivados, por `ordem`, `id`.
     pub fn grupos(&self) -> Result<Vec<Grupo>> {
         let mut st = self.conn.prepare(
-            "SELECT id, nome, cor, link_projeto, card_padrao, ordem, arquivado, link_projeto_nome, card_padrao_nome
+            "SELECT id, nome, cor, link_projeto, card_padrao, ordem, arquivado, link_projeto_nome, card_padrao_nome, espaco_id
              FROM grupos WHERE arquivado=0 ORDER BY ordem, id",
         )?;
         let v = st.query_map([], |r| {
@@ -351,6 +526,7 @@ impl Banco {
                 arquivado: r.get(6)?,
                 link_projeto_nome: r.get(7)?,
                 card_padrao_nome: r.get(8)?,
+                espaco_id: r.get(9)?,
             })
         })?;
         v.collect()
@@ -370,10 +546,24 @@ impl Banco {
     /// timer…" da pergunta, "Ligar uma sessão", a herança) conta no número também o que veio antes
     /// da criação.
     pub fn criar_timer_em(&self, grupo_id: Option<i64>, nome: &str, cor: &str, agora: Ms, fuso_min: i32) -> Result<i64> {
+        self.criar_timer_no(grupo_id, self.espaco_padrao()?, nome, cor, agora, fuso_min)
+    }
+
+    /// `criar_timer_em` com o espaço do timer sem grupo (rodada 20). Com grupo, o timer guarda o
+    /// espaço do grupo (o que vale é sempre o do grupo).
+    pub fn criar_timer_no(&self, grupo_id: Option<i64>, espaco_id: i64, nome: &str, cor: &str, agora: Ms, fuso_min: i32) -> Result<i64> {
         let zerado = inicio_de_hoje(&self.conn, agora, fuso_min)?;
+        let espaco = match grupo_id {
+            Some(g) => self
+                .conn
+                .query_row("SELECT espaco_id FROM grupos WHERE id = ?1", params![g], |r| r.get(0))
+                .optional()?
+                .unwrap_or(espaco_id),
+            None => espaco_id,
+        };
         self.conn.execute(
-            "INSERT INTO timers (grupo_id, nome, cor, zerado_em) VALUES (?1, ?2, ?3, ?4)",
-            params![grupo_id, nome, cor, zerado],
+            "INSERT INTO timers (grupo_id, nome, cor, zerado_em, espaco_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![grupo_id, nome, cor, zerado, espaco],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -521,6 +711,7 @@ impl Banco {
     pub fn acumulado_antes(
         &self,
         timers: &BTreeMap<i64, Option<i64>>,
+        espacos: &BTreeMap<i64, i64>,
         inicio_hoje: Ms,
         corte_min: u32,
         fuso_min: i32,
@@ -532,6 +723,7 @@ impl Banco {
             fuso_min,
             timers: timers.iter().map(|(id, g)| (*id, *g, zerados.do_timer(*id))).collect(),
             atividades: zerados.atividades.iter().filter(|((t, _), _)| timers.contains_key(t)).map(|(k, v)| (*k, *v)).collect(),
+            espacos: espacos.iter().map(|(t, e)| (*t, *e)).collect(),
         };
         if let Some(c) = self.cache.borrow().as_ref().filter(|c| c.chave == chave) {
             return Ok(c.valor.clone());
@@ -542,7 +734,7 @@ impl Banco {
         } else {
             let trechos = self.trechos_entre(desde, inicio_hoje)?;
             let ajustes = self.ajustes_criados_desde(desde)?;
-            acumulado(&trechos, &ajustes, &zerados, timers, inicio_hoje, inicio_hoje, corte_min, fuso_min)
+            acumulado(&trechos, &ajustes, &zerados, timers, espacos, inicio_hoje, inicio_hoje, corte_min, fuso_min)
         };
         *self.cache.borrow_mut() = Some(CacheAcumulado { chave, valor: valor.clone() });
         Ok(valor)
@@ -563,12 +755,35 @@ impl Banco {
         self.cache.borrow().is_some()
     }
 
+    /// `editar_timer` e as atividades ocultas do timer (`ocultas`) numa transação só (revisão da
+    /// rodada 20).
+    pub fn editar_timer_com_ocultas(&self, t: &Timer, ocultas: &[i64]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE timers SET grupo_id=?1, nome=?2, cor=?3, link_card=?4, ordem=?5, arquivado=?6, link_card_nome=?7,
+             atividade_padrao_id=?8, espaco_id=?9 WHERE id=?10",
+            params![
+                t.grupo_id, t.nome, t.cor, t.link_card, t.ordem, t.arquivado, t.link_card_nome, t.atividade_padrao_id,
+                t.espaco_id, t.id
+            ],
+        )?;
+        tx.execute("DELETE FROM timer_atividades_ocultas WHERE timer_id = ?1", params![t.id])?;
+        for a in ocultas {
+            tx.execute(
+                "INSERT OR IGNORE INTO timer_atividades_ocultas (timer_id, atividade_id) VALUES (?1, ?2)",
+                params![t.id, a],
+            )?;
+        }
+        tx.commit()
+    }
+
     pub fn editar_timer(&self, t: &Timer) -> Result<()> {
         self.conn.execute(
             "UPDATE timers SET grupo_id=?1, nome=?2, cor=?3, link_card=?4, ordem=?5, arquivado=?6, link_card_nome=?7,
-             atividade_padrao_id=?8 WHERE id=?9",
+             atividade_padrao_id=?8, espaco_id=?9 WHERE id=?10",
             params![
-                t.grupo_id, t.nome, t.cor, t.link_card, t.ordem, t.arquivado, t.link_card_nome, t.atividade_padrao_id, t.id
+                t.grupo_id, t.nome, t.cor, t.link_card, t.ordem, t.arquivado, t.link_card_nome, t.atividade_padrao_id,
+                t.espaco_id, t.id
             ],
         )?;
         Ok(())
@@ -577,7 +792,7 @@ impl Banco {
     /// Timers nao arquivados, por `ordem`, `id`.
     pub fn timers(&self) -> Result<Vec<Timer>> {
         let mut st = self.conn.prepare(
-            "SELECT id, grupo_id, nome, cor, link_card, ordem, arquivado, link_card_nome, atividade_padrao_id
+            "SELECT id, grupo_id, nome, cor, link_card, ordem, arquivado, link_card_nome, atividade_padrao_id, espaco_id
              FROM timers WHERE arquivado=0 ORDER BY ordem, id",
         )?;
         let v = st.query_map([], |r| {
@@ -591,6 +806,7 @@ impl Banco {
                 arquivado: r.get(6)?,
                 link_card_nome: r.get(7)?,
                 atividade_padrao_id: r.get(8)?,
+                espaco_id: r.get(9)?,
             })
         })?;
         v.collect()
@@ -1296,7 +1512,7 @@ mod testes {
         let r1 = b.criar_regra_pasta("G:\\Projeto A", t).unwrap();
         b.criar_regra_pasta("D:\\Velho", t2).unwrap();
         // timer arquivado continua com nome na lista
-        b.editar_timer(&Timer { id: t2, grupo_id: None, nome: "Velho".into(), cor: "#222".into(), link_card: None, ordem: 0, arquivado: true, link_card_nome: None, atividade_padrao_id: 1 }).unwrap();
+        b.editar_timer(&Timer { id: t2, grupo_id: None, nome: "Velho".into(), cor: "#222".into(), link_card: None, ordem: 0, arquivado: true, link_card_nome: None, atividade_padrao_id: 1, espaco_id: 1 }).unwrap();
         let v = b.regras_pasta_com_timer().unwrap();
         assert_eq!(v.len(), 2);
         assert_eq!((v[0].0.pasta.as_str(), v[0].1.as_str()), ("G:\\Projeto A", "Projeto A"));
@@ -1380,11 +1596,11 @@ mod testes {
         b.salvar_sessao(&s).unwrap();
         assert_eq!(b.sessoes_desde(0).unwrap().iter().find(|x| x.id == "s1").unwrap().desligada_em, Some(h(10, 0)));
     }
-    #[test] fn banco_novo_tem_versao_8_com_as_tres_atividades() {
+    #[test] fn banco_novo_tem_versao_9_com_as_tres_atividades_e_o_espaco_geral() {
         let b = Banco::abrir_memoria().unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, VERSAO_ESQUEMA);
-        assert_eq!(v, 8);
+        assert_eq!(v, 9);
         let a = b.atividades().unwrap();
         assert_eq!(
             a.iter().map(|x| (x.id, x.nome.as_str(), x.arquivada)).collect::<Vec<_>>(),
@@ -1393,6 +1609,12 @@ mod testes {
         let t = b.criar_timer(None, "A", "#111").unwrap();
         assert_eq!(b.timers().unwrap()[0].atividade_padrao_id, ATIVIDADE_TRABALHO);
         assert_eq!(b.atividades_padrao().unwrap()[&t], ATIVIDADE_TRABALHO);
+        // rodada 20: o banco novo nasce com o espaço "Geral"
+        assert_eq!(
+            b.espacos().unwrap(),
+            [Espaco { id: ESPACO_PRIMEIRO, nome: "Geral".into(), cor: COR_ESPACO_PRIMEIRO.into(), ordem: 0, arquivado: false }]
+        );
+        assert_eq!(b.espacos_dos_timers().unwrap()[&t], ESPACO_PRIMEIRO);
     }
 
     /// Linhas das tabelas de antes da versão 5, só com as colunas de antes (para comparar antes e
@@ -1475,7 +1697,7 @@ mod testes {
         assert_eq!(v, 4);
     }
 
-    #[test] fn banco_real_da_versao_4_vira_8_sem_perder_nada_e_tudo_em_trabalho() {
+    #[test] fn banco_real_da_versao_4_vira_9_sem_perder_nada_e_tudo_em_trabalho() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("worktimer.db");
         banco_real_v4(&p);
@@ -1483,7 +1705,7 @@ mod testes {
         assert!(antes.len() > 25);
         let b = Banco::abrir_em(&p, ms_local(2026, 11, 18, 14, 0, F), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 8);
+        assert_eq!(v, 9);
         // todos os timers (o arquivado também) zerados no início de hoje: os números são os de hoje
         assert_eq!(b.zerados().unwrap().into_iter().collect::<Vec<_>>(), (1..=4).map(|t| (t, ms_local(2026, 11, 18, 0, 0, F))).collect::<Vec<_>>());
         assert_eq!(linhas_antigas(&b.conn), antes, "nenhuma linha antiga muda");
@@ -1507,7 +1729,7 @@ mod testes {
         assert!(b.zerados().unwrap().values().all(|z| *z == ms_local(2026, 11, 18, 0, 0, F)));
     }
 
-    #[test] fn bancos_das_versoes_1_a_4_chegam_na_8_com_trabalho_e_zerados_hoje() {
+    #[test] fn bancos_das_versoes_1_a_4_chegam_na_9_com_trabalho_e_zerados_hoje() {
         let d = tempfile::tempdir().unwrap();
         for (versao, passos) in [
             (1, ESQUEMA_V1.to_string()),
@@ -1531,7 +1753,7 @@ mod testes {
             }
             let b = Banco::abrir_em(&p, h(15, 30), F).unwrap();
             let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 8, "da versão {versao}");
+            assert_eq!(v, 9, "da versão {versao}");
             assert_eq!(b.zerados().unwrap()[&1], h(0, 0), "da versão {versao}: zerado no início de hoje");
             assert_eq!(b.atividades().unwrap().len(), 3);
             assert_eq!(b.trechos_entre(0, 10).unwrap().iter().map(|t| t.atividade_id).collect::<Vec<_>>(), [1, 1]);
@@ -1633,7 +1855,7 @@ mod testes {
         let fechou = |t: i64, f: Ms| Mudanca::Fechou { timer_id: Some(t), sessao_id: Some("s".into()), origem: Origem::Claude, fim: f, motivo: MotivoFim::Terminou };
         b.aplicar(&[abriu(a, ontem(9, 0)), fechou(a, ontem(11, 0))]).unwrap();
         let timers: BTreeMap<i64, Option<i64>> = [(a, None), (outro, None)].into();
-        let antes = |b: &Banco| b.acumulado_antes(&timers, h(0, 0), 0, F).unwrap().por_timer();
+        let antes = |b: &Banco| b.acumulado_antes(&timers, &BTreeMap::new(), h(0, 0), 0, F).unwrap().por_timer();
         assert_eq!(antes(&b), [(a, 120 * MIN)].into());
         assert!(b.tem_acumulado_guardado());
         // o que é só de hoje não joga fora o guardado
@@ -1675,6 +1897,167 @@ mod testes {
         assert_eq!(antes(&b)[&outro], 60 * MIN, "só das 10:00 às 11:00 de ontem");
     }
 
+    /// Um banco da versão 8 montado de verdade (rodada 20): o banco real da versão 4
+    /// (`banco_real_v4`) passa pelas migrações 5 a 8 deste app, com uso da versão 8 por cima (um
+    /// timer e um grupo novos, um zerar só da reunião).
+    fn banco_real_v8(p: &Path) {
+        banco_real_v4(p);
+        let c = Connection::open(p).unwrap();
+        let tx = c.unchecked_transaction().unwrap();
+        migrar_v5(&tx).unwrap();
+        migrar_v6(&tx, ms_local(2026, 11, 18, 0, 0, F)).unwrap();
+        migrar_v7(&tx).unwrap();
+        migrar_v8(&tx).unwrap();
+        tx.commit().unwrap();
+        c.execute_batch(
+            "INSERT INTO grupos (id, nome, cor, ordem) VALUES (3, 'Estudos', '#3fb68b', 2);
+             INSERT INTO timers (id, grupo_id, nome, cor, zerado_em, atividade_padrao_id) VALUES (5, 3, 'Curso', '#3fb68b', 0, 3);
+             INSERT INTO trechos (timer_id, origem, inicio, fim, atividade_id) VALUES (5, 'manual', 2200, 2300, 3), (2, 'manual', 2300, 2400, 2);
+             INSERT INTO zerados_atividade (timer_id, atividade_id, zerado_em) VALUES (2, 2, 2350);",
+        )
+        .unwrap();
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 8);
+        assert!(!tem_coluna(&c, "grupos", "espaco_id").unwrap());
+    }
+
+    #[test] fn versao_9_espacos_migra_um_banco_v8_de_verdade_tudo_em_trabalho() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("worktimer.db");
+        banco_real_v8(&p);
+        let (antes, trechos_antes) = {
+            let c = Connection::open(&p).unwrap();
+            let n: i64 = c.query_row("SELECT count(*) FROM trechos", [], |r| r.get(0)).unwrap();
+            (linhas_antigas(&c), n)
+        };
+        // a cópia de antes da migração leva a versão 8 no nome
+        let dir = d.path().join("backups");
+        let quando = chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap().and_hms_opt(9, 30, 0).unwrap();
+        let copia = crate::dados::backup_antes_de_migrar(&p, &dir, quando).unwrap().unwrap();
+        assert_eq!(copia, dir.join("antes-migracao-v8-20261120-0930.db"));
+        let b = Banco::abrir_em(&p, ms_local(2026, 11, 20, 9, 30, F), F).unwrap();
+        let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 9);
+        // um espaço, "Trabalho", com todos os grupos e timers (os arquivados também)
+        assert_eq!(b.espacos().unwrap().iter().map(|e| (e.id, e.nome.as_str(), e.arquivado)).collect::<Vec<_>>(), [(1, "Trabalho", false)]);
+        assert!(b.espacos_dos_grupos().unwrap().values().all(|e| *e == 1));
+        let timers = b.espacos_dos_timers().unwrap();
+        assert_eq!(timers.len(), 5, "o arquivado e o sem grupo também");
+        assert!(timers.values().all(|e| *e == 1));
+        let sem_grupo: i64 = b.conn.query_row("SELECT espaco_id FROM timers WHERE grupo_id IS NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(sem_grupo, 1, "o sem grupo (o Velho, arquivado) vai para Trabalho");
+        // nada se perde: as linhas de antes, os trechos, o zerar da reunião
+        let n: i64 = b.conn.query_row("SELECT count(*) FROM trechos", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, trechos_antes);
+        assert_eq!(linhas_antigas(&b.conn), antes, "nenhuma linha antiga muda");
+        assert_eq!(b.zerados_atividade().unwrap()[&(2, 2)], 2350);
+        assert!(b.atividades_ocultas().unwrap().is_empty());
+        // rodar de novo não muda nada (nem cria outro espaço)
+        migrar_v9(&b.conn).unwrap();
+        assert_eq!(b.espacos().unwrap().len(), 1);
+        drop(b);
+        // um banco da versão 8 sem dados ganha "Geral"
+        let vazio = d.path().join("vazio.db");
+        {
+            let c = Connection::open(&vazio).unwrap();
+            c.execute_batch(&format!("BEGIN; {ESQUEMA_V1} {MIGRACAO_V2} {MIGRACAO_V3} {MIGRACAO_V4} COMMIT;")).unwrap();
+            let tx = c.unchecked_transaction().unwrap();
+            migrar_v5(&tx).unwrap();
+            migrar_v6(&tx, 0).unwrap();
+            migrar_v7(&tx).unwrap();
+            migrar_v8(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+        assert_eq!(Banco::abrir(&vazio).unwrap().espacos().unwrap()[0].nome, "Geral");
+    }
+
+    #[test] fn espacos_criar_editar_e_apagar_so_vazio() {
+        let b = Banco::abrir_memoria().unwrap();
+        let pessoal = b.criar_espaco("Pessoal", "#e86bd0").unwrap();
+        assert_eq!(b.espacos().unwrap().iter().map(|e| (e.nome.as_str(), e.ordem)).collect::<Vec<_>>(), [("Geral", 0), ("Pessoal", 1)]);
+        let g = b.criar_grupo_em("Casa", "#111", pessoal).unwrap();
+        let solto = b.criar_timer_no(None, pessoal, "Leitura", "#222", h(9, 0), F).unwrap();
+        let no_grupo = b.criar_timer_no(Some(g), ESPACO_PRIMEIRO, "Obra", "#333", h(9, 0), F).unwrap();
+        let m = b.espacos_dos_timers().unwrap();
+        assert_eq!((m[&solto], m[&no_grupo]), (pessoal, pessoal), "o do grupo vale");
+        let conteudo = |b: &Banco| b.conteudo_do_espaco(pessoal).unwrap();
+        assert_eq!(conteudo(&b), ConteudoDoEspaco { ativos: 2, arquivados: 0 }, "o grupo e o timer sem grupo");
+        // com algo à vista, não apaga
+        assert_eq!(b.apagar_espaco(pessoal, ESPACO_PRIMEIRO).unwrap(), None);
+        // revisão da rodada 20: só com arquivados, apaga e leva os arquivados (ainda arquivados)
+        // para o destino
+        b.conn.execute("UPDATE grupos SET arquivado = 1", []).unwrap();
+        assert_eq!(conteudo(&b), ConteudoDoEspaco { ativos: 1, arquivados: 1 }, "o timer do grupo vai com o grupo");
+        assert_eq!(b.apagar_espaco(pessoal, ESPACO_PRIMEIRO).unwrap(), None, "ainda o timer sem grupo");
+        b.conn.execute("UPDATE timers SET arquivado = 1 WHERE id = ?1", params![solto]).unwrap();
+        assert_eq!(b.apagar_espaco(pessoal, ESPACO_PRIMEIRO).unwrap(), Some(2));
+        assert_eq!(b.espacos().unwrap().len(), 1);
+        assert_eq!(b.espacos_dos_grupos().unwrap()[&g], ESPACO_PRIMEIRO);
+        let m = b.espacos_dos_timers().unwrap();
+        assert_eq!((m[&solto], m[&no_grupo]), (ESPACO_PRIMEIRO, ESPACO_PRIMEIRO));
+        let arq: Vec<bool> = {
+            let mut st = b.conn.prepare("SELECT arquivado FROM grupos ORDER BY id").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(|x| x.unwrap()).collect()
+        };
+        assert_eq!(arq, [true], "segue arquivado");
+        // renomear, cor, ordem, arquivar
+        let mut e = b.espacos().unwrap()[0].clone();
+        e.nome = "Trabalho".into();
+        e.arquivado = true;
+        b.editar_espaco(&e).unwrap();
+        assert_eq!(b.espacos().unwrap()[0], e);
+    }
+
+    /// Revisão da rodada 20: o espaço padrão é o primeiro não arquivado, na ordem (não o 1 fixo).
+    #[test] fn espaco_padrao_e_o_primeiro_nao_arquivado() {
+        let b = Banco::abrir_memoria().unwrap();
+        assert_eq!(b.espaco_padrao().unwrap(), ESPACO_PRIMEIRO);
+        let pessoal = b.criar_espaco("Pessoal", "#e86bd0").unwrap();
+        let mut geral = b.espacos().unwrap()[0].clone();
+        geral.arquivado = true;
+        b.editar_espaco(&geral).unwrap();
+        assert_eq!(b.espaco_padrao().unwrap(), pessoal);
+        // o que é criado sem dizer o espaço vai para ele
+        let g = b.criar_grupo("Casa", "#111").unwrap();
+        let t = b.criar_timer(None, "Leitura", "#222").unwrap();
+        assert_eq!(b.espacos_dos_grupos().unwrap()[&g], pessoal);
+        assert_eq!(b.espacos_dos_timers().unwrap()[&t], pessoal);
+        // a ordem manda
+        let outro = b.criar_espaco("Outro", "#333").unwrap();
+        let mut e = b.espacos().unwrap().into_iter().find(|e| e.id == outro).unwrap();
+        e.ordem = -1;
+        b.editar_espaco(&e).unwrap();
+        assert_eq!(b.espaco_padrao().unwrap(), outro);
+    }
+
+    #[test] fn editar_timer_com_ocultas_numa_transacao_so() {
+        let b = Banco::abrir_memoria().unwrap();
+        let id = b.criar_timer(None, "A", "#111").unwrap();
+        let mut t = b.timers().unwrap()[0].clone();
+        t.nome = "B".into();
+        b.editar_timer_com_ocultas(&t, &[ATIVIDADE_ESTUDO]).unwrap();
+        assert_eq!((b.timers().unwrap()[0].nome.as_str(), &b.atividades_ocultas().unwrap()[&id]), ("B", &vec![ATIVIDADE_ESTUDO]));
+        // um timer que não existe: nada é gravado (nem as ocultas)
+        let mut x = t.clone();
+        x.id = 999;
+        assert!(b.editar_timer_com_ocultas(&x, &[ATIVIDADE_REUNIAO]).is_err(), "a chave estrangeira recusa");
+        assert!(!b.atividades_ocultas().unwrap().contains_key(&999));
+    }
+
+    #[test] fn atividades_ocultas_guardar_e_ler() {
+        let b = Banco::abrir_memoria().unwrap();
+        let t = b.criar_timer(None, "A", "#111").unwrap();
+        let u = b.criar_timer(None, "B", "#222").unwrap();
+        assert!(b.atividades_ocultas().unwrap().is_empty());
+        b.guardar_atividades_ocultas(t, &[ATIVIDADE_ESTUDO, ATIVIDADE_REUNIAO]).unwrap();
+        b.guardar_atividades_ocultas(u, &[ATIVIDADE_ESTUDO]).unwrap();
+        assert_eq!(b.atividades_ocultas().unwrap(), [(t, vec![ATIVIDADE_REUNIAO, ATIVIDADE_ESTUDO]), (u, vec![ATIVIDADE_ESTUDO])].into());
+        // trocar substitui; vazio tira todas
+        b.guardar_atividades_ocultas(t, &[ATIVIDADE_ESTUDO]).unwrap();
+        b.guardar_atividades_ocultas(u, &[]).unwrap();
+        assert_eq!(b.atividades_ocultas().unwrap(), [(t, vec![ATIVIDADE_ESTUDO])].into());
+    }
+
     #[test] fn versao_8_zerados_por_atividade_migra_copia_e_e_idempotente() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("v7.db");
@@ -1692,7 +2075,7 @@ mod testes {
         assert_eq!(copia, dir.join("antes-migracao-v7-20261120-0930.db"));
         let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 8);
+        assert_eq!(v, 9);
         assert!(b.zerados_atividade().unwrap().is_empty(), "os números ficam os mesmos");
         assert_eq!(b.zerados().unwrap()[&t], h(8, 0));
         // rodar de novo não muda nada
@@ -1708,7 +2091,7 @@ mod testes {
         }
         let b = Banco::abrir_em(&p1, h(9, 0), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 8);
+        assert_eq!(v, 9);
         assert!(b.zerados_atividade().unwrap().is_empty());
     }
 
@@ -1751,7 +2134,7 @@ mod testes {
         b.aplicar(&[abriu(2, ontem(11, 0))]).unwrap();
         b.aplicar(&[fechou(ontem(12, 0))]).unwrap();
         let timers: BTreeMap<i64, Option<i64>> = [(a, None)].into();
-        let antes = |b: &Banco| b.acumulado_antes(&timers, h(0, 0), 0, F).unwrap().por_atividade;
+        let antes = |b: &Banco| b.acumulado_antes(&timers, &BTreeMap::new(), h(0, 0), 0, F).unwrap().por_atividade;
         assert_eq!(antes(&b), [((a, 1), 120 * MIN), ((a, 2), 60 * MIN)].into());
         // zerar só a reunião às 11:30 de ontem: o guardado não vale mais, e o trabalho fica
         b.zerar_atividade(a, 2, ontem(11, 30)).unwrap();
