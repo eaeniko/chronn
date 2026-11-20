@@ -1,18 +1,18 @@
 # Changelog
 
-Versões no formato MAJOR.MINOR.PATCH. Antes do 1.0: o MINOR sobe quando entra algo novo, o PATCH
-quando só há correções.
+Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
+there are only fixes.
 
 ## [0.1.0] - 2026-11-20
 
-Primeira versão pública.
+First public version.
 
-### Novo
-- Grupos e timers com play, pausa, encerrar e atividades (Trabalho, Reunião, Estudo).
-- Dock sempre à vista (ou só quando houver uma pergunta), com avisos numa janela própria.
-- Conexão com o Claude Code por hooks: a conversa conta no timer da pasta; conversa nova pergunta.
-- Projetos recentes: o primeiro uso acha as pastas onde o Claude Code trabalhou.
-- Pausa por inatividade, lembretes "esperando você" e "segundo plano".
-- Zerar um timer, só uma atividade ou todos, sem apagar o histórico.
-- Assistente de primeiro uso, tour essencial e completo, ajuda por tela e dicas.
-- Backups automáticos e restaurar.
+### Added
+- Groups and timers with play, pause, stop and activities (Work, Meeting, Study).
+- Dock always in view (or only when there is a question), with notices in their own window.
+- Claude Code connection through hooks: a conversation counts in its folder's timer; a new one asks.
+- Recent projects: first-run setup finds the folders where Claude Code worked.
+- Pause on inactivity, "waiting for you" and "background" reminders.
+- Reset a timer, a single activity or all of them, without deleting history.
+- First-run setup, essential and full tours, per-screen help and tips.
+- Automatic backups and restore.

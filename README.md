@@ -1,45 +1,48 @@
 # Chronn
 
-Timers para o seu tempo de trabalho, no Windows. Você dá play à mão, ou o Chronn conta sozinho
-enquanto um app conectado trabalha numa pasta ligada ao timer (hoje: Claude Code).
+**English** · [Português](README.pt-BR.md)
 
-- **Local:** tudo roda no seu computador. O Chronn não usa IA, não coleta dados e não envia nada
-  para lugar nenhum.
-- **Você decide:** quais apps conectar, quais pastas contam e em qual timer.
-- **Para o seu controle pessoal**, não para controle empresarial.
+Timers for your working time, on Windows. Press play yourself, or let Chronn count on its own
+while a connected app works in a folder linked to the timer (today: Claude Code).
 
-## O que ele faz
+- **Local:** everything runs on your computer. Chronn uses no AI, collects no data and sends
+  nothing anywhere.
+- **You decide** which apps to connect, which folders count and in which timer.
+- **For your personal tracking**, not for company monitoring.
 
-- Grupos de timers, com ▶ / ⏸ / ■ e atividades (Trabalho, Reunião, Estudo...).
-- Um dock pequeno, sempre à vista, com o que está rodando.
-- Pausa sozinho quando você fica longe do computador.
-- Com o Claude Code conectado (hooks), a conversa conta no timer da pasta dela; conversa nova
-  pergunta em qual timer contar.
-- Zerar sem apagar: o histórico do dia fica.
-- Tour de 1 minuto, ajuda por tela e dicas na primeira vez.
+## What it does
 
-## Instalar
+- Groups of timers with ▶ / ⏸ / ■ and activities (Work, Meeting, Study...).
+- A small dock, always in view, showing what is running.
+- Pauses by itself when you are away from the computer.
+- With Claude Code connected (hooks), each conversation counts in its folder's timer; a new
+  conversation asks which timer to use.
+- Reset without deleting: the day's history stays.
+- A 1-minute tour, per-screen help and first-time tips.
 
-Baixe o `Chronn_<versão>_x64-setup.exe` em [Releases](../../releases). O instalador ainda não
-tem assinatura digital: o Windows mostra "O Windows protegeu o computador"; clique em
-**Mais informações → Executar assim mesmo**.
+The interface is in Portuguese for now; English is coming in a next version.
 
-Os dados ficam em `%USERPROFILE%\.worktimer\`. Desinstalar tira os hooks do Claude Code (com uma
-cópia do `settings.json` antes) e mantém os dados.
+## Install
 
-## Compilar
+Download `Chronn_<version>_x64-setup.exe` from [Releases](../../releases). The installer is not
+code-signed yet: Windows shows "Windows protected your PC"; click **More info → Run anyway**.
 
-Requer Rust (stable), Node.js e o Tauri 2 CLI.
+Data lives in `%USERPROFILE%\.worktimer\`. Uninstalling removes the Claude Code hooks (backing up
+`settings.json` first) and keeps your data.
+
+## Build
+
+Requires Rust (stable), Node.js and the Tauri 2 CLI.
 
     powershell -ExecutionPolicy Bypass -File scripts/preparar-sidecar.ps1
     cargo test --workspace
     cd ui && npm test
     powershell -File scripts/build.ps1
 
-## Licença
+## License
 
-[CC BY-NC-SA 4.0](LICENSE), com permissão para doações e patrocínios. Use, estude e adapte para
-fins não comerciais, sempre com o crédito ao autor e sob a mesma licença. Uso comercial: fale
-com o autor.
+[CC BY-NC-SA 4.0](LICENSE), with a permission for donations and sponsorships. Use, study and adapt
+it for non-commercial purposes, always crediting the author and keeping the same license. For
+commercial use, contact the author.
 
-Criado por [@eaeniko](https://eaeniko.okin.club) (Nikolai Cinotti).
+Created by [@eaeniko](https://eaeniko.okin.club) (Nikolai Cinotti).
