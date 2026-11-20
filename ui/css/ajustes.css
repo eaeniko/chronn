@@ -1,0 +1,154 @@
+/* Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE. */
+/* Tela de Ajustes (⚙), o diálogo "Ligar ao Claude Code" e o primeiro uso. Só tokens de tema.css. */
+
+.aj { height: 100%; display: grid; grid-template-columns: 190px minmax(0, 1fr); }
+.aj-nav {
+  border-right: 1px solid var(--ln); background: var(--pn); padding: 16px 10px; display: flex; flex-direction: column; gap: 1px;
+  overflow-y: auto; scrollbar-width: thin;
+}
+.aj-nav a {
+  color: var(--tx3); text-decoration: none; font-size: 13px; padding: 7px 10px; border-radius: 8px; transition: background .15s, color .15s;
+}
+.aj-nav a:hover { background: var(--pn2); color: var(--tx); }
+.aj-nav a:focus-visible { outline: 2px solid color-mix(in srgb, var(--acento) 70%, transparent); outline-offset: 1px; }
+.aj-voltar { text-align: left; font-size: 12.5px; color: var(--mu); padding: 4px 10px 12px; }
+.aj-voltar:hover { color: var(--tx2); }
+
+.aj-corpo { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--mu2) transparent; padding: 18px 28px 40vh; user-select: text; }
+.aj-corpo > * { max-width: 680px; }
+.aj-topo { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+.aj-topo h2 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.015em; }
+.aj-salvo { font-size: 12px; color: var(--mu); opacity: 0; transition: opacity .3s; }
+.aj-salvo.on { opacity: 1; }
+
+.aj-sec { padding: 18px 0 20px; border-bottom: 1px solid var(--ln); display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 8px; }
+.aj-sec:last-child { border-bottom: 0; }
+.aj-sec h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.aj-sec h4 { margin: 4px 0 0; font-size: 11px; font-weight: 500; color: var(--mu); text-transform: uppercase; letter-spacing: .06em; }
+.aj-dica { margin: -6px 0 0; font-size: 12px; color: var(--mu); }
+[data-bloco="grupos"] { display: flex; flex-direction: column; gap: 8px; }
+[data-bloco="grupos"] h4 { margin: 0; }
+[data-bloco="grupos"] ul + h4 { margin-top: 10px; }
+[data-bloco="grupos"] h4 + .aj-dica { margin: -4px 0 0; }
+
+/* os campos de dialogo.css valem aqui também */
+.aj .campo textarea, .dlg .campo textarea {
+  font: 12.5px/1.45 var(--mono); color: var(--tx); background: var(--bg); border: 1px solid var(--bd); border-radius: 9px;
+  padding: 8px 10px; width: 100%; resize: vertical; min-height: 64px; scrollbar-width: thin;
+}
+.aj .campo textarea:focus, .dlg .campo textarea:focus { border-color: color-mix(in srgb, var(--acento) 60%, var(--bd)); outline: none; }
+.aj .campo { max-width: 520px; }
+
+/* escolha segmentada (tema, botões do dock, arredondamento) */
+.seg { display: inline-flex; flex-wrap: wrap; align-self: flex-start; gap: 2px; padding: 3px; border-radius: 11px; background: var(--pn); border: 1px solid var(--bd); }
+.seg-op { position: relative; cursor: pointer; }
+.seg-op input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.seg-op span { display: block; padding: 6px 13px; border-radius: 8px; font-size: 12.5px; color: var(--tx3); transition: background .15s, color .15s; }
+.seg-op:hover span { color: var(--tx); }
+.seg-op input:checked + span { background: var(--btn-h); color: var(--tx); font-weight: 550; }
+.seg-op input:focus-visible + span { outline: 2px solid color-mix(in srgb, var(--acento) 70%, transparent); outline-offset: 1px; }
+
+/* botões */
+.aj .bt { padding: 7px 13px; border-radius: 9px; background: var(--btn); color: var(--tx2); font-weight: 550; font-size: 12.5px; transition: background .15s; }
+.aj .bt:hover:not(:disabled) { background: var(--btn-h); }
+.aj .bt.pri { background: var(--acento); color: #fff; }
+.aj .bt.pri:hover { filter: brightness(1.08); }
+.aj .bt:disabled { opacity: .45; cursor: default; }
+.aj .bt.mini { padding: 4px 10px; font-size: 11.5px; }
+
+/* Claude Code */
+.aj-hooks { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--bd); border-radius: 12px; background: var(--pn); max-width: 520px; }
+.aj-linha { display: flex; align-items: center; gap: 10px; font-weight: 550; }
+.aj-estado { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--mu); padding: 2px 9px; border-radius: 99px; background: var(--btn); }
+.aj-estado i { width: 7px; height: 7px; border-radius: 50%; background: var(--mu2); }
+.aj-estado.on { color: #2fd19b; background: color-mix(in srgb, #2fd19b 13%, transparent); }
+.aj-estado.on i { background: #2fd19b; }
+.aj-bts { display: flex; gap: 8px; margin-top: 6px; }
+.aj-cam { font: 11.5px/1.4 var(--mono); color: var(--tx3); overflow-wrap: anywhere; }
+code.aj-cam { background: var(--pn2); padding: 1px 5px; border-radius: 5px; }
+code.aj-bloco { display: block; padding: 7px 9px; }
+
+/* tempos */
+.aj-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px 18px; max-width: 680px; }
+.aj-un { display: flex; align-items: center; gap: 8px; }
+.aj-un input { max-width: 110px; font-family: var(--mono); }
+.aj-un em { font-style: normal; font-size: 11.5px; color: var(--mu); }
+.aj-erro { color: var(--agora) !important; }
+.aj-erro[hidden] { display: none; }
+
+/* grupos e regras */
+.aj-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-width: 620px; }
+.aj-lista li {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 12px; border: 1px solid var(--bd); border-radius: 10px; background: var(--pn); min-width: 0;
+}
+.aj-lista li > i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+.aj-lista .aj-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-weight: 550; }
+.aj-lista .aj-n.mono { font-size: 12px; font-weight: 400; color: var(--tx2); }
+.aj-lista small { color: var(--mu); font-size: 11.5px; white-space: nowrap; margin-right: auto; }
+.aj-lista .bt { flex-shrink: 0; }
+.aj-lista .aj-vazio { color: var(--mu); font-size: 12px; border-style: dashed; background: none; }
+
+/* sobre */
+.aj-sobre { display: flex; flex-direction: column; gap: 4px; }
+.aj-sobre .logo { font-size: 16px; }
+.aj-sobre p { margin: 0; color: var(--tx3); font-size: 12.5px; }
+.aj-cred { color: var(--tx2) !important; }
+.aj-link { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--acento); cursor: pointer; }
+.aj-link:hover { text-decoration: underline; }
+.aj-assinatura { font-size: 10.5px !important; color: var(--mu) !important; user-select: all; }
+/* modo desenvolvedor: discreto, no fim do Sobre; a seção Tempos só aparece com ele */
+.aj-dev { margin-top: 14px; font-size: 12px; color: var(--mu); }
+.aj-dev small { font-size: 11px; }
+.aj-sec[hidden], .aj-nav a[hidden] { display: none; }
+.aj-carregando { padding: 20px 28px; }
+
+/* diálogo largo: a prévia do settings.json */
+.dlg.largo { width: min(680px, 100%); }
+.aj-previa {
+  margin: 0; max-height: 340px; overflow: auto; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bd);
+  background: var(--bg); color: var(--tx2); font: 11.5px/1.5 var(--mono); white-space: pre; tab-size: 2; scrollbar-width: thin; user-select: text;
+}
+.aj-previa:focus-visible { outline: 2px solid color-mix(in srgb, var(--acento) 70%, transparent); outline-offset: 2px; }
+
+/* primeiro uso */
+.pu-ok { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, #2fd19b 10%, transparent); }
+p.pu-ok { padding: 10px 12px; }
+
+/* ⚙ aceso com os Ajustes abertos */
+.top .ic.on { background: var(--btn-h); color: var(--tx); }
+
+/* hooks da versão antiga, o risco do modo desenvolvedor e os backups */
+.aj-estado.antigo { color: #f2b63c; background: color-mix(in srgb, #f2b63c 13%, transparent); }
+.aj-estado.antigo i { background: #f2b63c; }
+.aj-antigo { margin: 0; font-size: 12.5px; color: var(--tx2); }
+/* Conexões (rodada 18): o cartão do Claude Code */
+.conexao { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--bd); border-radius: 12px; }
+.conexao .aj-linha b { font-size: 13.5px; }
+.conexao-frase { margin: 0; font-size: 12.5px; color: var(--tx2); }
+.aj-estado.ausente { color: var(--mu); }
+.aj-ver-muda { margin: 2px 0; }
+.aj-risco {
+  margin: 0; padding: 9px 12px; border-radius: 10px; font-size: 12.5px; color: var(--tx2);
+  border: 1px solid color-mix(in srgb, #f2b63c 45%, transparent); background: color-mix(in srgb, #f2b63c 9%, transparent);
+}
+[data-bloco="backups"] { display: flex; flex-direction: column; gap: 8px; }
+/* um aviso em destaque num diálogo */
+.pu-aviso {
+  padding: 9px 12px; border-radius: 10px; color: var(--tx2);
+  border: 1px solid color-mix(in srgb, #f2b63c 45%, transparent); background: color-mix(in srgb, #f2b63c 9%, transparent);
+}
+.pu-aviso ul { margin: 6px 0; padding-left: 18px; }
+
+/* atividades */
+.aj-at input[type="color"] { width: 26px; height: 22px; padding: 0; border: 1px solid var(--bd); border-radius: 6px; background: none; cursor: pointer; flex-shrink: 0; }
+.aj-at input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+.aj-at input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 4px; }
+.aj-at .aj-at-nome {
+  flex: 0 1 220px; min-width: 0; font: inherit; font-weight: 550; color: var(--tx); background: transparent;
+  border: 1px solid transparent; border-radius: 6px; padding: 3px 6px;
+}
+.aj-at .aj-at-nome:hover { border-color: var(--bd); }
+.aj-at .aj-at-nome:focus { border-color: color-mix(in srgb, var(--acento) 60%, var(--bd)); outline: none; background: var(--bg); }
+.aj-at.arq { opacity: .6; }
+.aj-at.arq .aj-at-nome { color: var(--mu); }
+[data-bloco="atividades"] > .bt { margin-top: 8px; }

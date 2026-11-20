@@ -1,0 +1,22 @@
+/* Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE. */
+/* A janela dos avisos do dock (rodada 15): só a faixa, do tamanho dela, sem fundo em volta. */
+html, body { margin: 0; background: transparent; overflow: hidden; }
+body { font-family: var(--fonte); -webkit-font-smoothing: antialiased; user-select: none; }
+#aviso { display: inline-block; }
+.faixa {
+  display: inline-flex; align-items: center; gap: 12px; max-width: 420px; box-sizing: border-box;
+  background: var(--pn2); color: var(--tx); border: 1px solid var(--bd); border-radius: 10px;
+  padding: 7px 7px 7px 13px; font: 12.5px/1.35 var(--fonte);
+}
+.faixa span { min-width: 0; }
+.faixa button {
+  font: inherit; font-weight: 600; color: var(--acento); background: var(--btn); border: 0; border-radius: 7px;
+  padding: 5px 10px; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+}
+.faixa button:hover { background: var(--btn-h); }
+.faixa:not(:has(button)) { padding-right: 13px; }
+/* a dica do dock (rodada 16): o texto numa linha, os dois botões embaixo */
+.faixa.dupla { flex-wrap: wrap; max-width: 340px; gap: 8px 6px; padding: 9px 9px 9px 13px; }
+.faixa.dupla span { flex-basis: 100%; padding-right: 4px; }
+.faixa.dupla .b2 { margin-left: auto; color: var(--tx3); background: none; font-weight: 500; }
+.faixa.dupla .b2:hover { color: var(--tx); background: var(--btn); }

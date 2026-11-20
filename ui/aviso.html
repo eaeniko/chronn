@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE. -->
+<html lang="pt-BR" data-tema="escuro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="Nikolai Cinotti (@eaeniko)">
+<meta name="generator" content="Chronn">
+<title></title>
+<script>
+  // Último tema usado pela janela principal, antes do primeiro desenho (o aviso traz o do dock).
+  try {
+    const t = JSON.parse(localStorage.getItem('worktimer.tema'));
+    if (t === 'claro' || t === 'escuro') document.documentElement.dataset.tema = t;
+  } catch {}
+</script>
+<link rel="stylesheet" href="css/tema.css">
+<link rel="stylesheet" href="css/aviso.css">
+<script type="module" src="js/aviso.js"></script>
+</head>
+<body>
+<div id="aviso"></div>
+</body>
+</html>

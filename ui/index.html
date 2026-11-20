@@ -1,0 +1,69 @@
+<!doctype html>
+<!-- Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE. -->
+<html lang="pt-BR" data-tema="escuro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="Nikolai Cinotti (@eaeniko)">
+<meta name="generator" content="Chronn">
+<title></title>
+<script>
+  // Último tema usado, antes do primeiro desenho (evita piscar o escuro no modo claro).
+  try {
+    const t = JSON.parse(localStorage.getItem('worktimer.tema'));
+    if (t === 'claro' || t === 'escuro') document.documentElement.dataset.tema = t;
+  } catch {}
+</script>
+<link rel="stylesheet" href="css/tema.css">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/dialogo.css">
+<link rel="stylesheet" href="css/ajustes.css">
+<script type="module" src="js/painel.js"></script>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="logo"><b aria-hidden="true"></b><span data-nome-app></span></div>
+    <nav class="views" aria-label="Visões">
+      <button data-acao="visao" data-visao="painel">Painel</button>
+      <button data-acao="visao" data-visao="foco">Foco</button>
+      <button data-acao="visao" data-visao="cartoes">Cartões</button>
+      <button data-acao="visao" data-visao="linha">Linha do tempo</button>
+    </nav>
+    <div class="sp"></div>
+    <button class="zt" id="bt-zerar-todos" data-acao="zerar-todos" title="Zerar todos: o número de cada timer volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão">↺ Zerar todos</button>
+    <div class="day"><small id="data"></small><b class="mono" id="total-dia">0min</b></div>
+    <button class="ic" id="bt-tema" data-acao="tema" title="Modo claro">☀&#xFE0E;</button>
+    <button class="ic" id="bt-tour" data-acao="tour" title="Tour de 1 minuto" aria-label="Ver o tour" aria-haspopup="menu" aria-expanded="false">?</button>
+    <button class="ic" id="bt-ajustes" data-acao="ajustes" title="Ajustes" aria-label="Ajustes">⚙&#xFE0E;</button>
+    <span class="cta-dica" title="Disponível numa próxima versão"><button class="cta" disabled>Lançar o dia · em breve</button></span>
+  </header>
+  <div class="pergunta-topo" id="perguntas" role="region" aria-label="Pergunta" hidden></div>
+  <div class="faixa-topo" id="faixa-tour" role="status" hidden>
+    <span>Novo: um tour de 1 minuto pelo <span data-nome-app></span></span>
+    <button type="button" id="bt-tour-ver">Ver</button>
+    <button type="button" class="esconder-txt" id="bt-tour-agora-nao">Agora não</button>
+  </div>
+  <div class="faixa-topo" id="faixa-hooks" role="status" hidden>
+    <span></span>
+    <button type="button" id="bt-hooks-atualizar">Atualizar</button>
+    <button type="button" class="esconder" id="bt-hooks-esconder" title="Esconder até a próxima abertura" aria-label="Esconder">×</button>
+  </div>
+
+  <main class="corpo">
+    <div class="vis v-painel" data-v="painel" hidden>
+      <div class="esq" data-rolagem="painel">
+        <div id="grupos"></div>
+        <div id="linha"></div>
+      </div>
+      <aside class="fx" id="foco" data-rolagem="painel-foco"></aside>
+    </div>
+    <div class="vis" id="v-foco" data-v="foco" hidden></div>
+    <div class="vis" id="v-cartoes" data-v="cartoes" hidden></div>
+    <div class="vis" id="v-linha" data-v="linha" hidden></div>
+    <div class="vis" id="v-ajustes" data-v="ajustes" hidden></div>
+  </main>
+</div>
+<div class="aviso" id="aviso" role="status" hidden></div>
+</body>
+</html>

@@ -1,0 +1,198 @@
+/* Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE. */
+/* Dock flutuante: recolhido (pílula) e expandido (painel). Janela transparente, sem borda.
+   Usa os tokens de tema.css; o lado da tela (data-lado-x / data-lado-y no <html>) alinha o
+   conteúdo ao canto que o dock segura quando muda de tamanho. */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; }
+body {
+  display: flex; justify-content: flex-start; align-items: flex-start; overflow: hidden;
+  color: var(--tx); font: 12px/1.35 var(--fonte); -webkit-font-smoothing: antialiased; user-select: none;
+}
+html[data-lado-x="dir"] body { justify-content: flex-end; }
+html[data-lado-y="baixo"] body { align-items: flex-end; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+button:focus-visible { outline: 2px solid color-mix(in srgb, var(--acento) 70%, transparent); outline-offset: 2px; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+svg { display: block; fill: currentColor; }
+[style*="--c"] { --ct: color-mix(in srgb, var(--c), #000 var(--texto-cor)); }
+/* Rodando: bolinha acesa com um anel fixo, sem animação contínua (ver app.css). */
+
+/* o passo do dock no tour (rodada 16): uma borda suave pisca algumas vezes e para (sem animação
+   contínua) */
+@keyframes piscar-borda {
+  50% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--acento) 75%, transparent); }
+}
+.piscando .pilula, .piscando .exp { animation: piscar-borda 1.2s ease-in-out 8; }
+
+/* ---- recolhido ---- */
+.rec { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+html[data-lado-x="dir"] .rec { align-items: flex-end; }
+html[data-lado-y="baixo"] .rec { flex-direction: column-reverse; }
+
+.pilula {
+  display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: 14px;
+  background: var(--bg); border: 1px solid var(--bd); white-space: nowrap;
+}
+:root[data-tema="escuro"] .pilula, :root[data-tema="escuro"] .ask, :root[data-tema="escuro"] .exp { border-color: #2a2c32; }
+.dk { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border-radius: 10px; background: var(--pn); font-size: 12px; }
+.dk i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 30%, transparent); flex-shrink: 0; }
+.dk .nm { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+/* situação em cima do nome: coluna de largura fixa e linha da etiqueta sempre reservada, para o
+   dock não mudar de tamanho quando a etiqueta troca, aparece ou some */
+.dk .tx { display: flex; flex-direction: column; width: 104px; min-width: 0; line-height: 1.2; }
+.dk .tx .nm { max-width: none; white-space: nowrap; }
+.dk .sit { height: 12px; font-size: 10px; line-height: 12px; color: var(--mu); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk .sit.trabalhando, .dk .sit.lendo, .dk .sit.escrevendo { color: var(--ct); }
+.dk .sit.esperando { color: var(--acento); font-weight: 600; }
+/* parado (só o lembrete "esperando você"): bolinha apagada, sem anel */
+.dk.parado i { box-shadow: none; opacity: .55; }
+.dk.parado .t { color: var(--mu); }
+/* o lembrete não tem play (ligaria um play manual por engano): só o espaço dele, para a largura não mudar */
+.dk .p.lembrete, .dk .p.lembrete:hover { background: none; }
+.dmais { font-size: 10.5px; color: var(--acento); white-space: nowrap; padding: 0 2px; }
+.dk .t { color: var(--ct); }
+.dk .p { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--btn); color: var(--tx2); }
+.dk .p:hover { background: var(--btn-h); }
+.dk .p svg { width: 8px; height: 8px; }
+.dtot { font-size: 11.5px; color: var(--mu); padding: 0 6px; }
+/* o perfil de teste (rodada 17): uma marca pequena, para não confundir com o de uso */
+.dteste {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 2px 5px;
+  border-radius: 5px; color: #fff; background: color-mix(in srgb, #8a5cf6 85%, #000); flex-shrink: 0;
+}
+.dx-top .dteste { margin-right: 6px; }
+.dtot b { color: var(--tx); font-weight: 600; }
+/* depois do ■: "<timer> encerrado. Desfazer" no lugar do total, por 10 s */
+.dbt { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: var(--tx2); background: var(--btn); font-size: 13px; flex-shrink: 0; }
+.dbt:hover { background: var(--btn-h); color: var(--tx); }
+
+/* pergunta rápida (embaixo da pílula). A largura é fixa e só existe enquanto há pergunta: o dock
+   recolhido alarga para ela e volta depois (a janela acompanha o conteúdo). */
+.ask {
+  width: 320px; padding: 12px 14px; border-radius: 14px; background: var(--bg); border: 1px solid var(--bd);
+  font-size: 12.5px; color: var(--tx2); overflow-wrap: anywhere;
+}
+.ask b { color: var(--tx); font-weight: 600; }
+.ask small { color: var(--mu); }
+/* a pasta numa linha dela: corta com reticências; o caminho inteiro fica na dica */
+.ask-pasta {
+  margin-top: 6px; padding: 3px 8px; border-radius: 6px; background: var(--pn2); color: var(--tx);
+  font: 11.5px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal;
+}
+/* botões numa grade de duas colunas iguais: o destacado (e o que sobra sozinho) ocupa a linha */
+.o { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.o button {
+  min-width: 0; padding: 6px 10px; border-radius: 8px; background: var(--btn); color: var(--tx); font-weight: 550;
+  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.o button.largo { grid-column: 1 / -1; }
+.o button:hover { background: var(--btn-h); }
+.o button.y { background: var(--acento); color: #fff; }
+.o button.y:hover { filter: brightness(1.08); }
+
+/* "Ligada a Flow pela pasta · Trocar": uma linha discreta por ~15 s, embaixo da pílula */
+.dav {
+  max-width: 320px; padding: 5px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--bd);
+  font-size: 11.5px; color: var(--mu); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+:root[data-tema="escuro"] .dav { border-color: #2a2c32; }
+.dav span, .dx-aviso span { color: var(--tx2); }
+.dav button, .dx-aviso button { color: var(--acento); font-weight: 600; }
+.dav button:hover, .dx-aviso button:hover { text-decoration: underline; }
+
+/* ---- expandido ---- */
+.exp {
+  position: relative; display: flex; flex-direction: column; width: 100%; height: 100%;
+  padding: 12px; border-radius: 16px; background: var(--bg); border: 1px solid var(--bd);
+}
+.dx-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-shrink: 0; }
+.dx-top b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; white-space: nowrap; }
+.dx-top small { font-size: 11px; color: var(--mu); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-top .sp { flex: 1; }
+.dpa { padding: 5px 9px; border-radius: 8px; background: var(--btn); color: var(--tx2); font-size: 11.5px; white-space: nowrap; flex-shrink: 0; }
+.dpa:hover { background: var(--btn-h); color: var(--tx); }
+/* a lista segura pelo menos 4 linhas à vista; as perguntas, em cima, rolam se não couberem */
+.dx-lista { flex: 1 1 0; min-height: min(152px, 55%); overflow-y: auto; margin: 0 -4px; padding: 0 4px; scrollbar-width: thin; }
+.dx-g { font-size: 10.5px; color: var(--mu); margin: 10px 2px 4px; text-transform: uppercase; letter-spacing: .06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-r { display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 8px; border-radius: 9px; font-size: 12.5px; color: var(--tx2); }
+.dx-r i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+.dx-r .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* situação por extenso: no máximo quase metade da linha; nome e etiqueta cortam com reticências */
+.dx-r .sit { min-width: 0; max-width: 45%; flex: 0 1 auto; font-size: 10.5px; color: var(--mu); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-r.on .sit { color: var(--ct); }
+.dx-r .sit.esperando { color: var(--acento); }
+.dx-r.on { background: var(--pn); color: var(--tx); }
+.dx-r.on i { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 30%, transparent); }
+.dx-r .t { margin-left: auto; font-size: 12px; color: var(--mu); }
+.dx-r.on .t { color: var(--ct); }
+.dx-r .p { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--btn); color: var(--tx2); flex-shrink: 0; }
+.dx-r .p:hover { background: var(--btn-h); }
+.dx-r.on .p { background: var(--c); color: #fff; }
+.dx-r .p svg { width: 8px; height: 8px; }
+/* ■ encerrar: neutro mesmo na linha acesa; sem nada para encerrar, só guarda o lugar (a coluna do play não anda) */
+.dx-r.on .p.enc { background: var(--btn); color: var(--tx2); }
+.dx-r .p.enc:hover { background: var(--btn-h); }
+.dx-r .p.enc:disabled { visibility: hidden; }
+.dx-r .p.enc svg, .dk .p.enc svg { width: 7px; height: 7px; }
+.dx-vazio { color: var(--mu); padding: 14px 4px; }
+
+.dx-asks { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.dx-ask { margin-top: 8px; padding: 9px 10px; border-radius: 10px; background: var(--pn2); font-size: 11.5px; color: var(--tx2); overflow-wrap: anywhere; }
+.dx-mais { display: block; margin-top: 7px; font-size: 10.5px; color: var(--mu); }
+.dx-aviso { margin: 6px 2px 0; font-size: 11px; color: var(--mu); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-ask .ask-pasta { margin-top: 4px; padding: 2px 7px; font-size: 11px; background: var(--bg); }
+.dx-aviso + .dx-ask { margin-top: 5px; }
+.dx-lendo { margin: 8px 2px 0; font-size: 11px; color: var(--mu); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-lendo b { color: var(--tx2); font-weight: 550; }
+.dx-ask b { color: var(--tx); font-weight: 600; }
+.dx-ask .mu { color: var(--mu); }
+.dx-ask .o { margin-top: 6px; gap: 5px; }
+.dx-ask .o button { padding: 4px 8px; border-radius: 7px; }
+.dx-open { margin-top: 10px; flex-shrink: 0; text-align: center; font-size: 12px; font-weight: 600; padding: 8px; border-radius: 10px; background: var(--btn); color: var(--tx); }
+.dx-open:hover { background: var(--btn-h); }
+.grip { position: absolute; right: 3px; bottom: 3px; width: 14px; height: 14px; cursor: nwse-resize; }
+.grip::after {
+  content: ''; position: absolute; right: 2px; bottom: 2px; width: 8px; height: 8px;
+  border-right: 2px solid var(--mu2); border-bottom: 2px solid var(--mu2); border-radius: 0 0 3px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* diálogo ("Outro…") dentro do dock expandido */
+.dlg-fundo { border-radius: 16px; padding: 12px; }
+.dlg h3 { padding: 14px 16px 2px; font-size: 14px; }
+.dlg-corpo { padding: 8px 16px 4px; }
+.dlg-pe { padding: 12px 16px 14px; }
+
+/* 👥 reunião manual no expandido, ao lado do play; a etiqueta "reunião" no recolhido */
+.dx-r .p.reu { background: var(--btn); color: var(--tx2); }
+.dx-r .p.reu:hover { background: var(--btn-h); }
+.dx-r .p.reu svg { width: 10px; height: 8px; }
+.dx-r .p.reu.on, .dx-r.on .p.reu.on { background: var(--a, var(--acento)); color: #fff; }
+.dk .sit.reuniao, .dx-r .sit.reuniao { color: var(--ct); font-weight: 600; }
+
+/* ---- rodada 10 ---- */
+[style*="--a"] { --at: color-mix(in srgb, var(--a), #000 var(--texto-cor)); }
+/* a etiqueta da reunião (e "reunião + Claude") na cor da atividade */
+.dk .sit.reuniao, .dk .sit.reuniao_claude, .dx-r .sit.reuniao, .dx-r .sit.reuniao_claude { color: var(--at, var(--ct)); font-weight: 600; }
+/* expandido: a sublinha com o tempo de cada atividade, embaixo da linha do timer */
+.dx-at { display: flex; flex-wrap: wrap; gap: 0 7px; margin: -3px 0 3px; padding-left: 23px; font-size: 10.5px; color: var(--mu); }
+.dx-at:empty { display: none; }
+.dx-at span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.dx-at i { width: 7px; height: 3px; border-radius: 2px; background: var(--a); }
+.dx-at em { font-style: normal; color: var(--mu2); }
+/* rodada 13: o ▶ manual e o "segundo plano" (a sessão terminou o turno com uma tarefa ainda rodando) */
+.dk .sit.manual, .dx-r .sit.manual { color: var(--ct); }
+.dk .sit.segundo_plano, .dx-r .sit.segundo_plano { color: var(--tx3); font-style: italic; }
+
+/* rodada 14: as partes da etiqueta ("manual + esperando você"), cada uma na cor dela; a segunda,
+   sem espaço, vira um ponto na cor dela (a etiqueta inteira na dica) */
+.s-manual, .s-trabalhando, .s-lendo, .s-escrevendo { color: var(--ct); }
+.s-reuniao { color: var(--at, var(--ct)); font-weight: 600; }
+.s-esperando { color: var(--acento); font-weight: 600; }
+.s-segundo_plano { color: var(--tx3); font-style: italic; }
+.s-pausado { color: var(--mu); }
+.mais { color: var(--mu); font-weight: 400; font-style: normal; }
+.pt2 { display: inline-block; width: 7px; height: 7px; margin-left: 5px; border-radius: 50%; background: currentColor; vertical-align: middle; }

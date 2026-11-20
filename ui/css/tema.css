@@ -1,0 +1,48 @@
+/* Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE. */
+/* Tokens de cor e tipografia. O <html> leva data-tema="escuro|claro". */
+:root,
+:root[data-tema="escuro"] {
+  color-scheme: dark;
+  --bg: #101114;
+  --pn: #16171b;
+  --pn2: #1c1d22;
+  --bd: #1f2126;
+  --ln: #1d1f24;
+  --tx: #e8e8eb;
+  --tx2: #b4b6bd;
+  --tx3: #8b8e98;
+  --mu: #6f717a;
+  --mu2: #4a4d55;
+  --btn: #1f2126;
+  --btn-h: #26282e;
+  --glow: rgba(255, 107, 74, .10);
+  --agora: #ff3b5c;
+  --texto-cor: 0%;
+}
+
+:root[data-tema="claro"] {
+  color-scheme: light;
+  --bg: #f6f5f2;
+  --pn: #ffffff;
+  --pn2: #f1efea;
+  --bd: #e7e4dd;
+  --ln: #e7e4dd;
+  --tx: #1d1c1a;
+  --tx2: #4a4843;
+  --tx3: #6b6862;
+  --mu: #8d8a83;
+  --mu2: #bdb9b0;
+  --btn: #efede8;
+  --btn-h: #e6e3dc;
+  --glow: rgba(255, 107, 74, .08);
+  --agora: #f0284a;
+  /* cores dos timers escurecidas quando viram texto no fundo claro */
+  --texto-cor: 22%;
+}
+
+:root {
+  --acento: #ff6b4a;
+  --acento2: #ff9a5c;
+  --fonte: "Inter", "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+}

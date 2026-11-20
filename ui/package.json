@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --import ./js/teste-nome.js --test js/*.test.js"
+  }
+}
