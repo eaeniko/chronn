@@ -3,6 +3,12 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.4.1] - 2026-11-20
+
+### Changed
+- No visible changes. This release checks the in-app updater from start to finish: if you have
+  0.4.0, Chronn should offer this version, install it and reopen on its own.
+
 ## [0.4.0] - 2026-11-20
 
 First alpha release.
