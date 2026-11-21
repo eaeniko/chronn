@@ -2,7 +2,8 @@
 // Janela principal: as quatro visões (Painel, Foco, Cartões, Linha do tempo), trocadas pelo topo.
 // O evento "estado-mudou" pede snapshot novo e redesenha a visão; a cada segundo só os números
 // andam, e as réguas da linha do tempo são redesenhadas uma vez por minuto.
-import { chamar, aoMudar } from './api.js';
+import { chamar, aoMudar, ouvir } from './api.js';
+import { estadoDoIcone, abrirAtualizar } from './atualizacao.js';
 import { curto, relogio, relogioGrande, horaMin, totalDeTimers, totalDoGrupo, dataDoDia, trocarTexto, msDeHoje, desdeTexto, dicaDoTotalDoDia, itensDoMenuZerar, temaResolvido, segueOSistema, REUNIAO } from './formato.js';
 import {
   secaoGrupo,
@@ -20,7 +21,9 @@ import {
   textoDaPergunta,
   opcoesDaPergunta,
   htmlDoMenuZerar,
+  esc,
 } from './componentes.js';
+import { ligarRenomear, depoisDoClique } from './renomear.js';
 import { secaoLinhaDoPainel, visaoLinha, CHAVE_LINHA } from './linha.js';
 import {
   abaAtual,
@@ -52,6 +55,7 @@ import {
   novoEspaco,
   arquivarGrupo,
   editarGrupo,
+  grupoParaSalvar,
   novoTimer,
   editarTimer,
   faixa,
@@ -74,6 +78,7 @@ import {
   decidirPedido,
   ligarAoExistente,
   TEXTO_PEDIDO_DESCARTADO,
+  GRUPO_NOME_MAX,
 } from './editar.js';
 import { montarAjustes, atualizarAjustes, esperarGravacoes, ligarAoClaude, faixaDosHooks } from './ajustes.js';
 import { inicioSemTimers, semTimers, primeiroUso } from './primeiro-uso.js';
@@ -81,7 +86,7 @@ import { NOME_APP, nomearPagina, linhaDoConsole } from './nome.js';
 import { vigiarTitulos, trocarTitulo } from './titulos.js';
 import { iniciarTour, mostrarFaixaTour, tourAtivo, passosDoTour, htmlDoMenuAjuda, redesenharTour } from './tour.js';
 import { DICAS, gatilhos, criarFila, balaoDeDica, fecharDicaAVista } from './dicas.js';
-import { TEXTOS } from './textos.js';
+import { TEXTOS, definirIdioma, idiomaDoEstado, idiomaInicial, aplicarTextos, CHAVE_IDIOMA } from './textos.js';
 import { htmlDoMenuTelas, rotuloDaTela, proximoNoMenu } from './telas.js';
 
 // as dicas longas em linhas curtas (rodada 19)
@@ -210,7 +215,7 @@ async function agir(nome, args) {
   try {
     return await chamar(nome, args);
   } catch (e) {
-    avisar(typeof e === 'string' ? e : 'Não deu certo. Tente de novo.');
+    avisar(typeof e === 'string' ? e : TEXTOS.naoDeuCerto);
     console.error(`worktimer: ${nome} falhou`, e);
     return null;
   }
@@ -256,6 +261,7 @@ aoPerderFoco((antigo) => focarPelaChave(chaveDoFoco(antigo)));
 
 /** Redesenha `fn()` guardando o foco do teclado e a rolagem das listas. */
 function preservando(fn) {
+  guardarRenomear();
   const ativo = document.activeElement;
   const chave = ativo?.closest('.corpo') ? chaveDoFoco(ativo) : null;
   const rolagem = {};
@@ -263,6 +269,81 @@ function preservando(fn) {
   fn();
   for (const el of document.querySelectorAll('.corpo [data-rolagem]')) el.scrollTop = rolagem[el.dataset.rolagem] ?? 0;
   if (chave && !document.contains(ativo)) focarPelaChave(chave);
+  campoDeRenomear();
+}
+
+// ---- renomear o grupo no lugar (rodada 24) ----
+
+/**
+ * O grupo sendo renomeado pelo ⋯ → Renomear: `{ grupoId, original, valor, ini, fim, foco }`, ou
+ * nulo. Fica aqui (e não no campo) porque um redesenho troca o HTML do cabeçalho: o campo volta
+ * com o texto, a seleção e o foco de antes.
+ */
+let renomeando = null;
+
+function renomearGrupo(grupoId) {
+  const g = snap?.grupos.find((x) => x.id === grupoId);
+  if (!g) return;
+  renomeando = { grupoId, original: g.nome, valor: g.nome, ini: 0, fim: g.nome.length, foco: true };
+  campoDeRenomear();
+}
+
+/** Antes de redesenhar: o texto, a seleção e o foco do campo de agora. */
+function guardarRenomear() {
+  const c = renomeando && document.querySelector('input.g-ren');
+  if (!c) return;
+  Object.assign(renomeando, { valor: c.value, ini: c.selectionStart ?? 0, fim: c.selectionEnd ?? 0, foco: document.activeElement === c });
+}
+
+/**
+ * O campo no cabeçalho do grupo, no lugar do botão que abre e fecha o grupo (um campo dentro de um
+ * botão não recebe as teclas). Chamado ao começar e depois de cada redesenho.
+ */
+function campoDeRenomear() {
+  const r = renomeando;
+  if (!r) return;
+  const gh = document.querySelector(`.corpo [data-acao="menu-grupo"][data-grupo="${r.grupoId}"]`)?.closest('.gh');
+  const gd = gh?.querySelector('.gd');
+  if (!gd || gh.querySelector('input.g-ren')) return;
+  const caixa = document.createElement('span');
+  caixa.className = 'gd gd-ren';
+  caixa.innerHTML = `<span class="fd" aria-hidden="true">${esc(gd.querySelector('.fd')?.textContent ?? '')}</span><input class="g-ren" type="text" maxlength="${GRUPO_NOME_MAX}" spellcheck="false" autocomplete="off" aria-label="${esc(TEXTOS.renomearGrupoRotulo(r.original))}">`;
+  const campo = caixa.querySelector('input');
+  campo.value = r.valor;
+  gd.replaceWith(caixa);
+  Object.assign(r, { caixa, cabecalho: gd });
+  ligarRenomear(campo, r.original, (nome, comTeclado) => terminarRenomear(r, nome, comTeclado));
+  if (r.foco) {
+    campo.focus({ preventScroll: true });
+    campo.setSelectionRange(r.ini, r.fim);
+  }
+}
+
+/** O instante do último `mousedown` na página: o `blur` do campo veio de um clique? */
+let ultimoMousedown = -Infinity;
+document.addEventListener('mousedown', () => (ultimoMousedown = performance.now()), true);
+
+/**
+ * Enter, Esc ou o foco saindo: grava o nome novo (se houver) e o cabeçalho volta. Na hora, só o
+ * cabeçalho volta (com o nome novo); a gravação e o redesenho esperam o clique que tirou o foco
+ * terminar (revisão da rodada 24): redesenhar no `mousedown` tiraria da página o ▶ ou o cartão
+ * clicado, e o clique se perderia.
+ */
+async function terminarRenomear(r, nome, comTeclado) {
+  if (renomeando !== r) return;
+  renomeando = null;
+  if (r.caixa?.isConnected) {
+    if (nome) {
+      const b = r.cabecalho.querySelector('b');
+      if (b) b.textContent = nome;
+    }
+    r.caixa.replaceWith(r.cabecalho);
+  }
+  if (!comTeclado) await depoisDoClique(document, ultimoMousedown);
+  const g = snap?.grupos.find((x) => x.id === r.grupoId);
+  if (nome && g) await agir('editar_grupo', { grupo: grupoParaSalvar({ ...g, nome }) });
+  desenhar();
+  if (comTeclado) document.querySelector(`.corpo [data-acao="menu-grupo"][data-grupo="${r.grupoId}"]`)?.focus();
 }
 
 // ---- desenho ----
@@ -277,7 +358,7 @@ function desenharPerguntas() {
   if (!el) return;
   const [p, ...resto] = snap.perguntas ?? [];
   const html = p
-    ? `${textoDaPergunta(p)}${opcoesDaPergunta(p)}${resto.length ? `<small class="pg-mais">+${resto.length} ${resto.length === 1 ? 'pergunta' : 'perguntas'} depois desta</small>` : ''}`
+    ? `${textoDaPergunta(p)}${opcoesDaPergunta(p)}${resto.length ? `<small class="pg-mais">${TEXTOS.perguntasDepois(resto.length)}</small>` : ''}`
     : '';
   if (el.dataset.html !== html) {
     el.dataset.html = html;
@@ -322,11 +403,11 @@ function desenhar() {
 function desenharTopoDaAba() {
   const zt = $('#bt-zerar-todos');
   if (!zt || !snap) return;
-  if (zt.dataset.padrao === undefined) zt.dataset.padrao = zt.title;
   const topo = topoDaTela(snap, visao);
   zt.dataset.espaco = topo.espaco ?? '';
   trocarTexto(zt.querySelector('.rot'), topo.texto);
-  trocarTitulo(zt, topo.dica ?? zt.dataset.padrao);
+  // em "Todos", a dica de sempre (no idioma de agora)
+  trocarTitulo(zt, topo.dica ?? TEXTOS.zerarTodosDica);
   // rodada 21: "N rodando" e "Pausar tudo" moram na linha de baixo do cabeçalho, com o escopo da
   // mesma aba
   const rodando = timersDaAba(snap, topo.espaco).filter((t) => t.rodando).length;
@@ -628,6 +709,9 @@ async function aoClicar(ev) {
       if (visao === 'ajustes') await trocarVisao(visaoAntes);
       else abrirAjustes();
       break;
+    case 'atualizar':
+      abrirAtualizar(novidade);
+      break;
     case 'tour':
       // o ? abre o menu: "Como começar", "Esta tela: …" e "Tour completo" (rodada 17)
       alternarMenuAjuda(alvo);
@@ -783,7 +867,7 @@ async function zerarTimer(id) {
 /** ↺ "Só <atividade>" (rodada 19): só ela volta a 0:00; a faixa tem o "Desfazer". */
 async function zerarAtividade(id, atividade) {
   const nome = snap.grupos.flatMap((g) => g.timers).find((t) => t.id === id)?.nome;
-  const nomeAt = (snap.atividades ?? []).find((a) => a.id === atividade)?.nome ?? 'a atividade';
+  const nomeAt = (snap.atividades ?? []).find((a) => a.id === atividade)?.nome ?? TEXTOS.aAtividade;
   const z = await agir('zerar_atividade', { timer_id: id, atividade_id: atividade });
   if (z) {
     faixaZerado(z, textoDaFaixaZeradoAtividade(nome, nomeAt));
@@ -800,14 +884,15 @@ function alternarMenuZerar(botao, timer, itens) {
 }
 
 /**
- * O ⋯ de um grupo (rodada 21): Editar, "Mover para outro espaço…" (o segundo passo lista os
- * espaços, no mesmo lugar) e Arquivar.
+ * O ⋯ de um grupo (rodada 21): Renomear (no lugar, rodada 24), Editar, "Mover para outro espaço…"
+ * (o segundo passo lista os espaços, no mesmo lugar) e Arquivar.
  */
 function alternarMenuGrupo(botao, grupoId) {
   const g = snap?.grupos.find((x) => x.id === grupoId);
   if (!g) return;
   abrirMenu(botao, htmlDoMenuGrupo(snap, g), 'esquerda', (b) => {
-    if (b.dataset.mg === 'editar') editarGrupo(snap, grupoId);
+    if (b.dataset.mg === 'renomear') renomearGrupo(grupoId);
+    else if (b.dataset.mg === 'editar') editarGrupo(snap, grupoId);
     else if (b.dataset.mg === 'arquivar') arquivarGrupo(snap, grupoId);
     else if (b.dataset.mg === 'mover') {
       abrirMenu(botao, htmlDoMenuEspacos(snap, g), 'esquerda', (e) => moverGrupo(g, Number(e.dataset.espaco)));
@@ -834,7 +919,7 @@ const DESFAZER_MOVER_MS = 10_000;
 
 async function moverGrupo(g, espacoId) {
   const m = await agir('mover_grupo', { grupo_id: g.id, espaco_id: espacoId });
-  if (m) faixa(textoDoMovido(snap, g.nome, { espacoId, espacoAntes: m.espaco_id }), 'Desfazer', () => chamar('desfazer_mover', { movido: m }), DESFAZER_MOVER_MS);
+  if (m) faixa(textoDoMovido(snap, g.nome, { espacoId, espacoAntes: m.espaco_id }), TEXTOS.desfazer, () => chamar('desfazer_mover', { movido: m }), DESFAZER_MOVER_MS);
 }
 
 async function moverTimer(t, grupoId, espacoId) {
@@ -843,7 +928,7 @@ async function moverTimer(t, grupoId, espacoId) {
   const destino = grupoId === null ? espacoId : (snap.grupos.find((g) => g.id === grupoId)?.espaco_id ?? espacoId);
   faixa(
     textoDoMovido(snap, t.nome, { grupoId, espacoId: destino, espacoAntes: m.espaco_id }),
-    'Desfazer',
+    TEXTOS.desfazer,
     () => chamar('desfazer_mover', { movido: m }),
     DESFAZER_MOVER_MS,
   );
@@ -1216,11 +1301,13 @@ function aoTeclar(ev) {
 // ---- início ----
 
 nomearPagina(document);
-for (const el of document.querySelectorAll('[data-texto]')) trocarTexto(el, TEXTOS[el.dataset.texto]);
-for (const el of document.querySelectorAll('[data-dica]')) trocarTitulo(el, TEXTOS[el.dataset.dica]);
-trocarTitulo($('#bt-telas'), TEXTOS.telasDica);
+// o idioma da primeira pintura: o último usado, ou o do Windows (rodada 23); o estado decide depois
+definirIdioma(idiomaInicial(lerLocal(CHAVE_IDIOMA, null), navigator.language));
+// os textos fixos do HTML (`data-texto`, `data-dica`, `data-rotulo`) e o `lang`
+aplicarTextos(document);
 document.addEventListener('click', aoClicar);
 document.addEventListener('keydown', aoTeclar);
+vigiarAtualizacao();
 document.addEventListener('visibilitychange', ligarRelogio);
 
 /** A leitura do estado falhou (o banco não abriu depois de trocar): o erro fica à vista. */
@@ -1236,12 +1323,71 @@ function erroDoEstado(e) {
   }
   clearTimeout(avisoId);
   el.dataset.estado = '1';
-  el.textContent = typeof e === 'string' ? e : `Não deu para ler o estado do ${NOME_APP}.`;
+  el.textContent = typeof e === 'string' ? e : TEXTOS.naoDeuLerEstado(NOME_APP);
   el.hidden = false;
+}
+
+/**
+ * O idioma do estado (rodada 23): trocado, vale na hora. Os textos fixos do HTML trocam, um menu
+ * aberto fecha, os Ajustes abertos se remontam e o tour à vista se redesenha; o resto se redesenha
+ * com o estado.
+ */
+function seguirIdioma(s) {
+  const id = idiomaDoEstado(s, navigator.language);
+  gravarLocal(CHAVE_IDIOMA, id);
+  if (!definirIdioma(id)) return;
+  aplicarTextos(document);
+  // o nome da tela no botão do menu só muda com a tela: aqui, com o idioma
+  trocarTexto($('#bt-telas .tn'), rotuloDaTela(visao ?? 'painel'));
+  menuAberto?.fechar();
+  if (visao === 'ajustes') remontarAjustesNoIdioma();
+  if (tourAtivo()) redesenharTour();
+  mostrarFaixaHooks();
+  mostrarAtualizacao(novidade);
+}
+
+// ---- a versão nova (rodada 25) ----
+
+/** A versão nova que o núcleo achou (`{ versao, notas }`), ou nula. */
+let novidade = null;
+
+/** O ícone do cabeçalho: só com versão nova, com a dica "Atualizar para 0.4.1". */
+function mostrarAtualizacao(n) {
+  novidade = n ?? null;
+  const b = $('#bt-atualizar');
+  if (!b) return;
+  const { visivel, dica } = estadoDoIcone(novidade);
+  b.hidden = !visivel;
+  b.title = dica;
+  b.setAttribute('aria-label', dica);
+}
+
+/** O que a busca desta abertura já achou, e as buscas seguintes (a automática e a dos Ajustes). */
+function vigiarAtualizacao() {
+  chamar('atualizacao_estado').then(mostrarAtualizacao, (e) => console.error('worktimer: atualizacao_estado', e));
+  ouvir('atualizacao', mostrarAtualizacao).catch((e) => console.error('worktimer: atualizacao', e));
+}
+
+/**
+ * Os Ajustes remontados no idioma novo, com a rolagem de antes e, se o foco estava no grupo do
+ * idioma (as setas já escolhem e gravam), o foco de volta no rádio escolhido: a seta seguinte
+ * continua andando (rodada 23, revisão M2).
+ */
+async function remontarAjustesNoIdioma() {
+  const el = $('#v-ajustes');
+  const rolagem = el.querySelector('.aj-corpo')?.scrollTop ?? 0;
+  const ativo = document.activeElement;
+  const noIdioma = ativo?.name === 'idioma' && el.contains(ativo);
+  await montarAjustes(el, { lerSnap, voltar: () => trocarVisao(visaoAntes) });
+  if (visao !== 'ajustes') return;
+  const corpo = el.querySelector('.aj-corpo');
+  if (corpo) corpo.scrollTop = rolagem;
+  if (noIdioma) el.querySelector('input[name="idioma"]:checked')?.focus({ preventScroll: true });
 }
 
 aoMudar((s) => {
   snap = s;
+  seguirIdioma(s);
   usarAtividades(s.atividades);
   usarCorte(s.config?.corte_min);
   usarEsperaApp(s.config?.espera_app_min);

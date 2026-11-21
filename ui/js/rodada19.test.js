@@ -4,7 +4,10 @@
 import { test } from 'node:test'; import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { linhasDeAtividade, quebrarDica, zeradoDaAtividade, contasAcumuladas, msDoTimer, msDeHoje, totalDeTimers, hojeDesdeZerar, itensDoMenuZerar, TRABALHO, REUNIAO } from './formato.js';
-import { usarAtividades, linhasAtividades, andarAtividades, htmlDoMenuZerar, botaoZerar, controles, DICA_ZERAR, DICA_ZERAR_MENU } from './componentes.js';
+import { usarAtividades, linhasAtividades, andarAtividades, htmlDoMenuZerar, botaoZerar, controles } from './componentes.js';
+import { TEXTOS } from './textos.js';
+const DICA_ZERAR = TEXTOS.dicaZerar;
+const DICA_ZERAR_MENU = TEXTOS.dicaZerarMenu;
 import { textoDaFaixaZeradoAtividade, DESFAZER_ZERAR_MS } from './editar.js';
 import { vigiarTitulos, trocarTitulo, LIMITE_DICA } from './titulos.js';
 

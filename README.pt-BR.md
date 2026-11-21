@@ -5,8 +5,12 @@
 Timers para o seu tempo de trabalho, no Windows. Você dá play à mão, ou o Chronn conta sozinho
 enquanto um app conectado trabalha numa pasta ligada ao timer (hoje: Claude Code).
 
-- **Local:** tudo roda no seu computador. O Chronn não usa IA, não coleta dados e não envia nada
-  para lugar nenhum.
+> **Alpha.** O Chronn está no começo: espere arestas e faça backup dos dados antes de atualizar.
+> Sugestões e problemas são bem-vindos em [Issues](../../issues).
+
+- **Local:** tudo roda no seu computador. O Chronn não usa IA e não coleta dados. A única conexão
+  com a internet é a busca de atualizações: uma vez por dia, ao abrir, ele pergunta ao GitHub se
+  há versão nova, sem enviar nada sobre você. Dá para desligar em Ajustes → Sobre.
 - **Você decide:** quais apps conectar, quais pastas contam e em qual timer.
 - **Para o seu controle pessoal**, não para controle empresarial.
 
@@ -19,6 +23,9 @@ enquanto um app conectado trabalha numa pasta ligada ao timer (hoje: Claude Code
   pergunta em qual timer contar.
 - Zerar sem apagar: o histórico do dia fica.
 - Tour de 1 minuto, ajuda por tela e dicas na primeira vez.
+- Português (Brasil) e inglês, seguindo o Windows ou escolhido nos Ajustes.
+- Atualiza por dentro do app: um ícone aparece quando sai versão nova, e um clique baixa, confere
+  a assinatura, instala e reabre.
 
 ## Instalar
 
@@ -37,6 +44,11 @@ Requer Rust (stable), Node.js e o Tauri 2 CLI.
     cargo test --workspace
     cd ui && npm test
     powershell -File scripts/build.ps1
+
+O `build.ps1` assina o instalador para o atualizador e espera uma chave privada em
+`%USERPROFILE%\.chronn-assinatura\chronn.key`. Para a sua própria build, crie um par de chaves com
+`cargo tauri signer generate`, guarde a privada nesse lugar e ponha a sua chave pública em
+`plugins.updater.pubkey` (`src-tauri/tauri.conf.json`).
 
 ## Licença
 

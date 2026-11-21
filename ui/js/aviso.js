@@ -16,6 +16,8 @@ async function mostrar(aviso) {
   if (!aviso) return;
   atual = aviso;
   if (aviso.tema === 'claro' || aviso.tema === 'escuro') document.documentElement.dataset.tema = aviso.tema;
+  // o texto já vem no idioma do dock; o `lang` acompanha (rodada 23)
+  if (aviso.lang) document.documentElement.lang = aviso.lang;
   raiz.innerHTML = htmlDoAviso(aviso);
   // mede depois do desenho (as fontes já carregadas)
   await document.fonts?.ready;

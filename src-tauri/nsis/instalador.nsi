@@ -774,6 +774,11 @@ Section Install
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
 
+  ; O idioma do instalador, para o desinstalador (MUI_UNGETLANGUAGE) sair no mesmo idioma sem
+  ; abrir a caixa de escolha. O MUI2 so grava ao sair da pagina de instalacao, que nao roda na
+  ; instalacao silenciosa; aqui grava sempre (rodada 23, revisao M1).
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" $LANGUAGE
+
   !if "${INSTALLMODE}" == "both"
     ; Save install mode to be selected by default for the next installation such as updating
     ; or when uninstalling

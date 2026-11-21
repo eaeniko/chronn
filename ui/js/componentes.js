@@ -1,7 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 // Peças da interface. Cada função devolve HTML (texto); os cliques são tratados
 // por delegação em quem monta a tela, pelos atributos data-acao / data-timer / data-grupo.
-import { relogio, relogioGrande, curto, horaMin, msDoTimer, contasAcumuladas, hojeDesdeZerar, desdeTexto, totalDoGrupo, rotuloDeLink, rotuloDoDestino, textoDoAjuste, podeEncerrar, tempoPorAtividade, linhasDeAtividade, itensDoMenuZerar, trocarTexto, situacaoNaTela, etiquetaComposta, ehLembrete, SITUACAO, TRABALHO, REUNIAO } from './formato.js';
+import { relogio, relogioGrande, curto, horaMin, msDoTimer, contasAcumuladas, hojeDesdeZerar, desdeTexto, totalDoGrupo, rotuloDeLink, rotuloDoDestino, textoDoAjuste, podeEncerrar, tempoPorAtividade, linhasDeAtividade, itensDoMenuZerar, trocarTexto, situacaoNaTela, etiquetaComposta, ehLembrete, SITUACAO, TRABALHO, REUNIAO, minusculas } from './formato.js';
 import { TEXTOS } from './textos.js';
 
 export { msDoTimer, rotuloDeLink, rotuloDoDestino, podeEncerrar };
@@ -82,7 +82,7 @@ export function textoLembrete(timer, agora) {
 export function motivoNaTela(timer, agora) {
   const e = etiquetaComposta(timer, agora, esperaAppMin, 'longa');
   if (e?.p2) return `<span class="etq">${htmlEtiqueta(e)}</span>`;
-  return esc(timer.motivo ?? '');
+  return esc(TEXTOS.motivo(timer.motivo));
 }
 
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -101,7 +101,7 @@ export function ajusteDoTimer(timer) {
   if (!ms) return null;
   const motivos = (timer.ajustes ?? []).map((a) => a.motivo).filter(Boolean);
   const texto = textoDoAjuste(ms);
-  return { texto, dica: `ajustado à mão: ${texto}${motivos.length ? ` · ${motivos.join('; ')}` : ''}` };
+  return { texto, dica: `${TEXTOS.ajustadoAMao(texto)}${motivos.length ? ` · ${motivos.join('; ')}` : ''}` };
 }
 
 /**
@@ -110,7 +110,7 @@ export function ajusteDoTimer(timer) {
  */
 export function marcaAjuste(timer) {
   const a = ajusteDoTimer(hojeDesdeZerar(timer));
-  return a ? `<div class="mao" title="${esc(a.dica)}">ajustado à mão: ${esc(a.texto)}</div>` : '';
+  return a ? `<div class="mao" title="${esc(a.dica)}">${esc(TEXTOS.ajustadoAMao(a.texto))}</div>` : '';
 }
 
 const ICONE = {
@@ -137,8 +137,8 @@ const iconeDaAtividade = (id) =>
 
 export function botaoPlay(timer, classe) {
   const acao = timer.rodando ? 'pausar' : 'play';
-  const dica = timer.rodando ? 'Pausar' : 'Começar';
-  return `<button class="${classe}" data-acao="${acao}" data-timer="${timer.id}" title="${dica}" aria-label="${dica} ${esc(timer.nome)}">${ICONE[acao]}</button>`;
+  const dica = timer.rodando ? TEXTOS.pausar : TEXTOS.comecar;
+  return `<button class="${classe}" data-acao="${acao}" data-timer="${timer.id}" title="${dica}" aria-label="${esc(TEXTOS.doTimer(dica, timer.nome))}">${ICONE[acao]}</button>`;
 }
 
 /**
@@ -151,14 +151,15 @@ export function botaoReuniao(timer, classe) {
   const r = atividadePorId(REUNIAO);
   if (!r || r.arquivada || timer.atividade_padrao_id === REUNIAO) return '';
   const nome = esc(r.nome);
+  const min = minusculas(nome);
   const on = timer.manual_atividade_id === REUNIAO;
   const dica = on
-    ? `Em ${nome.toLowerCase()}: clique para encerrar (o ▶ volta, se estava ligado)`
+    ? TEXTOS.reuniaoDicaOn(min)
     : timer.manual_atividade_id
-      ? `${nome}: troca o play manual por ${nome.toLowerCase()} agora`
-      : `${nome}: conta este tempo como ${nome.toLowerCase()} neste timer`;
+      ? TEXTOS.reuniaoDicaTroca(nome, min)
+      : TEXTOS.reuniaoDica(nome, min);
   const cor = /^#[0-9a-f]{3,8}$/i.test(r.cor ?? '') ? ` style="--a:${r.cor}"` : '';
-  return `<button class="${classe} reu${on ? ' on' : ''}" data-acao="${on ? 'parar-reuniao' : 'reuniao'}" data-timer="${timer.id}" title="${dica}" aria-label="${on ? `Encerrar ${nome.toLowerCase()}` : nome} — ${esc(timer.nome)}" aria-pressed="${on}"${cor}>${ICONE.reuniao}</button>`;
+  return `<button class="${classe} reu${on ? ' on' : ''}" data-acao="${on ? 'parar-reuniao' : 'reuniao'}" data-timer="${timer.id}" title="${dica}" aria-label="${TEXTOS.comTimer(on ? TEXTOS.encerrarAtividade(min) : nome, esc(timer.nome))}" aria-pressed="${on}"${cor}>${ICONE.reuniao}</button>`;
 }
 
 /**
@@ -169,9 +170,9 @@ export function botaoReuniao(timer, classe) {
 export function divisaoDoTimer(timer, agora) {
   const v = tempoPorAtividade(timer, atividades, agora);
   if (v.length < 2) return { chave: '', html: '' };
-  const chave = v.map((a) => `${curto(a.ms)} ${a.nome.toLowerCase()}`).join(' · ');
+  const chave = v.map((a) => `${curto(a.ms)} ${minusculas(a.nome)}`).join(' · ');
   const html = v
-    .map((a) => `<span><i style="--a:${cor(a.cor)}"></i>${esc(curto(a.ms))} ${esc(a.nome.toLowerCase())}</span>`)
+    .map((a) => `<span><i style="--a:${cor(a.cor)}"></i>${esc(curto(a.ms))} ${esc(minusculas(a.nome))}</span>`)
     .join('<em>·</em>');
   return { chave, html };
 }
@@ -182,7 +183,7 @@ export function divisaoDoTimer(timer, agora) {
  */
 export function linhaDivisao(timer, agora, classe = 'divat') {
   const d = divisaoDoTimer(timer, agora);
-  return `<div class="${classe}" data-divisao="${timer.id}" data-chave="${esc(d.chave)}" title="${esc(dicaDoTempo(timer, agora, 'Por atividade'))}">${d.html}</div>`;
+  return `<div class="${classe}" data-divisao="${timer.id}" data-chave="${esc(d.chave)}" title="${esc(dicaDoTempo(timer, agora, TEXTOS.porAtividade))}">${d.html}</div>`;
 }
 
 /**
@@ -214,18 +215,18 @@ export function linhasAtividades(timer, agora) {
   const nomeT = esc(timer.nome);
   const linhas = v.map((a) => {
     const nome = esc(a.nome);
-    const min = nome.toLowerCase();
+    const min = minusculas(nome);
     const cls = ['lat', a.rodando && 'on', a.rodando && a.id === REUNIAO && 'reu', a.arquivada && 'arq'].filter(Boolean).join(' ');
     const acao = a.rodando ? 'pausar-atividade' : 'play-atividade';
-    const dica = a.rodando ? `Pausar ${min}` : `Começar ${min}`;
+    const dica = a.rodando ? TEXTOS.pausarAtividade(min) : TEXTOS.comecarAtividade(min);
     const botoes = a.arquivada
       ? ''
-      : `<button class="lp" data-acao="${acao}" data-timer="${timer.id}" data-atividade="${a.id}" title="${dica}" aria-label="${dica} — ${nomeT}">${ICONE[a.rodando ? 'pausar' : 'play']}</button>` +
-        `<button class="lz" data-acao="zerar-atividade" data-timer="${timer.id}" data-atividade="${a.id}" title="Zerar só ${nome}" aria-label="Zerar só ${nome} — ${nomeT}"${a.ms >= 1000 ? '' : ' hidden'}>↺</button>` +
-        `<button class="le" data-acao="ajustar-atividade" data-timer="${timer.id}" data-atividade="${a.id}" title="Ajustar hoje: ${min}" aria-label="Ajustar hoje: ${min} — ${nomeT}">✎</button>`;
-    return `<div class="${cls}" style="--a:${cor(a.cor)}"><i class="pt" aria-hidden="true"></i><span class="lic">${iconeDaAtividade(a.id)}</span><span class="nm">${nome}</span>${a.rodando ? '<em class="st">rodando</em>' : ''}<span class="t mono" data-at="${timer.id}:${a.id}">${relogio(a.ms)}</span>${botoes}</div>`;
+      : `<button class="lp" data-acao="${acao}" data-timer="${timer.id}" data-atividade="${a.id}" title="${dica}" aria-label="${TEXTOS.comTimer(dica, nomeT)}">${ICONE[a.rodando ? 'pausar' : 'play']}</button>` +
+        `<button class="lz" data-acao="zerar-atividade" data-timer="${timer.id}" data-atividade="${a.id}" title="${TEXTOS.zerarSo(nome)}" aria-label="${TEXTOS.comTimer(TEXTOS.zerarSo(nome), nomeT)}"${a.ms >= 1000 ? '' : ' hidden'}>↺</button>` +
+        `<button class="le" data-acao="ajustar-atividade" data-timer="${timer.id}" data-atividade="${a.id}" title="${TEXTOS.ajustarHojeAtividade(min)}" aria-label="${TEXTOS.comTimer(TEXTOS.ajustarHojeAtividade(min), nomeT)}">✎</button>`;
+    return `<div class="${cls}" style="--a:${cor(a.cor)}"><i class="pt" aria-hidden="true"></i><span class="lic">${iconeDaAtividade(a.id)}</span><span class="nm">${nome}</span>${a.rodando ? `<em class="st">${TEXTOS.rodandoEtq}</em>` : ''}<span class="t mono" data-at="${timer.id}:${a.id}">${relogio(a.ms)}</span>${botoes}</div>`;
   });
-  return `<div class="lats" role="group" aria-label="Por atividade, desde o zerar">${linhas.join('')}</div>`;
+  return `<div class="lats" role="group" aria-label="${TEXTOS.porAtividadeDesdeZerar}">${linhas.join('')}</div>`;
 }
 
 /**
@@ -236,8 +237,8 @@ export function etiquetaReuniao(timer, agora) {
   if (timer.manual_atividade_id !== REUNIAO) return '';
   const r = atividadePorId(REUNIAO);
   const ms = contasAcumuladas(timer, agora).porAtividade.get(REUNIAO) ?? 0;
-  const nome = esc((r?.nome ?? 'reunião').toLowerCase());
-  return `<div class="kreu" style="--a:${cor(r?.cor)}" title="${esc(dicaDoTempo(timer, agora, `${nome}: o tempo dela`))}"><b>${nome}</b><span class="mono" data-at-hm="${timer.id}:${REUNIAO}">${horaMin(ms)}</span></div>`;
+  const nome = esc(minusculas(r?.nome ?? TEXTOS.reuniaoMin));
+  return `<div class="kreu" style="--a:${cor(r?.cor)}" title="${esc(dicaDoTempo(timer, agora, TEXTOS.tempoDela(nome)))}"><b>${nome}</b><span class="mono" data-at-hm="${timer.id}:${REUNIAO}">${horaMin(ms)}</span></div>`;
 }
 
 /**
@@ -268,10 +269,6 @@ export function andarAtividades(raiz, timers, agora) {
   }
 }
 
-/** Dica do ■: o que ele faz e o que desfaz. */
-export const DICA_ENCERRAR =
-  'Encerrar: terminei isso por agora. Para o timer e tira do dock o lembrete "esperando você"; volta quando você escrever numa sessão dele ou der play';
-
 /**
  * ■ Encerrar, ao lado do play/pause. Sem nada para encerrar (parado, sem lembrete), não aparece;
  * com `fixo`, fica apagado no lugar (onde a fileira de botões não deve pular).
@@ -279,13 +276,14 @@ export const DICA_ENCERRAR =
 export function botaoEncerrar(timer, classe, fixo = false) {
   const pode = podeEncerrar(timer);
   if (!pode && !fixo) return '';
-  const dica = pode ? DICA_ENCERRAR : timer.encerrado ? 'Encerrado: volta com uma mensagem sua numa sessão dele ou com o play' : 'Nada para encerrar';
-  return `<button class="${classe} enc" data-acao="encerrar" data-timer="${timer.id}" title="${esc(dica)}" aria-label="Encerrar ${esc(timer.nome)}"${pode ? '' : ' disabled'}>${ICONE.encerrar}</button>`;
+  // a dica do ■: o que ele faz e o que desfaz
+  const dica = pode ? TEXTOS.dicaEncerrar : timer.encerrado ? TEXTOS.dicaEncerrado : TEXTOS.nadaParaEncerrar;
+  return `<button class="${classe} enc" data-acao="encerrar" data-timer="${timer.id}" title="${esc(dica)}" aria-label="${esc(TEXTOS.doTimer(TEXTOS.encerrar, timer.nome))}"${pode ? '' : ' disabled'}>${ICONE.encerrar}</button>`;
 }
 
 /** Texto embaixo do relógio do timer encerrado (parado). */
 export const textoEncerrado = (timer) =>
-  !timer.rodando && timer.encerrado ? 'encerrado · volta com uma mensagem sua ou com o play' : '';
+  !timer.rodando && timer.encerrado ? TEXTOS.textoEncerrado : '';
 
 /** O texto de encerrado, apagado (no lugar do motivo, que vem na cor do timer). */
 export function marcaEncerrado(timer) {
@@ -300,7 +298,7 @@ export function marcaEncerrado(timer) {
  */
 export function marcaAjusteCartao(timer, curta = false) {
   const a = ajusteDoTimer(hojeDesdeZerar(timer));
-  return a ? `<em class="mao" title="${esc(a.dica)}">${esc(a.texto)}${curta ? '' : ' à mão'}</em>` : '';
+  return a ? `<em class="mao" title="${esc(a.dica)}">${esc(curta ? a.texto : TEXTOS.comAMao(a.texto))}</em>` : '';
 }
 
 /**
@@ -375,7 +373,7 @@ export const semTimerNenhum = () => `<p class="vazio">${esc(TEXTOS.nenhumTimer)}
  */
 export const barraRodando = (rodando, texto = TEXTOS.pausarTudo, espaco = null) =>
   rodando > 0
-    ? `<div class="rd"><span>${rodando} rodando</span><button class="pa" data-acao="pausar-tudo" data-espaco="${espaco ?? ''}">${esc(texto)}</button></div>`
+    ? `<div class="rd"><span>${esc(TEXTOS.rodando(rodando))}</span><button class="pa" data-acao="pausar-tudo" data-espaco="${espaco ?? ''}">${esc(texto)}</button></div>`
     : '';
 
 /**
@@ -387,7 +385,7 @@ export function cabecalhoGrupo(grupo, agora, aberto, classe = 'gh') {
   const total = totalDoGrupo(grupo.timers, agora, grupo.real_antes_ms ?? 0);
   const n = grupo.timers.length;
   const links = linksDoGrupo(grupo);
-  const selo = links ? esc(links) : aberto ? '' : `${n} ${n === 1 ? 'timer' : 'timers'}`;
+  const selo = links ? esc(links) : aberto ? '' : esc(TEXTOS.nTimers(n));
   // rodada 21: o ⋯ do grupo (Editar, Mover para outro espaço…, Arquivar), menos no "Sem grupo"
   const editar =
     grupo.id === null
@@ -438,13 +436,6 @@ export function etiquetaDesde(timer, agora) {
   return `<div class="desde" data-desde="${timer.id}">${esc(desdeTexto(timer.zerado_em, agora, corteMin))}</div>`;
 }
 
-/** Dica do ↺: o que ele faz (e que nada é apagado). */
-export const DICA_ZERAR =
-  'Zerar: o número volta a 0:00 agora e conta daqui em diante. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão';
-
-/** Dica do ↺ que abre o menu (revisão da rodada 19): duas ou mais atividades com tempo. */
-export const DICA_ZERAR_MENU = 'Zerar: escolher o timer todo ou uma atividade. Nada é apagado';
-
 /**
  * O ↺ do timer (painel do timer, Foco e cartões). Com duas ou mais atividades com tempo desde o
  * zerar, ele abre o menu (`itensDoMenuZerar`): a dica diz que abre a escolha, e o botão leva
@@ -454,7 +445,7 @@ export function botaoZerar(timer, classe = '', agora = Date.now()) {
   const menu = itensDoMenuZerar(timer, atividades, agora).length > 0;
   const cls = classe ? `class="${classe}" ` : '';
   const extra = menu ? ' aria-haspopup="menu" aria-expanded="false"' : '';
-  return `<button ${cls}data-acao="zerar" data-timer="${timer.id}" title="${esc(menu ? DICA_ZERAR_MENU : DICA_ZERAR)}" aria-label="Zerar ${esc(timer.nome)}"${extra}>↺</button>`;
+  return `<button ${cls}data-acao="zerar" data-timer="${timer.id}" title="${esc(menu ? TEXTOS.dicaZerarMenu : TEXTOS.dicaZerar)}" aria-label="${esc(TEXTOS.zerarTimer(timer.nome))}"${extra}>↺</button>`;
 }
 
 /**
@@ -462,7 +453,7 @@ export function botaoZerar(timer, classe = '', agora = Date.now()) {
  * ("timer" ou "atividade") e `data-atividade` dizem o que zerar.
  */
 export const htmlDoMenuZerar = (timer, itens) =>
-  `<div class="menu-ajuda menu-zerar" role="menu" aria-label="Zerar ${esc(timer.nome)}">${itens
+  `<div class="menu-ajuda menu-zerar" role="menu" aria-label="${esc(TEXTOS.zerarTimer(timer.nome))}">${itens
     .map(
       (it) =>
         `<button type="button" role="menuitem" data-zerar="${it.zerar}" data-timer="${timer.id}"${it.id === undefined ? '' : ` data-atividade="${it.id}"`}>${esc(it.rotulo)}</button>`,
@@ -479,7 +470,7 @@ export function controles(timer, agora = Date.now()) {
   ${botaoReuniao(timer, 'rc')}
   ${botaoPlay(timer, 'big')}
   ${botaoEncerrar(timer, 'ec', true)}
-  <button data-acao="editar" data-timer="${timer.id}" title="Editar" aria-label="Editar o timer">✎</button>
+  <button data-acao="editar" data-timer="${timer.id}" title="${TEXTOS.editar}" aria-label="${TEXTOS.editarOTimer}">✎</button>
 </div>`;
 }
 
@@ -531,16 +522,13 @@ export function pedidoDeLigar(d, aviso = null) {
  */
 export function textoDaPergunta(p) {
   if (p.tipo === 'sessao_nova' && p.pasta) {
-    return `<div class="ask-t">Sessão nova do Claude. Em qual timer contar?</div><div class="ask-pasta" title="${esc(p.pasta)}">${esc(p.pasta_curta || p.pasta)}</div>`;
+    return `<div class="ask-t">${esc(TEXTOS.sessaoNovaPergunta)}</div><div class="ask-pasta" title="${esc(p.pasta)}">${esc(p.pasta_curta || p.pasta)}</div>`;
   }
   return `<div class="ask-t">${esc(p.texto)}</div>`;
 }
 
-export const ESTADO_SESSAO = {
-  trabalhando: 'trabalhando',
-  esperando_voce: 'esperando você',
-  parada: 'parada',
-};
+/** O estado de uma sessão na tela ("trabalhando", "esperando você", "parada"). */
+export const estadoDaSessao = (estado) => TEXTOS.estadoSessao(estado);
 
 /**
  * O que o cabeçalho do grupo mostra dos links dele: "projeto: INV - Inovação · P146 · card padrão: I7"
@@ -548,8 +536,8 @@ export const ESTADO_SESSAO = {
  */
 export function linksDoGrupo(grupo) {
   const partes = [];
-  if (grupo?.link_projeto) partes.push(`projeto: ${rotuloDoDestino(grupo.link_projeto, grupo.link_projeto_nome)}`);
-  if (grupo?.card_padrao) partes.push(`card padrão: ${rotuloDoDestino(grupo.card_padrao, grupo.card_padrao_nome)}`);
+  if (grupo?.link_projeto) partes.push(TEXTOS.linkProjeto(rotuloDoDestino(grupo.link_projeto, grupo.link_projeto_nome)));
+  if (grupo?.card_padrao) partes.push(TEXTOS.linkCardPadrao(rotuloDoDestino(grupo.card_padrao, grupo.card_padrao_nome)));
   return partes.join(' · ');
 }
 
@@ -574,29 +562,29 @@ export function destinoDoGrupo(grupo) {
 
 /** Texto do destino: o card do timer, o card padrão ou o projeto do grupo, ou nenhum. */
 export function textoDoCard(timer, grupo) {
-  if (timer.link_card) return { texto: `Card: ${rotuloDoDestino(timer.link_card, timer.link_card_nome)}`, herdado: false };
+  if (timer.link_card) return { texto: TEXTOS.cardDoTimer(rotuloDoDestino(timer.link_card, timer.link_card_nome)), herdado: false };
   const g = destinoDoGrupo(grupo);
-  if (g) return { texto: `${g.tipo === 'card' ? 'Card padrão do grupo' : 'Projeto do grupo'}: ${g.rotulo}`, herdado: true };
-  return { texto: 'Sem card definido', herdado: true };
+  if (g) return { texto: g.tipo === 'card' ? TEXTOS.cardPadraoDoGrupo(g.rotulo) : TEXTOS.projetoDoGrupo(g.rotulo), herdado: true };
+  return { texto: TEXTOS.semCard, herdado: true };
 }
 
 /** "Onde estas horas vão": o card do timer (ou o padrão do grupo) e as sessões ligadas. */
 export function destino(timer, grupo) {
   const c = textoDoCard(timer, grupo);
-  const acao = timer.link_card ? 'trocar card' : destinoDoGrupo(grupo) ? 'usar outro card' : 'definir card';
+  const acao = timer.link_card ? TEXTOS.trocarCard : destinoDoGrupo(grupo) ? TEXTOS.usarOutroCard : TEXTOS.definirCard;
   const card = `<div class="l${c.herdado ? ' inh' : ''}"><span class="sn">${esc(c.texto)}</span>
   <button class="em" data-acao="editar" data-timer="${timer.id}">${acao}</button></div>`;
   const sessoes = timer.sessoes
     .map(
-      (s) => `<div class="l s"><span class="sn" title="${esc(s.cwd)}">${esc(s.nome)}</span><em>${esc(ESTADO_SESSAO[s.estado] ?? s.estado)}</em>
-  <button class="x" data-acao="editar-sessao" data-sessao="${esc(s.id)}" data-timer="${timer.id}" title="Ver e mudar a sessão" aria-label="Ver e mudar ${esc(s.nome)}">✎</button>
-  <button class="x" data-acao="desligar" data-sessao="${esc(s.id)}" title="Desligar a sessão" aria-label="Desligar ${esc(s.nome)}">✕</button></div>`,
+      (s) => `<div class="l s"><span class="sn" title="${esc(s.cwd)}">${esc(s.nome)}</span><em>${esc(estadoDaSessao(s.estado))}</em>
+  <button class="x" data-acao="editar-sessao" data-sessao="${esc(s.id)}" data-timer="${timer.id}" title="${TEXTOS.verMudarSessao}" aria-label="${esc(TEXTOS.verMudar(s.nome))}">✎</button>
+  <button class="x" data-acao="desligar" data-sessao="${esc(s.id)}" title="${TEXTOS.desligarSessao}" aria-label="${esc(TEXTOS.desligar(s.nome))}">✕</button></div>`,
     )
     .join('');
   return `<div class="dest">
-  <h5>Onde estas horas vão</h5>
+  <h5>${TEXTOS.ondeAsHorasVao}</h5>
   ${card}
-  ${sessoes ? `<h5 class="h5-ses">Sessões do Claude ligadas a este timer</h5>${sessoes}` : ''}
-  <button class="l add" data-acao="ligar-sessao" data-timer="${timer.id}">+ Ligar uma sessão</button>
+  ${sessoes ? `<h5 class="h5-ses">${TEXTOS.sessoesLigadas}</h5>${sessoes}` : ''}
+  <button class="l add" data-acao="ligar-sessao" data-timer="${timer.id}">${TEXTOS.ligarSessaoMais}</button>
 </div>`;
 }

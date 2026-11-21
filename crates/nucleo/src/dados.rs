@@ -28,12 +28,12 @@ fn texto<E: std::fmt::Display>(e: E) -> String {
 /// de ela virar o banco do app.
 pub fn conferir_banco(caminho: &Path) -> Result<(), String> {
     let conn = Connection::open_with_flags(caminho, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| format!("não consegui abrir {}: {e}", caminho.display()))?;
+        .map_err(|e| crate::idioma::tfa("erro.copia_abrir", &[&e.to_string()]))?;
     let r: String = conn
         .query_row("PRAGMA quick_check", [], |r| r.get(0))
-        .map_err(|e| format!("a cópia do banco não confere: {e}"))?;
+        .map_err(|e| crate::idioma::tfa("erro.copia_nao_confere", &[&e.to_string()]))?;
     if r != "ok" {
-        return Err(format!("a cópia do banco não confere: {r}"));
+        return Err(crate::idioma::tfa("erro.copia_nao_confere", &[&r]));
     }
     Ok(())
 }
@@ -45,7 +45,8 @@ pub fn conferir_banco(caminho: &Path) -> Result<(), String> {
 pub struct Backup {
     /// Nome do arquivo (`2026-11-18_0930.db`; no mesmo minuto, `2026-11-18_0930-2.db`).
     pub nome: String,
-    /// Data e hora para a tela ("18/11/2026 09:30").
+    /// Data e hora locais, ISO ("2026-11-18T09:30"): a tela formata pelo idioma (rodada 23,
+    /// revisão I1).
     pub quando: String,
     pub bytes: u64,
     #[serde(skip)]
@@ -83,7 +84,7 @@ pub fn listar(dir: &Path) -> Vec<Backup> {
             let nome = e.file_name().to_string_lossy().into_owned();
             let (momento, n) = ler_nome(&nome)?;
             let m = e.metadata().ok().filter(|m| m.is_file())?;
-            Some(Backup { quando: momento.format("%d/%m/%Y %H:%M").to_string(), nome, bytes: m.len(), momento, n })
+            Some(Backup { quando: momento.format("%Y-%m-%dT%H:%M").to_string(), nome, bytes: m.len(), momento, n })
         })
         .collect();
     v.sort_by_key(|b| std::cmp::Reverse((b.momento, b.n)));
@@ -102,7 +103,7 @@ pub fn backup_devido(ultimo: Option<NaiveDateTime>, agora: NaiveDateTime, abertu
 /// Faz um backup do banco em `dir` com o nome da hora `agora` (local). Grava num temporário e
 /// renomeia: um backup pela metade nunca aparece na lista. Não roda a rotação.
 pub fn fazer_backup(banco: &Banco, dir: &Path, agora: NaiveDateTime) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("não consegui criar a pasta dos backups: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| crate::idioma::tfa("erro.backup_pasta", &[&e.to_string()]))?;
     let mut n = 1;
     let (destino, tmp) = loop {
         let nome = nome_do_backup(agora, n);
@@ -116,11 +117,11 @@ pub fn fazer_backup(banco: &Banco, dir: &Path, agora: NaiveDateTime) -> Result<P
     let _ = std::fs::remove_file(&tmp);
     banco.copiar_para(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("não consegui fazer o backup: {e}")
+        crate::idioma::tfa("erro.backup_fazer", &[&e.to_string()])
     })?;
     std::fs::rename(&tmp, &destino).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("não consegui fazer o backup: {e}")
+        crate::idioma::tfa("erro.backup_fazer", &[&e.to_string()])
     })?;
     Ok(destino)
 }
@@ -187,7 +188,7 @@ pub fn backup_antes_de_migrar(banco: &Path, dir: &Path, agora: NaiveDateTime) ->
     if versao == 0 || versao >= crate::banco::VERSAO_ESQUEMA {
         return Ok(None);
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("não consegui criar a pasta dos backups: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| crate::idioma::tfa("erro.backup_pasta", &[&e.to_string()]))?;
     let mut n = 1;
     let destino = loop {
         let d = dir.join(nome_antes_de_migrar(versao, agora, n));
@@ -216,14 +217,14 @@ pub fn backup_antes_de_migrar(banco: &Path, dir: &Path, agora: NaiveDateTime) ->
 /// confere a cópia. Recusa o arquivo que não é um banco do app.
 pub fn copiar_backup(backup: &Path, destino: &Path) -> Result<(), String> {
     let conn = Connection::open_with_flags(backup, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| format!("não consegui abrir o backup: {e}"))?;
+        .map_err(|e| crate::idioma::tfa("erro.backup_abrir", &[&e.to_string()]))?;
     let ok: bool = conn
         .query_row("SELECT count(*) = 2 FROM sqlite_master WHERE type = 'table' AND name IN ('timers', 'trechos')", [], |r| r.get(0))
-        .map_err(|e| format!("o backup não é um banco do app: {e}"))?;
+        .map_err(|e| format!("{}: {e}", crate::idioma::tfa("erro.backup_nao_e_banco", &[])))?;
     if !ok {
-        return Err("o backup não é um banco do app".into());
+        return Err(crate::idioma::tfa("erro.backup_nao_e_banco", &[]));
     }
-    conn.execute("VACUUM INTO ?1", [destino.to_string_lossy()]).map_err(|e| format!("não consegui copiar o backup: {e}"))?;
+    conn.execute("VACUUM INTO ?1", [destino.to_string_lossy()]).map_err(|e| crate::idioma::tfa("erro.backup_copiar", &[&e.to_string()]))?;
     drop(conn);
     if let Err(e) = conferir_banco(destino) {
         let _ = std::fs::remove_file(destino);
@@ -351,7 +352,7 @@ mod testes {
         assert_eq!(lido.timers().unwrap()[0].nome, "A");
         let l = listar(&dir);
         assert_eq!(l.iter().map(|b| b.nome.as_str()).collect::<Vec<_>>(), ["2026-11-18_0900-2.db", "2026-11-18_0900.db"]);
-        assert_eq!(l[1].quando, "18/11/2026 09:00");
+        assert_eq!(l[1].quando, "2026-11-18T09:00");
         assert!(l[1].bytes > 0);
         assert!(!dir.join("2026-11-18_0900.db.tmp").exists());
     }
@@ -416,7 +417,7 @@ mod testes {
         assert_eq!(std::fs::read(&bk).unwrap(), antes, "o backup não muda");
         let outro = d.path().join("outro.db");
         Connection::open(&outro).unwrap().execute("CREATE TABLE x (a)", []).unwrap();
-        assert!(copiar_backup(&outro, &d.path().join("y.db")).unwrap_err().contains("não é um banco do app"));
+        assert!(copiar_backup(&outro, &d.path().join("y.db")).unwrap_err().contains("não é um banco do"));
         std::fs::write(d.path().join("texto.db"), "não sou banco").unwrap();
         assert!(copiar_backup(&d.path().join("texto.db"), &d.path().join("z.db")).is_err());
     }

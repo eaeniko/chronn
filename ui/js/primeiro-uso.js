@@ -10,25 +10,22 @@ import { abrirDialogo, PALETA, avisoPastaMae } from './editar.js';
 import { linhas, faltamCriar } from './formato.js';
 import { corpoPrevia, corpoInstalado, lerPrevia, gravarPastas, htmlConexaoClaude } from './ajustes.js';
 import { NOME_APP, PERFIL_TESTE } from './nome.js';
+import { TEXTOS, aoTrocarIdioma } from './textos.js';
 
 /** Os passos do assistente, na ordem (o das pastas só com timers criados). */
 export const PASSOS_DO_PRIMEIRO_USO = ['boas-vindas', 'timers', 'claude', 'pastas', 'windows', 'pronto'];
 
-/** O nome de cada passo, no título. */
-export const NOMES_DOS_PASSOS = {
-  'boas-vindas': 'Boas-vindas',
-  timers: 'Grupo e timers',
-  claude: 'Conectar apps',
-  pastas: 'Pastas dos projetos',
-  windows: 'Iniciar com o Windows',
-  pronto: 'Pronto',
-};
+/** O nome de cada passo, no título (no idioma de agora). */
+export const NOMES_DOS_PASSOS = Object.fromEntries(
+  PASSOS_DO_PRIMEIRO_USO.map((id) => [id, null]),
+);
+for (const id of PASSOS_DO_PRIMEIRO_USO) Object.defineProperty(NOMES_DOS_PASSOS, id, { enumerable: true, get: () => TEXTOS.puPassos[id] });
 
 const TOTAL = PASSOS_DO_PRIMEIRO_USO.length;
 const numero = (id) => PASSOS_DO_PRIMEIRO_USO.indexOf(id) + 1;
 
 /** O título do passo, com o número: "1 de 6 · Boas-vindas". */
-export const tituloDoPasso = (id) => `${numero(id)} de ${TOTAL} · ${NOMES_DOS_PASSOS[id]}`;
+export const tituloDoPasso = (id) => TEXTOS.puTitulo(numero(id), TOTAL, NOMES_DOS_PASSOS[id]);
 
 /** O que o assistente ligou (para o resumo do "Pronto"). */
 let feito = { timers: 0, claude: false, pastas: 0 };
@@ -36,44 +33,45 @@ let feito = { timers: 0, claude: false, pastas: 0 };
 /** O passo "Pastas dos projetos" aparece? Com algum timer criado (com ou sem app conectado). */
 export const temPassoDasPastas = ({ timers }) => (timers?.length ?? 0) > 0;
 
-const plural = (n, um, varios, nenhum) => (n === 0 ? nenhum : n === 1 ? `1 ${um}` : `${n} ${varios}`);
-
 /** O resumo do "Pronto": "2 timers · Claude Code conectado · 1 pasta". */
 export function resumoDoPronto({ timers = 0, claude = false, pastas = 0 } = {}) {
-  return [
-    plural(timers, 'timer', 'timers', 'nenhum timer'),
-    claude ? 'Claude Code conectado' : 'nenhum app conectado',
-    plural(pastas, 'pasta', 'pastas', 'nenhuma pasta'),
-  ].join(' · ');
+  return [TEXTOS.puNTimers(timers), claude ? TEXTOS.claudeConectado : TEXTOS.puNenhumApp, TEXTOS.puNPastas(pastas)].join(' · ');
 }
 
+// Os textos do assistente que outros módulos (e os testes) leem daqui, no idioma de agora: um
+// `export let` refeito a cada troca de idioma (rodada 23).
 /** As boas-vindas: o que o app é e o que ele não faz (rodada 18). */
-export const TEXTO_BOAS_VINDAS = `O ${NOME_APP} conta o seu tempo por timer: no play, ou sozinho quando um app conectado trabalha numa pasta ligada ao timer.`;
-export const TEXTO_LOCAL = `Tudo roda neste computador. O ${NOME_APP} não usa IA, não coleta dados e não envia nada para lugar nenhum. Você decide o que conectar e quais pastas contam. É para o seu controle pessoal.`;
-
+export let TEXTO_BOAS_VINDAS;
+export let TEXTO_LOCAL;
 /** O que é grupo e o que é timer. */
-export const TEXTO_GRUPO = 'Um grupo junta timers, como um cliente ou uma área. Cada timer é um projeto ou atividade.';
-
+export let TEXTO_GRUPO;
 /** O passo "Conectar apps". */
-export const TEXTO_CONECTAR = `Conecte os apps que você usa e o ${NOME_APP} conta sozinho enquanto eles trabalham. Por enquanto: Claude Code.`;
-
+export let TEXTO_CONECTAR;
 /** A explicação do passo das pastas (genérica: vale para qualquer app). */
-export const TEXTO_PASTAS =
-  'Cada app conectado trabalha numa pasta (por exemplo, a do projeto aberto no Claude Code). Ligue a pasta a um timer e o tempo dela conta lá sozinho.';
-
+export let TEXTO_PASTAS;
 /** A frase do fim do passo das pastas, sempre. */
-export const TEXTO_NAO_ACHOU = `Não achou? Sem problema: na primeira conversa nova, o ${NOME_APP} pergunta em qual timer contar e pode lembrar a pasta.`;
-
+export let TEXTO_NAO_ACHOU;
 /** O aviso do perfil de teste no passo de conectar (rodada 17). */
-export const AVISO_PERFIL_TESTE = 'Perfil de teste: o Claude Code real não é alterado';
+export let AVISO_PERFIL_TESTE;
+function textosDoModulo() {
+  TEXTO_BOAS_VINDAS = TEXTOS.puBoasVindas(NOME_APP);
+  TEXTO_LOCAL = TEXTOS.puLocal(NOME_APP);
+  TEXTO_GRUPO = TEXTOS.puGrupo;
+  TEXTO_CONECTAR = TEXTOS.puConectar(NOME_APP);
+  TEXTO_PASTAS = TEXTOS.puPastas;
+  TEXTO_NAO_ACHOU = TEXTOS.puNaoAchou(NOME_APP);
+  AVISO_PERFIL_TESTE = TEXTOS.puAvisoTeste;
+}
+textosDoModulo();
+aoTrocarIdioma(textosDoModulo);
 
 const DIA = 24 * 60 * 60 * 1000;
 
 /** "usado hoje", "usado ontem", "usado há 2 dias" (sem data: "escolhida agora"). */
 export function textoUsadoHa(usadoEm, agora = Date.now()) {
-  if (typeof usadoEm !== 'number') return 'escolhida agora';
+  if (typeof usadoEm !== 'number') return TEXTOS.puEscolhidaAgora;
   const dias = Math.max(0, Math.floor((agora - usadoEm) / DIA));
-  return dias === 0 ? 'usado hoje' : dias === 1 ? 'usado ontem' : `usado há ${dias} dias`;
+  return dias === 0 ? TEXTOS.puUsadoHoje : dias === 1 ? TEXTOS.puUsadoOntem : TEXTOS.puUsadoHa(dias);
 }
 
 /** A pasta comparável (sem diferenciar maiúsculas, `/` = `\\`, sem barra no fim), como o núcleo. */
@@ -88,14 +86,14 @@ export function linhaDoRecente(linha, i, timers, agora = Date.now()) {
   const avisos = [];
   const timer = timers.find((t) => t.id === linha.timer_id);
   if (linha.conf?.pasta_mae && timer) avisos.push(avisoPastaMae(esc(timer.nome)));
-  if (linha.conf?.outro_timer_nome && timer) avisos.push(`A regra desta pasta é de ${esc(linha.conf.outro_timer_nome)}: ela passa para ${esc(timer.nome)}.`);
+  if (linha.conf?.outro_timer_nome && timer) avisos.push(TEXTOS.puRegraDeOutro(esc(linha.conf.outro_timer_nome), esc(timer.nome)));
   // o timer escolhido sempre marcado, mesmo fora da lista (revisão da rodada 21)
   const lista = ['<option value="">—</option>'].concat(timers.map((t) => `<option value="${t.id}">${esc(t.nome)}</option>`)).join('');
-  const opcoes = linha.timer_id ? comOAtual(lista, linha.timer_id, 'Timer') : lista.replace('<option value="">', '<option value="" selected>');
+  const opcoes = linha.timer_id ? comOAtual(lista, linha.timer_id, TEXTOS.novoTimer) : lista.replace('<option value="">', '<option value="" selected>');
   return `<li class="pu-recente" data-i="${i}">
   <span class="pu-recente-nome" title="${esc(linha.pasta)}">${esc(linha.nome)}</span>
   <small class="pu-recente-uso">${esc(textoUsadoHa(linha.usado_em, agora))}</small>
-  <select data-recente="${i}" aria-label="Timer de ${esc(linha.nome)}">${opcoes}</select>
+  <select data-recente="${i}" aria-label="${esc(TEXTOS.puTimerDe(linha.nome))}">${opcoes}</select>
   ${avisos.map((a) => `<p class="dlg-aviso">${a}</p>`).join('')}${linha.erro ? `<p class="pu-pasta-erro" role="alert">${esc(linha.erro)}</p>` : ''}
 </li>`;
 }
@@ -103,11 +101,11 @@ export function linhaDoRecente(linha, i, timers, agora = Date.now()) {
 /** O corpo do passo das pastas: o texto, a lista (se houver), "Escolher outra pasta…" e o "Não achou?". */
 export function corpoDasPastas(linhasRecentes, timers, erro = '', agora = Date.now()) {
   const lista = linhasRecentes.length
-    ? `<p class="pu-sub">Projetos recentes neste PC</p><ul class="pu-recentes">${linhasRecentes.map((l, i) => linhaDoRecente(l, i, timers, agora)).join('')}</ul>`
+    ? `<p class="pu-sub">${TEXTOS.puRecentes}</p><ul class="pu-recentes">${linhasRecentes.map((l, i) => linhaDoRecente(l, i, timers, agora)).join('')}</ul>`
     : '';
   return `<p class="dlg-p">${TEXTO_PASTAS}</p>
 <div class="pu-pastas-corpo">${lista}</div>
-<div class="aj-bts"><button type="button" class="bt mini" data-pu="outra">Escolher outra pasta…</button></div>
+<div class="aj-bts"><button type="button" class="bt mini" data-pu="outra">${TEXTOS.puOutraPasta}</button></div>
 ${erro ? `<p class="pu-pasta-erro" role="alert">${esc(erro)}</p>` : ''}
 <p class="pu-nao-achou">${TEXTO_NAO_ACHOU}</p>`;
 }
@@ -172,8 +170,8 @@ function boasVindas(semCriarTimers = false) {
     classe: 'pu',
     corpo: `<p class="dlg-p">${TEXTO_BOAS_VINDAS}</p>
 <p class="dlg-p pu-local">${TEXTO_LOCAL}</p>`,
-    enviar: 'Começar',
-    cancelar: 'Agora não',
+    enviar: TEXTOS.comecar,
+    cancelar: TEXTOS.agoraNao,
     aoEnviar: () => (semCriarTimers ? ligarClaude() : criarTimers()),
   });
 }
@@ -187,21 +185,21 @@ function criarTimers() {
     titulo: tituloDoPasso('timers'),
     classe: 'pu',
     corpo: `<p class="dlg-p">${TEXTO_GRUPO}</p>
-<label class="campo"><span>Nome do grupo</span><input type="text" name="grupo" placeholder="Ex.: Cliente A" autocomplete="off" spellcheck="false" autofocus></label>
-<label class="campo"><span>Timers</span><textarea name="timers" rows="4" spellcheck="false" placeholder="Um por linha. Ex.:&#10;Projeto X&#10;Reuniões&#10;Estudos"></textarea><small>Um por linha. Depois dá para criar mais, editar e arquivar.</small></label>`,
-    enviar: 'Criar',
-    cancelar: 'Pular',
+<label class="campo"><span>${TEXTOS.puNomeDoGrupo}</span><input type="text" name="grupo" placeholder="${esc(TEXTOS.puGrupoPlaceholder)}" autocomplete="off" spellcheck="false" autofocus></label>
+<label class="campo"><span>${TEXTOS.timersRotulo}</span><textarea name="timers" rows="4" spellcheck="false" placeholder="${esc(TEXTOS.puTimersPlaceholder).replace(/\n/g, '&#10;')}"></textarea><small>${TEXTOS.puTimersDica}</small></label>`,
+    enviar: TEXTOS.criar,
+    cancelar: TEXTOS.pular,
     aoCancelar: () => ligarClaude(),
     async aoEnviar(form) {
       const nome = form.elements.grupo.value.trim();
       const timers = linhas(form.elements.timers.value);
       if (!nome) {
         form.elements.grupo.focus();
-        throw 'Dê um nome ao grupo.';
+        throw TEXTOS.puDeUmNome;
       }
       if (!timers.length) {
         form.elements.timers.focus();
-        throw 'Escreva pelo menos um timer.';
+        throw TEXTOS.puUmTimer;
       }
       if (grupoId === null) {
         const s = await chamar('criar_grupo', { nome, cor: PALETA[0] });
@@ -263,14 +261,14 @@ async function ligarClaude() {
   const conectar = encontrado && estado !== 'ligado';
   const p = conectar ? await lerPrevia() : { settings: '' };
   if (p.erro) {
-    return depoisDoClaude(`<p class="dlg-p">Não deu para conectar o Claude Code agora (${esc(p.erro)}). Dá para tentar depois em Ajustes → Conexões.</p>`);
+    return depoisDoClaude(`<p class="dlg-p">${TEXTOS.puNaoConectou(esc(p.erro))}</p>`);
   }
   abrirDialogo({
     titulo: tituloDoPasso('claude'),
     classe: 'pu largo',
     corpo: corpoConectarApps({ estado, encontrado, settings: p.settings, previa: p.previa, pastas: p.pastas }),
-    enviar: conectar ? (estado === 'antigo' ? 'Atualizar' : 'Conectar') : 'Continuar',
-    cancelar: conectar ? 'Pular' : null,
+    enviar: conectar ? (estado === 'antigo' ? TEXTOS.atualizar : TEXTOS.conectar) : TEXTOS.continuar,
+    cancelar: conectar ? TEXTOS.pular : null,
     aoCancelar: () => depoisDoClaude(''),
     async aoEnviar(form) {
       if (!conectar) return depoisDoClaude('');
@@ -278,7 +276,7 @@ async function ligarClaude() {
       await gravarPastas(form);
       const copia = await chamar('hooks_instalar');
       feito.claude = true;
-      await depoisDoClaude(`<div class="pu-ok"><p class="dlg-p"><b>Claude Code conectado.</b></p>${corpoInstalado(copia)}</div>`);
+      await depoisDoClaude(`<div class="pu-ok"><p class="dlg-p"><b>${TEXTOS.claudeConectado}.</b></p>${corpoInstalado(copia)}</div>`);
     },
   });
 }
@@ -310,8 +308,8 @@ export async function pastasDosProjetos(timers, aviso = '', recentes = null) {
     titulo: tituloDoPasso('pastas'),
     classe: 'pu largo',
     corpo: `${aviso}<div class="pu-pastas-passo">${corpo()}</div>`,
-    enviar: 'Continuar',
-    cancelar: 'Pular',
+    enviar: TEXTOS.continuar,
+    cancelar: TEXTOS.pular,
     aoCancelar: () => iniciarComWin(''),
     aoMontar(form) {
       const caixa = form.querySelector('.pu-pastas-passo');
@@ -329,7 +327,7 @@ export async function pastasDosProjetos(timers, aviso = '', recentes = null) {
             if (conf.erro) linha.erro = conf.erro;
             else linha.conf = conf;
           } catch (e) {
-            linha.erro = typeof e === 'string' ? e : 'Não deu certo. Tente de novo.';
+            linha.erro = typeof e === 'string' ? e : TEXTOS.naoDeuCerto;
           }
         }
         desenhar();
@@ -341,7 +339,7 @@ export async function pastasDosProjetos(timers, aviso = '', recentes = null) {
         if (!b || b.disabled) return;
         b.disabled = true;
         try {
-          const pasta = await chamar('escolher_pasta', { inicial: null, titulo: 'Pasta de um projeto' });
+          const pasta = await chamar('escolher_pasta', { inicial: null, titulo: TEXTOS.puPastaDeUmProjeto });
           if (!pasta) return;
           const conf = await chamar('conferir_regra', { pasta, timer_id: null });
           if (conf.erro) {
@@ -351,7 +349,7 @@ export async function pastasDosProjetos(timers, aviso = '', recentes = null) {
             acrescentarPasta(linhasRecentes, conf);
           }
         } catch (e) {
-          erro = typeof e === 'string' ? e : 'Não deu certo. Tente de novo.';
+          erro = typeof e === 'string' ? e : TEXTOS.naoDeuCerto;
         } finally {
           desenhar();
         }
@@ -375,12 +373,12 @@ async function iniciarComWin(aviso) {
     titulo: tituloDoPasso('windows'),
     classe: 'pu',
     corpo: `${aviso}
-<p class="dlg-p">Aberto desde o começo do dia, o ${NOME_APP} não perde nenhuma sessão do Claude.</p>
-<div class="escolhas" role="radiogroup" aria-label="Iniciar com o Windows">
-  <label class="esc"><input type="radio" name="auto" value="sim" checked autofocus><span><b>Sim</b><small>Abre na bandeja quando você entra no Windows.</small></span></label>
-  <label class="esc"><input type="radio" name="auto" value="nao"><span><b>Não</b><small>Você abre quando quiser.${atual ? ' (Hoje ele já inicia com o Windows.)' : ''}</small></span></label>
+<p class="dlg-p">${TEXTOS.puWindowsTexto(NOME_APP)}</p>
+<div class="escolhas" role="radiogroup" aria-label="${TEXTOS.iniciarComWindows}">
+  <label class="esc"><input type="radio" name="auto" value="sim" checked autofocus><span><b>${TEXTOS.sim}</b><small>${TEXTOS.puSimDica}</small></span></label>
+  <label class="esc"><input type="radio" name="auto" value="nao"><span><b>${TEXTOS.nao}</b><small>${TEXTOS.puNaoDica}${atual ? ` ${TEXTOS.puJaInicia}` : ''}</small></span></label>
 </div>`,
-    enviar: 'Continuar',
+    enviar: TEXTOS.continuar,
     cancelar: null,
     async aoEnviar(form) {
       const sim = form.elements.auto.value === 'sim';
@@ -402,10 +400,10 @@ export function pronto(resumo = feito) {
     classe: 'pu',
     corpo: `
 <p class="pu-resumo">${esc(resumoDoPronto(resumo))}</p>
-<p class="dlg-p">O ${NOME_APP} fica na bandeja do Windows, e o dock mostra o que está rodando. Quer ver o essencial? O tour leva 1 minuto.</p>
-<p class="dlg-p">Tudo isso muda depois em Ajustes (⚙).</p>`,
-    enviar: 'Fazer o tour (1 min)',
-    cancelar: 'Agora não',
+<p class="dlg-p">${TEXTOS.puProntoTexto(NOME_APP)}</p>
+<p class="dlg-p">${TEXTOS.puProntoMuda}</p>`,
+    enviar: TEXTOS.puFazerTour,
+    cancelar: TEXTOS.agoraNao,
     // o foco começa no "Fazer o tour (1 min)" (revisão)
     aoMontar(form) {
       form.querySelector('[type="submit"]')?.setAttribute('autofocus', '');

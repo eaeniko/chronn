@@ -41,6 +41,9 @@ export async function aoMudar(fn, aoErro = () => {}) {
   return parar;
 }
 
+/** Ouve um evento do núcleo: `fn(payload)`. Devolve (numa promessa) a função que para de ouvir. */
+export const ouvir = (nome, fn) => tauri().event.listen(nome, (e) => fn(e.payload));
+
 /** Iniciar com o Windows (pelo núcleo; no perfil de teste, só a config): o estado real. */
 export const iniciarComWindows = {
   // pelo núcleo (rodada 17): no perfil normal, o registro;

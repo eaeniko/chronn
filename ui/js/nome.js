@@ -1,4 +1,6 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
+import { TEXTOS } from './textos.js';
+
 /**
  * Nome de exibição do app (provisório). A constante única é `nucleo::APP_NOME`, no Rust: o app
  * põe o nome em `globalThis.NOME_APP` antes de qualquer script das páginas (`main.rs`), e os
@@ -19,7 +21,7 @@ export const linhaDoConsole = () => `${NOME_APP} · © 2026 ${AUTOR} · eaeniko.
 export const PERFIL_TESTE = globalThis.PERFIL_TESTE === true;
 
 /** A marca pequena do perfil de teste (o dock). */
-export const marcaDeTeste = (teste = PERFIL_TESTE) => (teste ? '<span class="dteste" title="Perfil de teste">teste</span>' : '');
+export const marcaDeTeste = (teste = PERFIL_TESTE) => (teste ? `<span class="dteste" title="${TEXTOS.perfilDeTeste}">${TEXTOS.marcaTeste}</span>` : '');
 
 /** Põe o nome nos lugares fixos do HTML (`data-nome-app`) e no título da página. */
 export function nomearPagina(doc, sufixo = '') {

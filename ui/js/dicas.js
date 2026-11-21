@@ -5,39 +5,39 @@
 // posicionamento do tour); o que acontece no dock (com o dock à vista) vai na janela de aviso.
 // Das duas janelas, mostra a que pedir primeiro ao núcleo (`dica_reivindicar`).
 import { ladoDoBalao } from './tour.js';
+import { TEXTOS } from './textos.js';
 
 const minutos = (s) => Math.max(1, Math.round((Number(s) || 600) / 60));
 
 /** As dicas. `alvo(snap)`: a parte da tela na janela principal; `texto(snap)`: o que diz. */
 export const DICAS = {
   claude_contando: {
-    texto: () => 'Este timer anda sozinho quando o Claude Code trabalha numa pasta ligada a ele.',
+    texto: () => TEXTOS.dicaClaudeContando,
     alvo: (snap) => cartaoCom(snap, (t) => t.situacao === 'trabalhando'),
   },
   pergunta: {
-    texto: () => 'Uma conversa nova do Claude começou. Escolha aqui em qual timer ela conta.',
+    texto: () => TEXTOS.dicaPergunta,
     alvo: () => '#perguntas',
   },
   esperando: {
-    texto: () => 'O Claude terminou e o timer parou de contar. A etiqueta “esperando você” lembra que ele espera sua resposta.',
+    texto: () => TEXTOS.dicaEsperando,
     alvo: (snap) => cartaoCom(snap, (t) => t.situacao === 'esperando'),
   },
   inatividade: {
-    texto: (snap) =>
-      `Depois de ${minutos(snap?.config?.inatividade_s)} min sem mexer no PC, os timers pausam e o app pergunta o que fazer com o tempo fora. Esse tempo muda em Ajustes → Tempos (no modo desenvolvedor).`,
+    texto: (snap) => TEXTOS.dicaInatividade(minutos(snap?.config?.inatividade_s)),
     alvo: () => '#perguntas',
   },
   dock_expande: {
-    texto: () => 'Arraste o dock para onde quiser. O − recolhe, e o ícone na bandeja esconde ou mostra o dock.',
+    texto: () => TEXTOS.dicaDockExpande,
     alvo: () => null,
     soNoDock: true,
   },
   zerar: {
-    texto: () => 'Zerar não apaga nada: o histórico do dia continua.',
+    texto: () => TEXTOS.dicaZerarNaoApaga,
     alvo: () => '#bt-zerar-todos',
   },
   manual_mais: {
-    texto: () => 'O ▶ manual e o Claude contam juntos neste timer. O tempo não conta em dobro.',
+    texto: () => TEXTOS.dicaManualMais,
     alvo: (snap) => cartaoCom(snap, (t) => t.situacao === 'manual' && Boolean(t.situacao_claude)),
   },
 };
@@ -136,7 +136,7 @@ export function criarFila({ ligadas, vistas, podeMostrar, reivindicar, mostrar, 
 /** O balão de uma dica (o texto e os dois botões). */
 export const htmlDaDica = (texto) =>
   `<p id="dica-t">${String(texto).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])}</p>
-<div class="dica-pe"><button type="button" class="dica-nao" data-dica="desligar">Não mostrar mais dicas</button><button type="button" class="bt pri" data-dica="entendi">Entendi</button></div>`;
+<div class="dica-pe"><button type="button" class="dica-nao" data-dica="desligar">${TEXTOS.naoMostrarDicas}</button><button type="button" class="bt pri" data-dica="entendi">${TEXTOS.entendi}</button></div>`;
 
 /** A dica à vista na janela principal (para fechar no meio). */
 let balaoAtual = null;

@@ -5,11 +5,17 @@
 // Sem dependência do Painel: o dock também usa `ligarATimer` (opção "Outro timer…" / "Escolher timer…" da pergunta).
 // Cada função recebe o snapshot atual; erros dos comandos aparecem dentro do diálogo.
 import { chamar } from './api.js';
-import { esc, cor, ESTADO_SESSAO, ajusteDoTimer, atividadesAtivas, atividadePorId, comOAtual } from './componentes.js';
-import { codigosDoLink, deltaDoAjuste, textoDoAjuste, TRABALHO } from './formato.js';
+import { esc, cor, estadoDaSessao, ajusteDoTimer, atividadesAtivas, atividadePorId, comOAtual } from './componentes.js';
+import { codigosDoLink, deltaDoAjuste, textoDoAjuste, TRABALHO, minusculas } from './formato.js';
 import { NOME_APP } from './nome.js';
 import { espacosAtivos, comAbas, gruposPorEspaco, espacoPreEscolhido, ESPACO_PRIMEIRO } from './espacos.js';
-import { TEXTOS } from './textos.js';
+import { TEXTOS, aoTrocarIdioma } from './textos.js';
+
+// os textos que outros módulos leem daqui (`export let`), refeitos a cada troca de idioma
+aoTrocarIdioma(() => {
+  TEXTO_ZERADOS_TODOS = TEXTOS.zeradosTodos;
+  TEXTO_PEDIDO_DESCARTADO = TEXTOS.pedidoDescartado;
+});
 
 /** Paleta fixa dos timers e grupos (a mesma dos mockups). */
 export const PALETA = [
@@ -25,7 +31,7 @@ export const PALETA = [
   '#7d808a',
 ];
 
-const texto = (e) => (typeof e === 'string' ? e : 'Não deu certo. Tente de novo.');
+const texto = (e) => (typeof e === 'string' ? e : TEXTOS.naoDeuCerto);
 export { texto as textoDoErro };
 const vazioParaNulo = (s) => (s.trim() === '' ? null : s.trim());
 
@@ -117,10 +123,10 @@ function montarDialogo(
   {
     titulo,
     corpo,
-    enviar = 'Salvar',
+    enviar = TEXTOS.salvar,
     perigo = false,
     voltar = null,
-    cancelar = voltar ? 'Voltar' : 'Cancelar',
+    cancelar = voltar ? TEXTOS.voltarBt : TEXTOS.cancelar,
     aoCancelar = voltar,
     classe = '',
     protegido = false,
@@ -280,11 +286,11 @@ export function faixa(msg, botao = null, aoClicar = null, ms = 4000) {
 export const DESFAZER_ENCERRAR_MS = 10_000;
 
 /** Texto da faixa depois do ■. */
-export const textoDaFaixaEncerrado = (nome) => (nome ? `${nome} encerrado.` : 'Encerrado.');
+export const textoDaFaixaEncerrado = (nome) => TEXTOS.faixaEncerrado(nome);
 
 /** Faixa "<timer> encerrado. Desfazer" por 10 s, como a do zerar. */
 export function faixaEncerrado(timerId, nome) {
-  return faixa(textoDaFaixaEncerrado(nome), 'Desfazer', () => chamar('desfazer_encerrar', { timer_id: timerId }), DESFAZER_ENCERRAR_MS);
+  return faixa(textoDaFaixaEncerrado(nome), TEXTOS.desfazer, () => chamar('desfazer_encerrar', { timer_id: timerId }), DESFAZER_ENCERRAR_MS);
 }
 
 // ---- faixa "Cliente A zerado. Desfazer" ----
@@ -293,14 +299,13 @@ export function faixaEncerrado(timerId, nome) {
 export const DESFAZER_ZERAR_MS = 10_000;
 
 /** Texto da faixa depois do ↺. */
-export const textoDaFaixaZerado = (nome) => (nome ? `${nome} zerado.` : 'Zerado.');
+export const textoDaFaixaZerado = (nome) => TEXTOS.faixaZerado(nome);
 
 /** Texto da faixa depois do ↺ "Só <atividade>" (rodada 19). */
-export const textoDaFaixaZeradoAtividade = (timer, atividade) =>
-  `${timer ? `${timer}: ` : ''}só ${atividade} voltou a 0:00.`;
+export const textoDaFaixaZeradoAtividade = (timer, atividade) => TEXTOS.faixaZeradoAtividade(timer, atividade);
 
-/** Texto da faixa depois do "Zerar todos". */
-export const TEXTO_ZERADOS_TODOS = 'Todos os timers zerados.';
+/** Texto da faixa depois do "Zerar todos" (no idioma de agora: um `export let` refeito na troca). */
+export let TEXTO_ZERADOS_TODOS = TEXTOS.zeradosTodos;
 
 /**
  * Faixa do zerar (sem diálogo de confirmação: nada é apagado) por 10 s; o "Desfazer" volta o
@@ -308,10 +313,16 @@ export const TEXTO_ZERADOS_TODOS = 'Todos os timers zerados.';
  * devolveu.
  */
 export function faixaZerado(zerado, texto) {
-  return faixa(texto, 'Desfazer', () => chamar('desfazer_zerar', { zerado }), DESFAZER_ZERAR_MS);
+  return faixa(texto, TEXTOS.desfazer, () => chamar('desfazer_zerar', { zerado }), DESFAZER_ZERAR_MS);
 }
 
 // ---- campos ----
+
+/**
+ * O nome de um grupo vai até isto de letras (revisão da rodada 24): o mesmo no "Novo grupo", no
+ * "Editar grupo", no grupo novo do editar timer e no Renomear do ⋯ (e no núcleo, `GRUPO_NOME_MAX`).
+ */
+export const GRUPO_NOME_MAX = 60;
 
 const campoTexto = (nome, rotulo, valor = '', dica = '', extra = '') => `<label class="campo">
   <span>${rotulo}</span>
@@ -319,7 +330,7 @@ const campoTexto = (nome, rotulo, valor = '', dica = '', extra = '') => `<label 
   ${dica ? `<small>${dica}</small>` : ''}
 </label>`;
 
-function campoCor(atualCor, nome = 'cor', legenda = 'Cor') {
+function campoCor(atualCor, nome = 'cor', legenda = TEXTOS.cor) {
   const c = cor(atualCor);
   const cores = PALETA.includes(c) ? PALETA : [...PALETA, c];
   const sw = cores
@@ -336,7 +347,7 @@ function campoCor(atualCor, nome = 'cor', legenda = 'Cor') {
  * ajuste à mão, arquivar), fechado por padrão. `resumo` diz, ainda fechado, o que já tem dentro.
  */
 export const maisOpcoes = (conteudo, aberto = false, resumo = '') =>
-  `<details class="mais"${aberto ? ' open' : ''}><summary>Mais opções${resumo ? ` <small>${esc(resumo)}</small>` : ''}</summary><div class="mais-corpo">${conteudo}</div></details>`;
+  `<details class="mais"${aberto ? ' open' : ''}><summary>${TEXTOS.maisOpcoes}${resumo ? ` <small>${esc(resumo)}</small>` : ''}</summary><div class="mais-corpo">${conteudo}</div></details>`;
 
 /** Foca o campo, abrindo antes o "Mais opções" em que ele estiver. */
 function focar(el) {
@@ -383,11 +394,11 @@ export function campoGrupo(snap, grupoId, espacoId = espacoPreEscolhido(snap, nu
       ? `${grupoArquivado ?? TEXTOS.grupo} (${TEXTOS.arquivado})`
       : `${TEXTOS.semGrupo} · ${espacoAtual?.nome ?? TEXTOS.espaco} (${TEXTOS.arquivado})`;
   const marcadas = atual === '' ? ops.replace(`<option value="">`, `<option value="" selected>`) : comOAtual(ops, atual, rotuloFora);
-  return `<label class="campo"><span>Grupo</span><select name="grupo">${marcadas}<option value="${NOVO_GRUPO}">+ Novo grupo…</option></select></label>
+  return `<label class="campo"><span>${TEXTOS.grupo}</span><select name="grupo">${marcadas}<option value="${NOVO_GRUPO}">${TEXTOS.novoGrupoOp}</option></select></label>
 <div class="timer-espaco" hidden>${campoEspaco(snap, espacoId, 'espaco', TEXTOS.espacoDoGrupoNovoDica)}</div>
 <div class="grupo-novo" hidden>
-  ${campoTexto('grupo_nome', 'Nome do grupo novo', '', '', 'placeholder="ex.: Clientes"')}
-  ${campoCor(corLivre(grupos.map((g) => g.cor)), 'grupo_cor', 'Cor do grupo')}
+  ${campoTexto('grupo_nome', TEXTOS.nomeDoGrupoNovo, '', '', `maxlength="${GRUPO_NOME_MAX}" placeholder="${esc(TEXTOS.grupoPlaceholder)}"`)}
+  ${campoCor(corLivre(grupos.map((g) => g.cor)), 'grupo_cor', TEXTOS.corDoGrupo)}
 </div>`;
 }
 
@@ -439,7 +450,7 @@ function ligarNovoGrupo(form) {
 export function grupoDoForm(valor, nomeNovo, corNova) {
   if (valor === NOVO_GRUPO) {
     const nome = String(nomeNovo ?? '').trim();
-    if (!nome) throw 'Dê um nome ao grupo novo';
+    if (!nome) throw TEXTOS.deUmNomeAoGrupo;
     return { novo: { nome, cor: corNova } };
   }
   // o "Sem grupo" de um espaço (rodada 21)
@@ -483,7 +494,7 @@ async function grupoDoTimer(form, snap, feito) {
   }
   const s = await chamar('criar_grupo', { nome: g.novo.nome, cor: g.novo.cor, espaco_id: espacoDoForm(form) });
   const novo = s.grupos.find((x) => x.id === maiorId(s.grupos));
-  if (!novo) throw 'Não achei o grupo novo. Tente de novo.';
+  if (!novo) throw TEXTOS.naoAcheiGrupoNovo;
   feito.grupo = novo;
   return novo.id;
 }
@@ -512,7 +523,7 @@ async function arquivarSobra(feito, usado) {
 export function campoLink(nome, rotulo, valor, dica, nomeDoNome, rotuloDoNome, valorDoNome, card = false) {
   return `${campoTexto(nome, rotulo, valor, dica, `data-link="${nomeDoNome}"${card ? ' data-card="1"' : ''}`)}<label class="campo">
   <span>${rotuloDoNome}</span>
-  <input type="text" name="${nomeDoNome}" value="${esc(valorDoNome ?? '')}" autocomplete="off" spellcheck="false" placeholder="ex.: INV - Inovação">
+  <input type="text" name="${nomeDoNome}" value="${esc(valorDoNome ?? '')}" autocomplete="off" spellcheck="false" placeholder="${esc(TEXTOS.linkNomePlaceholder)}">
   <small data-codigo="${nomeDoNome}">${esc(dicaDoCodigo(valor, card))}</small>
 </label>`;
 }
@@ -523,10 +534,10 @@ export function campoLink(nome, rotulo, valor, dica, nomeDoNome, rotuloDoNome, v
  */
 export function dicaDoCodigo(link, card = false) {
   const { projeto, item } = codigosDoLink(link);
-  const codigo = item ? `item ${item}${projeto ? ` do projeto ${projeto}` : ''}` : projeto ? `projeto ${projeto}` : null;
-  const aviso = card && String(link ?? '').trim() && !item ? 'Atenção: este link não aponta para um item (card) do Zoho Sprints. ' : '';
-  if (codigo) return `${aviso}O link traz só o código (${codigo}). O nome é opcional e aparece na tela junto com ele.`;
-  return `${aviso}Opcional, e só vale com o link. Aparece na tela no lugar do link.`;
+  const codigo = item ? TEXTOS.codigoItem(item, projeto) : projeto ? TEXTOS.codigoProjeto(projeto) : null;
+  const aviso = card && String(link ?? '').trim() && !item ? `${TEXTOS.linkNaoEItem} ` : '';
+  if (codigo) return `${aviso}${TEXTOS.linkTrazCodigo(codigo)}`;
+  return `${aviso}${TEXTOS.nomeOpcional}`;
 }
 
 /** O que identifica o destino de um link: o código do Zoho (item, senão projeto) ou o próprio link. */
@@ -548,7 +559,7 @@ export function nomeAoTrocarLink({ linkAntes, nomeAntes, linkAgora, nomeAgora, l
   if (mudou) {
     // o nome antigo (ou já tirado e ainda vazio) sai; um nome escrito pela pessoa fica
     if (nomeAgora === nomeAntes || (limpo && nomeAgora === '')) {
-      return { nome: '', aviso: `O link mudou: o nome "${antes}" saiu. Escreva de novo se ainda vale.`, limpo: true };
+      return { nome: '', aviso: TEXTOS.linkMudou(antes), limpo: true };
     }
     return parado;
   }
@@ -584,9 +595,9 @@ function ligarCodigos(form) {
 export function opcoesDeAtividade(ativas, escolhida) {
   const atual = atividadePorId(escolhida);
   return comOAtual(
-    ativas.map((a) => `<option value="${a.id}">${esc(a.nome)}${a.arquivada ? ' (arquivada)' : ''}</option>`).join(''),
+    ativas.map((a) => `<option value="${a.id}">${esc(a.nome)}${a.arquivada ? ` (${TEXTOS.arquivada})` : ''}</option>`).join(''),
     escolhida,
-    `${atual?.nome ?? 'Atividade'} (arquivada)`,
+    `${atual?.nome ?? TEXTOS.atividade} (${TEXTOS.arquivada})`,
   );
 }
 
@@ -599,24 +610,22 @@ export function opcoesDeAtividade(ativas, escolhida) {
  */
 export function campoAjuste(timer, ativas = atividadesAtivas(), escolhida = null) {
   const a = ajusteDoTimer(timer);
-  const hoje = a
-    ? `Hoje já tem ${esc(a.texto)} à mão. Para desfazer, ajuste ao contrário.`
-    : `Para o que o ${NOME_APP} não viu (uma reunião longe do PC) ou contou a mais.`;
+  const hoje = a ? TEXTOS.hojeJaTem(esc(a.texto)) : TEXTOS.ajustePara(NOME_APP);
   const padrao = escolhida ?? timer.atividade_padrao_id ?? TRABALHO;
   const seletor =
     ativas.length > 1
-      ? `<span class="am-de">de</span><select name="aj_atividade" aria-label="Atividade do ajuste">${opcoesDeAtividade(ativas, ativas.some((x) => x.id === padrao) ? padrao : ativas[0].id)}</select>`
+      ? `<span class="am-de">${TEXTOS.ajusteDe}</span><select name="aj_atividade" aria-label="${TEXTOS.atividadeDoAjuste}">${opcoesDeAtividade(ativas, ativas.some((x) => x.id === padrao) ? padrao : ativas[0].id)}</select>`
       : escolhida !== null
         ? `<input type="hidden" name="aj_atividade" value="${Number(escolhida)}">`
         : '';
-  return `<fieldset class="campo ajuste-mao"><legend>Ajustar hoje</legend>
+  return `<fieldset class="campo ajuste-mao"><legend>${TEXTOS.ajustarHoje}</legend>
 <div class="am-linha">
-  <select name="aj_sinal" aria-label="A mais ou a menos"><option value="+">a mais</option><option value="-">a menos</option></select>
-  <input type="text" name="aj_min" inputmode="numeric" autocomplete="off" placeholder="0" aria-label="Minutos do ajuste"><em>min</em>${seletor}
+  <select name="aj_sinal" aria-label="${TEXTOS.aMaisOuAMenos}"><option value="+">${TEXTOS.aMais}</option><option value="-">${TEXTOS.aMenos}</option></select>
+  <input type="text" name="aj_min" inputmode="numeric" autocomplete="off" placeholder="0" aria-label="${TEXTOS.minutosDoAjuste}"><em>${TEXTOS.min}</em>${seletor}
 </div>
-<input type="text" name="aj_motivo" maxlength="80" autocomplete="off" placeholder="Motivo (opcional)" aria-label="Motivo do ajuste">
+<input type="text" name="aj_motivo" maxlength="80" autocomplete="off" placeholder="${TEXTOS.motivoOpcional}" aria-label="${TEXTOS.motivoDoAjuste}">
 <small>${hoje}</small>
-<button type="button" class="am-desc" data-descartar>Descartar o tempo de hoje…</button>
+<button type="button" class="am-desc" data-descartar>${TEXTOS.descartarHoje}</button>
 </fieldset>`;
 }
 
@@ -655,7 +664,7 @@ function nomeObrigatorio(form) {
   const nome = ler(form, 'nome').trim();
   if (!nome) {
     form.elements.nome.focus();
-    throw 'O nome não pode ficar vazio';
+    throw TEXTOS.nomeVazio;
   }
   return nome;
 }
@@ -674,10 +683,10 @@ const maiorId = (v) => v.reduce((m, x) => (x.id !== null && x.id > m ? x.id : m)
 export function novoGrupo(snap, espacoId = espacoPreEscolhido(snap, null)) {
   return new Promise((ok) => {
     abrirDialogo({
-      titulo: 'Novo grupo',
-      enviar: 'Criar',
+      titulo: TEXTOS.tituloNovoGrupo,
+      enviar: TEXTOS.criar,
       corpo:
-        campoTexto('nome', 'Nome', '', '', 'autofocus') +
+        campoTexto('nome', TEXTOS.nome, '', '', `autofocus maxlength="${GRUPO_NOME_MAX}"`) +
         campoEspaco(snap, espacoId) +
         campoCor(corLivre(snap.grupos.map((g) => g.cor))) +
         camposDoGrupo({}),
@@ -700,14 +709,14 @@ export function novoGrupo(snap, espacoId = espacoPreEscolhido(snap, null)) {
 
 /** Links do grupo e os nomes deles. */
 const camposDoGrupo = (g) =>
-  campoLink('link_projeto', 'Link do projeto', g.link_projeto, '', 'link_projeto_nome', 'Nome do projeto', g.link_projeto_nome) +
+  campoLink('link_projeto', TEXTOS.linkDoProjeto, g.link_projeto, '', 'link_projeto_nome', TEXTOS.nomeDoProjeto, g.link_projeto_nome) +
   campoLink(
     'card_padrao',
-    'Card padrão',
+    TEXTOS.cardPadrao,
     g.card_padrao,
-    'os timers do grupo sem card próprio lançam aqui',
+    TEXTOS.cardPadraoDica,
     'card_padrao_nome',
-    'Nome do card padrão',
+    TEXTOS.nomeDoCardPadrao,
     g.card_padrao_nome,
     true,
   );
@@ -728,13 +737,13 @@ export function editarGrupo(snap, grupoId) {
   const g = snap.grupos.find((x) => x.id === grupoId);
   if (!g) return;
   abrirDialogo({
-    titulo: 'Editar grupo',
+    titulo: TEXTOS.tituloEditarGrupo,
     corpo:
-      campoTexto('nome', 'Nome', g.nome, '', 'autofocus') +
+      campoTexto('nome', TEXTOS.nome, g.nome, '', `autofocus maxlength="${GRUPO_NOME_MAX}"`) +
       campoEspaco(snap, g.espaco_id ?? ESPACO_PRIMEIRO) +
       campoCor(g.cor) +
       camposDoGrupo(g) +
-      caixa('arquivado', 'Arquivar o grupo', 'O grupo e os timers dele saem das listas.'),
+      caixa('arquivado', TEXTOS.arquivarOGrupo, TEXTOS.arquivarOGrupoDica),
     aoMontar: ligarCodigos,
     async aoEnviar(form) {
       const nome = nomeObrigatorio(form);
@@ -774,9 +783,9 @@ export function novoEspaco(snap) {
   return new Promise((ok) => {
     abrirDialogo({
       titulo: TEXTOS.tituloNovoEspaco,
-      enviar: 'Criar',
+      enviar: TEXTOS.criar,
       corpo:
-        campoTexto('nome', 'Nome', '', '', `autofocus maxlength="24" placeholder="${esc(TEXTOS.espacoPlaceholder)}"`) +
+        campoTexto('nome', TEXTOS.nome, '', '', `autofocus maxlength="24" placeholder="${esc(TEXTOS.espacoPlaceholder)}"`) +
         campoCor(corLivre((snap.espacos ?? []).map((e) => e.cor))),
       async aoEnviar(form) {
         const nome = nomeObrigatorio(form);
@@ -791,8 +800,7 @@ export function novoEspaco(snap) {
 // ---- timers ----
 
 /** Aviso da pasta-mãe (rodada 15): uma regra nela pegaria vários projetos. */
-export const avisoPastaMae = (timerNome) =>
-  `Esta pasta tem vários projetos dentro. Toda conversa aberta nela vai para ${timerNome}.`;
+export const avisoPastaMae = (timerNome) => TEXTOS.avisoPastaMae(timerNome);
 
 /**
  * "Sempre que for nesta pasta" (`conf`: a conferência da regra, `{ pasta_mae, outro_timer_nome }`).
@@ -803,9 +811,9 @@ export const avisoPastaMae = (timerNome) =>
 export function campoRegra(pasta, conf, timerNome) {
   const avisos = [];
   if (conf?.pasta_mae) avisos.push(avisoPastaMae(timerNome));
-  if (conf?.outro_timer_nome) avisos.push(`A regra desta pasta é de ${esc(conf.outro_timer_nome)}: marcar passa a regra para ${timerNome}.`);
+  if (conf?.outro_timer_nome) avisos.push(TEXTOS.regraDeOutroMarcar(esc(conf.outro_timer_nome), timerNome));
   return (
-    caixa('regra', 'Sempre que for nesta pasta', esc(pasta), avisos.length === 0) +
+    caixa('regra', TEXTOS.sempreNestaPasta, esc(pasta), avisos.length === 0) +
     avisos.map((a) => `<p class="dlg-aviso" role="note">${a}</p>`).join('')
   );
 }
@@ -816,8 +824,8 @@ export function campoRegra(pasta, conf, timerNome) {
  * "sempre nesta pasta" já marcado (a regra de pasta, como no "Ligar"), menos numa pasta-mãe.
  */
 export const camposDaSessao = (pedido) =>
-  `<p class="dlg-p">Sessão nova do Claude na pasta <code class="aj-cam">${esc(pedido.pasta)}</code>: ela passa a contar no timer novo, desde o início.</p>` +
-  campoRegra(pedido.pasta, pedido, 'o timer novo');
+  `<p class="dlg-p">${TEXTOS.sessaoNovaNaPasta(`<code class="aj-cam">${esc(pedido.pasta)}</code>`)}</p>` +
+  campoRegra(pedido.pasta, pedido, TEXTOS.oTimerNovo);
 
 const nomeComparavel = (s) => String(s ?? '').trim().toLowerCase();
 
@@ -848,8 +856,8 @@ export function decidirPedido(snap, pedido) {
   return t ? { ligarA: t } : { criar: true };
 }
 
-/** Aviso quando o pedido é descartado (a pergunta da sessão já saiu). */
-export const TEXTO_PEDIDO_DESCARTADO = 'A sessão já foi ligada a um timer: nada foi criado.';
+/** Aviso quando o pedido é descartado (a pergunta da sessão já saiu; um `export let` refeito na troca de idioma). */
+export let TEXTO_PEDIDO_DESCARTADO = TEXTOS.pedidoDescartado;
 
 /**
  * "Já existe <timer>": ligar a sessão a ele (desde o início, com a regra se marcada) em vez de
@@ -860,10 +868,10 @@ export function ligarAoExistente(timer, pedido, criarOutro) {
   return new Promise((ok) => {
     let trocou = false;
     abrirDialogo({
-      titulo: `Já existe <span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`,
-      corpo: `<p class="dlg-p">Ligar a sessão a ele, em vez de criar outro timer com o mesmo nome?</p>${camposDaSessao(pedido)}`,
-      enviar: `Ligar a ${esc(timer.nome)}`,
-      cancelar: 'Criar outro',
+      titulo: TEXTOS.jaExiste(`<span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`),
+      corpo: `<p class="dlg-p">${TEXTOS.ligarAEleEmVez}</p>${camposDaSessao(pedido)}`,
+      enviar: TEXTOS.ligarA(esc(timer.nome)),
+      cancelar: TEXTOS.criarOutro,
       aoCancelar() {
         trocou = true;
         ok(criarOutro());
@@ -897,12 +905,12 @@ export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = fal
   const feito = { grupo: null, timer: null };
   return new Promise((ok) => {
     abrirDialogo({
-      titulo: 'Novo timer',
-      enviar: 'Criar',
+      titulo: TEXTOS.tituloNovoTimer,
+      enviar: TEXTOS.criar,
       // só nome, grupo e cor à vista; o resto em "Mais opções" (aberto quando veio de uma sessão,
       // com o "sempre nesta pasta" à vista)
       corpo:
-        campoTexto('nome', 'Nome', pedido?.nome ?? '', '', 'autofocus') +
+        campoTexto('nome', TEXTOS.nome, pedido?.nome ?? '', '', 'autofocus') +
         campoGrupo(snap, grupo?.id ?? null, espacoId ?? espacoPreEscolhido(snap, null)) +
         campoCor(corInicial) +
         maisOpcoes((pedido ? camposDaSessao(pedido) : '') + campoCard({}), Boolean(pedido)),
@@ -950,7 +958,7 @@ export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = fal
 }
 
 const campoCard = (t) =>
-  campoLink('link_card', 'Link do card', t.link_card, 'vazio = usa o card padrão do grupo', 'link_card_nome', 'Nome do card', t.link_card_nome, true);
+  campoLink('link_card', TEXTOS.linkDoCard, t.link_card, TEXTOS.linkDoCardDica, 'link_card_nome', TEXTOS.nomeDoCard, t.link_card_nome, true);
 
 const cardDoTimer = (form) => {
   const [link_card, link_card_nome] = linkComNome(form, 'link_card', 'link_card_nome');
@@ -968,12 +976,12 @@ export function ajusteDoForm(form) {
   if (!min) {
     if (!motivo) return null;
     focar(form.elements.aj_min);
-    throw 'Ajuste: diga quantos minutos.';
+    throw TEXTOS.ajusteDigaMinutos;
   }
   const delta = deltaDoAjuste(ler(form, 'aj_sinal'), min);
   if (delta === null) {
     focar(form.elements.aj_min);
-    throw 'Ajuste: use um número inteiro de minutos, de 1 a 1440.';
+    throw TEXTOS.ajusteInteiro;
   }
   const at = ler(form, 'aj_atividade');
   return { delta_ms: delta, motivo, atividade_id: at ? Number(at) : null };
@@ -985,8 +993,8 @@ export function ajusteDoForm(form) {
  */
 export function campoAtividadePadrao(timer, ativas = atividadesAtivas()) {
   if (ativas.length < 2 && atividadePorId(timer.atividade_padrao_id ?? TRABALHO)?.arquivada !== true) return '';
-  return `<label class="campo"><span>Atividade padrão</span><select name="atividade_padrao">${opcoesDeAtividade(ativas, timer.atividade_padrao_id ?? TRABALHO)}</select>
-<small>A do Claude trabalhando, da leitura e do ▶. O botão de reunião, ao lado do ▶, conta como Reunião.</small></label>`;
+  return `<label class="campo"><span>${TEXTOS.atividadePadrao}</span><select name="atividade_padrao">${opcoesDeAtividade(ativas, timer.atividade_padrao_id ?? TRABALHO)}</select>
+<small>${TEXTOS.atividadePadraoDica}</small></label>`;
 }
 
 /**
@@ -1033,10 +1041,10 @@ function ligarAtividadesNoPainel(form) {
 /** O que o "Mais opções" do editar timer já tem dentro, para ver sem abrir. */
 export function resumoDoTimer(t) {
   const partes = [];
-  if (t.link_card) partes.push('card do Zoho');
+  if (t.link_card) partes.push(TEXTOS.resumoCard);
   const padrao = t.atividade_padrao_id ?? TRABALHO;
-  if (padrao !== TRABALHO) partes.push(atividadePorId(padrao)?.nome.toLowerCase() ?? 'atividade');
-  if (ajusteDoTimer(t)) partes.push('ajuste de hoje');
+  if (padrao !== TRABALHO) partes.push(minusculas(atividadePorId(padrao)?.nome ?? TEXTOS.atividadeGenerica));
+  if (ajusteDoTimer(t)) partes.push(TEXTOS.resumoAjuste);
   return partes.join(' · ');
 }
 
@@ -1049,9 +1057,9 @@ export function resumoDoTimer(t) {
 export function confirmacaoDaRegra(conf, timerNome) {
   const textos = [];
   if (conf?.pasta_mae) textos.push(avisoPastaMae(timerNome));
-  if (conf?.outro_timer_nome) textos.push(`A regra desta pasta é de ${esc(conf.outro_timer_nome)}. Passar para ${timerNome}?`);
+  if (conf?.outro_timer_nome) textos.push(TEXTOS.regraDeOutroPassar(esc(conf.outro_timer_nome), timerNome));
   if (!textos.length) return null;
-  return { textos, botao: conf.outro_timer_nome ? `Passar para ${timerNome}` : 'Pôr a regra assim mesmo' };
+  return { textos, botao: conf.outro_timer_nome ? TEXTOS.passarPara(timerNome) : TEXTOS.porARegra };
 }
 
 /**
@@ -1064,16 +1072,16 @@ export function corpoPastasDoTimer(regras, timerId, pendente = null, erro = '', 
   const lista = deste.length
     ? `<ul class="pt-lista">${deste
         .map(
-          (r) => `<li><code class="aj-cam" title="${esc(r.pasta)}">${esc(r.pasta)}</code><button type="button" class="bt mini" data-pasta="trocar" data-id="${r.id}">Trocar pasta…</button><button type="button" class="bt mini" data-pasta="tirar" data-id="${r.id}">Tirar</button></li>`,
+          (r) => `<li><code class="aj-cam" title="${esc(r.pasta)}">${esc(r.pasta)}</code><button type="button" class="bt mini" data-pasta="trocar" data-id="${r.id}">${TEXTOS.trocarPasta}</button><button type="button" class="bt mini" data-pasta="tirar" data-id="${r.id}">${TEXTOS.tirar}</button></li>`,
         )
         .join('')}</ul>`
-    : '<p class="pt-vazio">Nenhuma pasta. Uma conversa aberta numa pasta daqui entra sozinha neste timer.</p>';
+    : `<p class="pt-vazio">${TEXTOS.nenhumaPasta}</p>`;
   const conf = pendente
-    ? `<div class="dlg-aviso pt-conf" role="alert"><code class="aj-cam">${esc(pendente.pasta)}</code>${pendente.textos.map((x) => `<p>${x}</p>`).join('')}<div class="pt-bts"><button type="button" class="bt mini pri" data-pasta="confirmar">${pendente.botao}</button><button type="button" class="bt mini" data-pasta="cancelar">Cancelar</button></div></div>`
+    ? `<div class="dlg-aviso pt-conf" role="alert"><code class="aj-cam">${esc(pendente.pasta)}</code>${pendente.textos.map((x) => `<p>${x}</p>`).join('')}<div class="pt-bts"><button type="button" class="bt mini pri" data-pasta="confirmar">${pendente.botao}</button><button type="button" class="bt mini" data-pasta="cancelar">${TEXTOS.cancelar}</button></div></div>`
     : '';
-  return `<span>Pastas deste timer</span>${linhaClaudeDesconectado(estadoClaude)}${lista}${conf}${erro ? `<p class="pt-erro" role="alert">${esc(erro)}</p>` : ''}
-<div class="pt-bts"><button type="button" class="bt mini" data-pasta="acrescentar">+ Acrescentar pasta…</button></div>
-<small>Vale para as conversas novas: as que já estão ligadas ficam onde estão.</small>`;
+  return `<span>${TEXTOS.pastasDesteTimer}</span>${linhaClaudeDesconectado(estadoClaude)}${lista}${conf}${erro ? `<p class="pt-erro" role="alert">${esc(erro)}</p>` : ''}
+<div class="pt-bts"><button type="button" class="bt mini" data-pasta="acrescentar">${TEXTOS.acrescentarPasta}</button></div>
+<small>${TEXTOS.pastasDesteTimerDica}</small>`;
 }
 
 /** Avisa a tela de Ajustes (Grupos e regras de pasta) que as regras mudaram. */
@@ -1109,7 +1117,7 @@ function ligarPastasDoTimer(form, timer) {
     const trocada = regras.find((r) => r.id === trocar);
     const pasta = await chamar('escolher_pasta', {
       inicial: trocada?.pasta ?? null,
-      titulo: trocada ? `Trocar a pasta de ${timer.nome}` : `Pasta para ${timer.nome}`,
+      titulo: trocada ? TEXTOS.trocarAPastaDe(timer.nome) : TEXTOS.pastaPara(timer.nome),
     });
     if (!pasta) return;
     const conf = await chamar('conferir_regra', { pasta, timer_id: timer.id });
@@ -1134,7 +1142,7 @@ function ligarPastasDoTimer(form, timer) {
     erro = '';
     desenhar();
     regrasMudaram(regras);
-    faixa('Regra de pasta tirada.', 'Desfazer', async () => {
+    faixa(TEXTOS.regraTirada, TEXTOS.desfazer, async () => {
       // a pasta que virou regra de outro timer no meio-tempo não é tomada: o erro diz de quem
       regras = await chamar('restaurar_regra', { pasta: r.pasta, timer_id: r.timer_id });
       if (bloco.isConnected) desenhar();
@@ -1185,9 +1193,9 @@ export function editarTimer(snap, timerId) {
   if (!t) return;
   const feito = { grupo: null };
   abrirDialogo({
-    titulo: 'Editar timer',
+    titulo: TEXTOS.tituloEditarTimer,
     corpo:
-      campoTexto('nome', 'Nome', t.nome, '', 'autofocus') +
+      campoTexto('nome', TEXTOS.nome, t.nome, '', 'autofocus') +
       campoGrupo(snap, t.grupo_id, t.espaco_id ?? ESPACO_PRIMEIRO, t.grupo_arquivado ?? null) +
       campoCor(t.cor) +
       `<div class="campo pastas-timer" data-bloco="pastas-timer">${corpoPastasDoTimer([], t.id)}</div>` +
@@ -1196,7 +1204,7 @@ export function editarTimer(snap, timerId) {
           campoAtividadePadrao(t) +
           campoAtividadesNoPainel(t) +
           campoAjuste(t) +
-          caixa('arquivado', 'Arquivar o timer', 'Ele sai das listas e o tempo dele sai do total do dia.'),
+          caixa('arquivado', TEXTOS.arquivarOTimer, TEXTOS.arquivarOTimerDica),
         false,
         resumoDoTimer(t),
       ),
@@ -1213,7 +1221,7 @@ export function editarTimer(snap, timerId) {
       // o nome do grupo novo é conferido antes do ajuste (que já grava)
       if (ler(form, 'grupo') === NOVO_GRUPO && !ler(form, 'grupo_nome').trim()) {
         form.elements.grupo_nome.focus();
-        throw 'Dê um nome ao grupo novo';
+        throw TEXTOS.deUmNomeAoGrupo;
       }
       const ocultas = atividadesOcultasDoForm(form);
       const comLugar = (grupo_id, espaco_id) =>
@@ -1268,8 +1276,8 @@ async function gravarAjuste(form, timerId) {
   // a faixa sai já, para o "Desfazer" existir mesmo se salvar o resto falhar
   const de = ajuste.atividade_id ? atividadePorId(ajuste.atividade_id) : null;
   faixa(
-    `Ajustado à mão: ${textoDoAjuste(ajuste.delta_ms)}${de ? ` de ${de.nome.toLowerCase()}` : ''} hoje.`,
-    'Desfazer',
+    TEXTOS.ajustadoHoje(textoDoAjuste(ajuste.delta_ms), de ? minusculas(de.nome) : null),
+    TEXTOS.desfazer,
     () => chamar('desfazer_ajuste', { id }),
     10_000,
   );
@@ -1284,9 +1292,9 @@ export function ajustarHoje(snap, timerId, atividadeId) {
   const t = todosTimers(snap).find((x) => x.id === timerId);
   if (!t) return;
   abrirDialogo({
-    titulo: `Ajustar hoje: ${esc(t.nome)}`,
+    titulo: TEXTOS.ajustarHojeTimer(esc(t.nome)),
     corpo: campoAjuste(t, atividadesAtivas(), atividadeId),
-    enviar: 'Ajustar',
+    enviar: TEXTOS.ajustar,
     aoMontar(form) {
       // o foco vai nos minutos (a atividade já veio escolhida)
       form.elements.aj_min?.setAttribute('autofocus', '');
@@ -1295,7 +1303,7 @@ export function ajustarHoje(snap, timerId, atividadeId) {
     async aoEnviar(form) {
       if (!(await gravarAjuste(form, t.id))) {
         focar(form.elements.aj_min);
-        throw 'Diga quantos minutos.';
+        throw TEXTOS.digaMinutos;
       }
     },
   });
@@ -1317,17 +1325,17 @@ export function confirmarDescartar(snap, timerId, voltar = null) {
   const t = todosTimers(snap).find((x) => x.id === timerId);
   if (!t) return;
   abrirDialogo({
-    titulo: `Descartar o tempo de hoje de ${esc(t.nome)}?`,
-    corpo: '<p class="dlg-p">O timer pausa e o tempo de hoje dele sai das contas e do total do dia, inclusive os ajustes à mão. Para só recomeçar o número de 0:00, sem apagar nada, use o ↺ Zerar. Dá para desfazer logo em seguida.</p>',
-    enviar: 'Descartar',
+    titulo: TEXTOS.descartarTitulo(esc(t.nome)),
+    corpo: `<p class="dlg-p">${TEXTOS.descartarTexto}</p>`,
+    enviar: TEXTOS.descartar,
     perigo: true,
     voltar,
     async aoEnviar() {
       const d = await chamar('descartar_hoje', { timer_id: t.id });
       if (d.trechos.length || d.ajustes.length) {
-        faixa(`Tempo de hoje de ${t.nome} descartado.`, 'Desfazer', () => chamar('desfazer_descartar', { trechos: d.trechos, ajustes: d.ajustes }), 10_000);
+        faixa(TEXTOS.descartado(t.nome), TEXTOS.desfazer, () => chamar('desfazer_descartar', { trechos: d.trechos, ajustes: d.ajustes }), 10_000);
       } else {
-        faixa('Nada para descartar hoje.');
+        faixa(TEXTOS.nadaParaDescartar);
       }
     },
   });
@@ -1337,8 +1345,8 @@ export function confirmarDescartar(snap, timerId, voltar = null) {
 
 /** Corpo do "Fechar o app?". */
 export const corpoFechar = () =>
-  `<p class="dlg-p">Na bandeja (os ícones ao lado do relógio) o ${NOME_APP} continua contando. Para voltar, é só clicar no ícone dele.</p>
-${caixa('lembrar', 'Não perguntar de novo', 'Dá para mudar em Ajustes.')}`;
+  `<p class="dlg-p">${TEXTOS.fecharTexto(NOME_APP)}</p>
+${caixa('lembrar', TEXTOS.naoPerguntarDeNovo, TEXTOS.daParaMudarEmAjustes)}`;
 
 /** Um "Fechar o app?" já está esperando outro diálogo fechar. */
 let fecharDepois = false;
@@ -1355,7 +1363,7 @@ export function perguntarAoFechar({ antes = async () => {} } = {}) {
   if (aberto) {
     if (!aberto.querySelector('.dlg-fechar') && !fecharDepois) {
       fecharDepois = true;
-      faixa(`Termine este diálogo; depois o ${NOME_APP} pergunta se fecha.`);
+      faixa(TEXTOS.termineEsteDialogo(NOME_APP));
       const obs = new MutationObserver(() => {
         if (document.querySelector('.dlg-fundo')) return;
         obs.disconnect();
@@ -1373,10 +1381,10 @@ export function perguntarAoFechar({ antes = async () => {} } = {}) {
     await chamar('fechar_principal', { acao, lembrar });
   };
   const d = abrirDialogo({
-    titulo: `Fechar o ${NOME_APP}?`,
+    titulo: TEXTOS.fecharTitulo(NOME_APP),
     corpo: corpoFechar(),
-    enviar: 'Manter na bandeja',
-    cancelar: 'Sair',
+    enviar: TEXTOS.manterNaBandeja,
+    cancelar: TEXTOS.sair,
     classe: 'dlg-fechar',
     async aoCancelar() {
       try {
@@ -1398,8 +1406,8 @@ export function perguntarAoFechar({ antes = async () => {} } = {}) {
 
 /** Corpo do "Minimizar para a bandeja?". */
 export const corpoMinimizar = () =>
-  `<p class="dlg-p">Na bandeja a janela fecha e sai da memória, e o ${NOME_APP} continua contando; para voltar, é só clicar no ícone dele. Na barra de tarefas ela só fica minimizada.</p>
-${caixa('lembrar', 'Não perguntar de novo', 'Dá para mudar em Ajustes.')}`;
+  `<p class="dlg-p">${TEXTOS.minimizarTexto(NOME_APP)}</p>
+${caixa('lembrar', TEXTOS.naoPerguntarDeNovo, TEXTOS.daParaMudarEmAjustes)}`;
 
 /**
  * O minimizar da janela principal com `ao_minimizar = "perguntar"` (o núcleo já trouxe a janela
@@ -1418,10 +1426,10 @@ export function perguntarAoMinimizar({ antes = async () => {} } = {}) {
     return;
   }
   const d = abrirDialogo({
-    titulo: 'Minimizar para a bandeja?',
+    titulo: TEXTOS.minimizarTitulo,
     corpo: corpoMinimizar(),
-    enviar: 'Bandeja',
-    cancelar: 'Barra de tarefas',
+    enviar: TEXTOS.bandeja,
+    cancelar: TEXTOS.barraDeTarefas,
     classe: 'dlg-minimizar',
     async aoCancelar() {
       try {
@@ -1470,16 +1478,16 @@ export async function ligar(sessaoId, timerId, desdeInicio, regra, soHoje = fals
 export function comoEntrou(sessao) {
   switch (sessao?.ligacao) {
     case 'regra':
-      return sessao.regra_pasta ? `pela pasta ${sessao.regra_pasta}` : 'pela pasta';
+      return TEXTOS.entrouPelaPasta(sessao.regra_pasta ?? null);
     case 'mao':
-      return 'ligada à mão';
+      return TEXTOS.entrouAMao;
     case 'herdada':
-      return `continuação de “${sessao.nome}”`;
+      return TEXTOS.entrouContinuacao(sessao.nome);
     case 'leitura':
-      return 'pela leitura';
+      return TEXTOS.entrouPelaLeitura;
     default:
       // de antes da versão que grava a origem (`deduzida`), ou sem origem gravada
-      return 'ligada antes desta versão do app';
+      return TEXTOS.entrouAntes;
   }
 }
 
@@ -1489,15 +1497,15 @@ export function comoEntrou(sessao) {
  */
 export function corpoSessao(sessao) {
   const regra = sessao.ligacao === 'regra' && sessao.regra_id != null;
-  return `<label class="campo"><span>Nome</span><input type="text" value="${esc(sessao.nome)}" readonly></label>
-<label class="campo"><span>Pasta</span><input type="text" class="mono" value="${esc(sessao.cwd)}" readonly title="${esc(sessao.cwd)}"></label>
-<div class="campo"><span>Como entrou</span><p class="ses-como">${esc(comoEntrou(sessao))}</p></div>
+  return `<label class="campo"><span>${TEXTOS.nome}</span><input type="text" value="${esc(sessao.nome)}" readonly></label>
+<label class="campo"><span>${TEXTOS.pasta}</span><input type="text" class="mono" value="${esc(sessao.cwd)}" readonly title="${esc(sessao.cwd)}"></label>
+<div class="campo"><span>${TEXTOS.comoEntrou}</span><p class="ses-como">${esc(comoEntrou(sessao))}</p></div>
 <div class="ses-acoes">
-  <button type="button" class="bt" data-ses="mover" autofocus>Mover para outro timer…</button>
-  <button type="button" class="bt" data-ses="desligar">Desligar deste timer</button>
-  ${regra ? '<button type="button" class="bt" data-ses="subpasta">Trocar por uma subpasta…</button><button type="button" class="bt perigo-txt" data-ses="apagar-regra">Apagar esta regra</button>' : ''}
+  <button type="button" class="bt" data-ses="mover" autofocus>${TEXTOS.moverParaOutroTimer}</button>
+  <button type="button" class="bt" data-ses="desligar">${TEXTOS.desligarDesteTimer}</button>
+  ${regra ? `<button type="button" class="bt" data-ses="subpasta">${TEXTOS.trocarPorSubpasta}</button><button type="button" class="bt perigo-txt" data-ses="apagar-regra">${TEXTOS.apagarEstaRegra}</button>` : ''}
 </div>
-<small class="ses-dica">Desligar: a conversa fica sem timer e volta a perguntar na próxima mensagem; o tempo já contado fica onde está.${regra ? ' A regra vale para as conversas novas: mexer nela não muda as já ligadas.' : ''}</small>`;
+<small class="ses-dica">${TEXTOS.desligarSessaoDica}${regra ? ` ${TEXTOS.regraValeNovas}` : ''}</small>`;
 }
 
 /** A sessão `sessaoId` ligada ao timer `timerId`, no estado. */
@@ -1514,10 +1522,10 @@ export function editarSessao(lerSnap, timerId, sessaoId) {
   if (!timer || !sessao) return;
   const reabrir = () => editarSessao(lerSnap, timerId, sessaoId);
   const d = abrirDialogo({
-    titulo: `Sessão em <span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`,
+    titulo: TEXTOS.sessaoEm(`<span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`),
     corpo: corpoSessao(sessao),
     enviar: null,
-    cancelar: 'Fechar',
+    cancelar: TEXTOS.fechar,
     classe: 'dlg-sessao',
     aoMontar(form) {
       form.querySelector('.ses-acoes').addEventListener('click', async (ev) => {
@@ -1550,26 +1558,26 @@ export function editarSessao(lerSnap, timerId, sessaoId) {
 
 /** "Trocar por uma subpasta…": o seletor abre na pasta da regra; o núcleo confere a escolha. */
 async function trocarPorSubpasta(d, sessao) {
-  const pasta = await chamar('escolher_pasta', { inicial: sessao.regra_pasta, titulo: 'Subpasta para a regra' });
+  const pasta = await chamar('escolher_pasta', { inicial: sessao.regra_pasta, titulo: TEXTOS.subpastaParaRegra });
   if (!pasta) return;
   const regras = await chamar('trocar_regra_por_subpasta', { regra_id: sessao.regra_id, pasta, sessao_id: sessao.id });
   d.fechar();
   regrasMudaram(regras);
-  faixa(`A regra agora vale em ${pasta}.`);
+  faixa(TEXTOS.regraAgoraVale(pasta));
 }
 
 /** "Apagar esta regra": confirma (Voltar volta ao ✎) e apaga, com "Desfazer" por 10 s. */
 function apagarRegraDaSessao(sessao, timer, voltar) {
   abrirDialogo({
-    titulo: 'Apagar esta regra?',
-    corpo: `<p class="dlg-p">Conversas novas em <code class="aj-cam">${esc(sessao.regra_pasta)}</code> deixam de entrar sozinhas em ${esc(timer.nome)} e voltam a perguntar. As já ligadas ficam onde estão.</p>`,
-    enviar: 'Apagar',
+    titulo: TEXTOS.apagarEstaRegraTitulo,
+    corpo: `<p class="dlg-p">${TEXTOS.apagarRegraTexto(`<code class="aj-cam">${esc(sessao.regra_pasta)}</code>`, esc(timer.nome))}</p>`,
+    enviar: TEXTOS.apagar,
     perigo: true,
     voltar,
     async aoEnviar() {
       const regras = await chamar('remover_regra_pasta', { id: sessao.regra_id });
       regrasMudaram(regras);
-      faixa('Regra de pasta apagada.', 'Desfazer', async () => {
+      faixa(TEXTOS.regraApagada, TEXTOS.desfazer, async () => {
         // a pasta que virou regra de outro timer no meio-tempo não é tomada: o erro diz de quem
         regrasMudaram(await chamar('restaurar_regra', { pasta: sessao.regra_pasta, timer_id: timer.id }));
       }, 10_000);
@@ -1606,8 +1614,8 @@ async function conferirRegra(pasta, timerId) {
 /** O texto do "Desde o início" no passo de ligar (`soHoje`: só os trechos de hoje vêm). */
 export const textoDesdeInicio = (timerNome, soHoje) =>
   soHoje
-    ? `O tempo que a sessão contou hoje vem para ${timerNome}. Os dias anteriores ficam onde estão.`
-    : `O tempo que a sessão já contou vem para ${timerNome}.`;
+    ? TEXTOS.desdeInicioHoje(timerNome)
+    : TEXTOS.desdeInicioTudo(timerNome);
 
 async function passoOpcoes(sessao, timer, voltar) {
   const inicio = desdeInicioPadrao(sessao, Date.now());
@@ -1615,14 +1623,14 @@ async function passoOpcoes(sessao, timer, voltar) {
   // não chamar de `marcado`: esse nome é o leitor do formulário (linha ~552), usado no aoEnviar
   const atributoMarcado = (sim) => (sim ? ' checked autofocus' : '');
   abrirDialogo({
-    titulo: `Ligar <b>${esc(sessao.nome)}</b> a <span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`,
-    corpo: `<p class="dlg-p">Desde o início ou daqui para frente?</p>
-<div class="escolhas" role="radiogroup" aria-label="Desde quando">
-  <label class="esc"><input type="radio" name="desde" value="inicio"${atributoMarcado(inicio)}><span><b>Desde o início</b><small>${textoDesdeInicio(esc(timer.nome), Boolean(sessao.so_hoje))}</small></span></label>
-  <label class="esc"><input type="radio" name="desde" value="agora"${atributoMarcado(!inicio)}><span><b>Daqui para frente</b><small>Só o tempo a partir de agora.</small></span></label>
+    titulo: TEXTOS.ligarSessaoA(`<b>${esc(sessao.nome)}</b>`, `<span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`),
+    corpo: `<p class="dlg-p">${TEXTOS.desdeQuandoPergunta}</p>
+<div class="escolhas" role="radiogroup" aria-label="${TEXTOS.desdeQuando}">
+  <label class="esc"><input type="radio" name="desde" value="inicio"${atributoMarcado(inicio)}><span><b>${TEXTOS.desdeOInicio}</b><small>${textoDesdeInicio(esc(timer.nome), Boolean(sessao.so_hoje))}</small></span></label>
+  <label class="esc"><input type="radio" name="desde" value="agora"${atributoMarcado(!inicio)}><span><b>${TEXTOS.daquiParaFrente}</b><small>${TEXTOS.daquiParaFrenteDica}</small></span></label>
 </div>
 ${conferencia.erro ? '' : campoRegra(conferencia.pasta, conferencia, esc(timer.nome))}`,
-    enviar: 'Ligar',
+    enviar: TEXTOS.ligar,
     voltar,
     async aoEnviar(form) {
       await ligar(sessao.id, timer.id, ler(form, 'desde') === 'inicio', marcado(form, 'regra'), Boolean(sessao.so_hoje));
@@ -1651,18 +1659,18 @@ export async function ligarSessao(lerSnap, timerId) {
     const itens = (sessoes ?? [])
       .map((s, i) => {
         const mesma = s.timer_id === timer.id;
-        const onde = mesma ? 'já ligada' : s.timer_id !== null ? `em ${esc(nomeTimer.get(s.timer_id) ?? 'outro timer')}` : '';
+        const onde = mesma ? TEXTOS.jaLigada : s.timer_id !== null ? TEXTOS.emTimer(esc(nomeTimer.get(s.timer_id) ?? TEXTOS.outroTimer)) : '';
         return `<button type="button" class="it" data-i="${i}"${mesma ? ' disabled' : ''}>
-  <span class="it-n">${esc(s.nome)}</span><span class="it-e">${esc(ESTADO_SESSAO[s.estado] ?? s.estado)}</span>
+  <span class="it-n">${esc(s.nome)}</span><span class="it-e">${esc(estadoDaSessao(s.estado))}</span>
   <small class="it-p">${esc(s.cwd)}</small>${onde ? `<small class="it-t">${onde}</small>` : ''}
 </button>`;
       })
       .join('');
     const vazio = erro
       ? `<p class="dlg-p">${esc(erro)}</p>`
-      : '<p class="dlg-p">Nenhuma sessão do Claude nos últimos 7 dias.</p>';
+      : `<p class="dlg-p">${TEXTOS.nenhumaSessao7}</p>`;
     abrirDialogo({
-      titulo: `Ligar uma sessão a <span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`,
+      titulo: TEXTOS.ligarUmaSessaoA(`<span class="dlg-cor" style="--c:${cor(timer.cor)}">${esc(timer.nome)}</span>`),
       corpo: linhaClaudeDesconectado(estadoClaude) + (itens ? `<div class="lista" data-rolagem="sessoes">${itens}</div>` : vazio),
       enviar: null,
       aoMontar(form) {
@@ -1680,7 +1688,7 @@ export async function ligarSessao(lerSnap, timerId) {
 /** A sessão quando ela não vem em `sessoes_recentes` (o comando falhou, ou ela saiu da lista). */
 export const sessaoDeReserva = (id, r = {}) => ({
   id,
-  nome: r.nome || 'Sessão do Claude',
+  nome: r.nome || TEXTOS.sessaoDoClaude,
   cwd: r.cwd ?? '',
   timer_id: r.timer_id ?? null,
   ...(typeof r.criada_em === 'number' ? { criada_em: r.criada_em } : {}),
@@ -1694,7 +1702,7 @@ export const sessaoDeReserva = (id, r = {}) => ({
  */
 export const linhaClaudeDesconectado = (estado) =>
   estado === 'desligado'
-    ? '<p class="cx-aviso" role="note">O Claude Code não está conectado · <button type="button" class="cx-link" data-conectar-claude>Conectar</button></p>'
+    ? `<p class="cx-aviso" role="note">${TEXTOS.claudeNaoConectado} · <button type="button" class="cx-link" data-conectar-claude>${TEXTOS.conectar}</button></p>`
     : '';
 
 /**
@@ -1728,7 +1736,7 @@ export function corpoLigarATimer(snap, sessao, comNovo = false, estadoClaude = n
           g.timers
             .map(
               (t) =>
-                `<button type="button" class="it it-t1" data-timer="${t.id}" style="--c:${cor(t.cor)}"${t.id === sessao.timer_id ? ' disabled' : ''}><i></i><span class="it-n">${esc(t.nome)}</span>${t.id === sessao.timer_id ? '<small class="it-t">já ligada</small>' : ''}</button>`,
+                `<button type="button" class="it it-t1" data-timer="${t.id}" style="--c:${cor(t.cor)}"${t.id === sessao.timer_id ? ' disabled' : ''}><i></i><span class="it-n">${esc(t.nome)}</span>${t.id === sessao.timer_id ? `<small class="it-t">${TEXTOS.jaLigada}</small>` : ''}</button>`,
             )
             .join(''),
       )
@@ -1738,10 +1746,10 @@ export function corpoLigarATimer(snap, sessao, comNovo = false, estadoClaude = n
     return html && espaco ? `<div class="lista-e" style="--e:${cor(espaco.cor)}"><i></i>${esc(espaco.nome)}</div>${html}` : html;
   };
   const grupos = gruposPorEspaco(snap).map(doEspaco).join('');
-  const novo = comNovo ? '<button type="button" class="it it-novo" data-novo="1"><span class="it-n">+ Novo timer…</span></button>' : '';
+  const novo = comNovo ? `<button type="button" class="it it-novo" data-novo="1"><span class="it-n">${TEXTOS.novoTimerOp}</span></button>` : '';
   const lista = grupos
     ? `<div class="lista">${grupos}${novo}</div>`
-    : `<p class="dlg-p">Nenhum timer ainda.</p>${novo ? `<div class="lista">${novo}</div>` : ''}`;
+    : `<p class="dlg-p">${TEXTOS.nenhumTimerAinda}</p>${novo ? `<div class="lista">${novo}</div>` : ''}`;
   return `<p class="dlg-p"><b>${esc(sessao.nome)}</b>${sessao.cwd ? `<br><small class="it-p">${esc(sessao.cwd)}</small>` : ''}</p>
 ${linhaClaudeDesconectado(estadoClaude)}${lista}`;
 }
@@ -1764,7 +1772,7 @@ export async function ligarATimer(lerSnap, sessaoId, aoNovoTimer = null, reserva
   const estadoClaude = await estadoDoClaude();
   const passo1 = () => {
     const d = abrirDialogo({
-      titulo: 'Ligar a um timer',
+      titulo: TEXTOS.ligarAUmTimer,
       corpo: corpoLigarATimer(lerSnap(), sessao, Boolean(aoNovoTimer), estadoClaude),
       enviar: null,
       aoMontar(form) {

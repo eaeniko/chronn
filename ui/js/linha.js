@@ -5,7 +5,7 @@
 // Reunião...), cada bloco leva embaixo uma faixa na cor da atividade, com a legenda. Só leitura.
 // A linha do tempo é do dia: os tempos aqui são os de hoje (`msDeHoje`), não o número do timer
 // (o acumulado desde o zerar).
-import { trechosDoDia, reguaDoDia, horaMin, atividadesDosTrechos, msDeHoje } from './formato.js';
+import { trechosDoDia, reguaDoDia, horaMin, atividadesDosTrechos, msDeHoje, minusculas } from './formato.js';
 import { esc, cor, botaoPlay, ajusteDoTimer, atividadesAtuais } from './componentes.js';
 import { gruposDaAba, comAbas, espacoPorId } from './espacos.js';
 import { TEXTOS } from './textos.js';
@@ -52,7 +52,7 @@ function regua(timers, diaInicio, agora) {
 
 /** A legenda das atividades (a faixa embaixo do bloco na cor de cada uma). */
 const legendaDasAtividades = (ativs) =>
-  ativs.map((a) => `<span><i class="sw at" style="--a:${cor(a.cor)}"></i>${esc(a.nome.toLowerCase())}</span>`).join('');
+  ativs.map((a) => `<span><i class="sw at" style="--a:${cor(a.cor)}"></i>${esc(minusculas(a.nome))}</span>`).join('');
 
 function marcas(ini, fim, passo) {
   const v = [];
@@ -95,7 +95,7 @@ export function secaoLinhaDoPainel(grupos, diaInicio, agora, { mostrar = true, a
 /** Visão "Linha do tempo": uma linha por timer, por grupo, com o total e o play. */
 export function visaoLinha(snap, diaInicio, agora, aba = null) {
   const grupos = gruposDaAba(snap, aba).filter((g) => g.timers.length);
-  if (!grupos.length) return `<div class="lt-vazio"><p class="vazio">Nenhum timer ainda.</p></div>`;
+  if (!grupos.length) return `<div class="lt-vazio"><p class="vazio">${esc(TEXTOS.nenhumTimerAinda)}</p></div>`;
   // em "Todos" com abas, o nome do espaço antes do primeiro grupo dele (rodada 20)
   const comEspacos = aba === null && comAbas(snap);
   const r = regua(grupos.flatMap((g) => g.timers), diaInicio, agora);
@@ -111,7 +111,7 @@ export function visaoLinha(snap, diaInicio, agora, aba = null) {
           const ms = msDeHoje(t, agora);
           return `<div class="lt-lb" style="--c:${cor(t.cor)}"><i></i><span>${esc(t.nome)}</span>${marca(t)}</div>
   <div class="lt-ln${t.rodando ? ' on' : ''}" style="--c:${cor(t.cor)}">${r.blocos(t)}${agoraEm}</div>
-  <div class="lt-tt mono${ms < 1000 ? ' zero' : ''}" data-hm-hoje="${t.id}" title="Hoje">${horaMin(ms)}</div>
+  <div class="lt-tt mono${ms < 1000 ? ' zero' : ''}" data-hm-hoje="${t.id}" title="${TEXTOS.hoje}">${horaMin(ms)}</div>
   <div class="lt-pl" style="--c:${cor(t.cor)}">${botaoPlay(t, t.rodando ? 'pl on' : 'pl')}</div>`;
         })
         .join('');
@@ -124,11 +124,11 @@ export function visaoLinha(snap, diaInicio, agora, aba = null) {
     ${linhas}
   </div>
   <div class="lt-leg">
-    <span><i class="sw"></i>ligou sozinho</span>
-    <span><i class="sw m"></i>você deu play</span>
-    ${grupos.some((g) => g.timers.some(ajusteDoTimer)) ? '<span><em class="mao">±</em>ajustado à mão</span>' : ''}
+    <span><i class="sw"></i>${TEXTOS.legLigouSozinho}</span>
+    <span><i class="sw m"></i>${TEXTOS.legDeuPlay}</span>
+    ${grupos.some((g) => g.timers.some(ajusteDoTimer)) ? `<span><em class="mao">±</em>${TEXTOS.legAjustado}</span>` : ''}
     ${legendaDasAtividades(r.ativs)}
-    <span class="ag">│ agora</span>
+    <span class="ag">│ ${TEXTOS.agora}</span>
   </div>
 </div>`;
 }

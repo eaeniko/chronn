@@ -201,7 +201,7 @@ test('Minimizar para a bandeja?: explica os dois e traz "Não perguntar de novo"
 });
 test('backups: lista com data e tamanho, restaurar e confirmação', async () => {
   const { htmlBackups, corpoRestaurar } = await import('./ajustes.js');
-  const b = { nome: '2026-11-18_0930.db', quando: '18/11/2026 09:30', bytes: 49152 };
+  const b = { nome: '2026-11-18_0930.db', quando: '2026-11-18T09:30', bytes: 49152 };
   const h = htmlBackups([b]);
   assert.match(h, /18\/11\/2026 09:30<\/span><small>48 KB<\/small><button[^>]*data-aj="backup-restaurar" data-nome="2026-11-18_0930\.db">Restaurar/);
   assert.match(h, /data-aj="backup-agora">Fazer backup agora/);

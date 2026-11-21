@@ -11,9 +11,15 @@ use crate::modelo::RegraPasta;
 use crate::motor::{chave_de_pasta, pasta_larga, raiz_do_projeto};
 
 /// Texto da pasta larga demais para regra.
-pub const ERRO_PASTA_LARGA: &str = "Uma regra não pode ficar na raiz de um drive nem na pasta do usuário: pegaria tudo o que está embaixo.";
+#[allow(non_snake_case)]
+pub fn ERRO_PASTA_LARGA() -> &'static str {
+    crate::idioma::ta("erro.pasta_larga")
+}
 /// Texto da pasta que nunca conta.
-pub const ERRO_PASTA_IGNORADA: &str = "Esta pasta está em \"Pastas que nunca contam\": as conversas nela não contam.";
+#[allow(non_snake_case)]
+pub fn ERRO_PASTA_IGNORADA() -> &'static str {
+    crate::idioma::ta("erro.pasta_ignorada")
+}
 
 /// O que a tela precisa saber antes de gravar uma regra de pasta (rodada 15).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -42,9 +48,9 @@ pub fn conferir(
     // `G:\` sem a barra vira `G:`, que a tela mostra assim mesmo
     let pasta = raiz.to_string();
     let erro = if pasta_larga(&pasta, perfil) {
-        Some(ERRO_PASTA_LARGA.to_string())
+        Some(ERRO_PASTA_LARGA().to_string())
     } else if pasta_ignorada(&pasta, ignoradas) {
-        Some(ERRO_PASTA_IGNORADA.to_string())
+        Some(ERRO_PASTA_IGNORADA().to_string())
     } else {
         None
     };
@@ -157,11 +163,11 @@ mod testes {
         assert!(conferir("G:\\Empresa\\Projeto", Some(5), &regras, &ign, perfil).pasta_mae);
         // raiz de drive, pasta do usuário, pasta que nunca conta
         for (p, e) in [
-            ("G:\\", ERRO_PASTA_LARGA),
-            ("G:", ERRO_PASTA_LARGA),
-            ("C:\\Users\\usuario", ERRO_PASTA_LARGA),
-            ("C:\\Users\\outro", ERRO_PASTA_LARGA),
-            ("G:\\Pessoal\\x", ERRO_PASTA_IGNORADA),
+            ("G:\\", ERRO_PASTA_LARGA()),
+            ("G:", ERRO_PASTA_LARGA()),
+            ("C:\\Users\\usuario", ERRO_PASTA_LARGA()),
+            ("C:\\Users\\outro", ERRO_PASTA_LARGA()),
+            ("G:\\Pessoal\\x", ERRO_PASTA_IGNORADA()),
         ] {
             let c = conferir(p, Some(1), &regras, &ign, perfil);
             assert_eq!(c.erro.as_deref(), Some(e), "{p}");

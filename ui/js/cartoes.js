@@ -24,21 +24,14 @@ import {
   etiquetaSituacao,
 } from './componentes.js';
 import { gruposDaAba, secoesDaAba } from './espacos.js';
-
-/** Motivo → dica do "auto" (o timer ligou sozinho). */
-const AUTO = {
-  'Claude trabalhando': 'ligou sozinho (Claude trabalhando)',
-  'reunião · Claude trabalhando': 'o Claude ligou sozinho durante a reunião',
-  'você lendo': 'ligou sozinho (você lendo a resposta)',
-  'você escrevendo': 'ligou sozinho (você lendo a resposta e escrevendo)',
-};
+import { TEXTOS } from './textos.js';
 
 /** Linha curta do destino no cartão (o selo do grupo já diz o card padrão por extenso). */
 function destinoCurto(timer, grupo) {
-  if (timer.link_card) return `card: ${rotuloDoDestino(timer.link_card, timer.link_card_nome)}`;
+  if (timer.link_card) return TEXTOS.destinoCard(rotuloDoDestino(timer.link_card, timer.link_card_nome));
   const g = destinoDoGrupo(grupo);
-  if (g) return `${g.tipo === 'card' ? 'card padrão' : 'projeto'}: ${g.rotulo}`;
-  return 'sem card ainda';
+  if (g) return g.tipo === 'card' ? TEXTOS.destinoCardPadrao(g.rotulo) : TEXTOS.destinoProjeto(g.rotulo);
+  return TEXTOS.semCardAinda;
 }
 
 function cartaoGrande(timer, grupo, agora, selecionado) {
@@ -46,10 +39,12 @@ function cartaoGrande(timer, grupo, agora, selecionado) {
   const cls = ['kc', timer.rodando && 'on', selecionado && 'sel', !timer.rodando && ms < 1000 && 'zero']
     .filter(Boolean)
     .join(' ');
-  const auto = timer.rodando && AUTO[timer.motivo] ? `<span class="au" title="${AUTO[timer.motivo]}">auto</span> · ` : '';
+  // o "auto": o timer ligou sozinho (a dica pelo motivo, que o núcleo manda como chave)
+  const dicaAuto = timer.rodando ? TEXTOS.motivoAuto(timer.motivo) : null;
+  const auto = dicaAuto ? `<span class="au" title="${esc(dicaAuto)}">${TEXTOS.auto}</span> · ` : '';
   // os ajustes de hoje que entram no número (os feitos depois do zerar)
   const aj = ajusteDoTimer(hojeDesdeZerar(timer));
-  const mao = aj ? `<span class="mao" title="${esc(aj.dica)}">${esc(aj.texto)} à mão</span> · ` : '';
+  const mao = aj ? `<span class="mao" title="${esc(aj.dica)}">${esc(TEXTOS.comAMao(aj.texto))}</span> · ` : '';
   // a fatia de cada atividade no número do timer, só com mais de uma (com a divisão na dica)
   const at = tempoPorAtividade(timer, atividadesAtuais(), agora);
   const faixa =
@@ -66,7 +61,7 @@ function cartaoGrande(timer, grupo, agora, selecionado) {
     <span class="tm mono" data-tempo="${timer.id}"${tituloDoTempo(timer, agora)}>${relogio(ms)}</span>
     <span class="ac">
       ${botaoZerar(timer, 'mi', agora)}
-      <button class="mi" data-acao="editar" data-timer="${timer.id}" title="Editar" aria-label="Editar ${esc(timer.nome)}">✎</button>
+      <button class="mi" data-acao="editar" data-timer="${timer.id}" title="${TEXTOS.editar}" aria-label="${esc(TEXTOS.doTimer(TEXTOS.editar, timer.nome))}">✎</button>
     </span>
     ${botaoEncerrar(timer, 'pe')}
     ${botaoPlay(timer, 'pl')}

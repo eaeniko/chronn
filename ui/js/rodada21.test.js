@@ -69,12 +69,14 @@ const umEspaco = () => {
 test('rodada 21 §1: o menu ⋯ do grupo; com um espaço só, sem "Mover para outro espaço…"', () => {
   const s = snapDe();
   const casa = s.grupos[1];
+  // rodada 24: o "Renomear" é o primeiro
   assert.deepEqual(itensDoMenuGrupo(s, casa).map((i) => [i.id, i.rotulo]), [
+    ['renomear', 'Renomear'],
     ['editar', 'Editar'],
     ['mover', 'Mover para outro espaço…'],
     ['arquivar', 'Arquivar'],
   ]);
-  assert.match(htmlDoMenuGrupo(s, casa), /^<div class="menu-ajuda menu-grupo" role="menu" aria-label="Casa"><button type="button" role="menuitem" data-mg="editar" data-grupo="200">Editar<\/button><button type="button" role="menuitem" data-mg="mover" data-grupo="200">Mover para outro espaço…<\/button>/);
+  assert.match(htmlDoMenuGrupo(s, casa), /^<div class="menu-ajuda menu-grupo" role="menu" aria-label="Casa"><button type="button" role="menuitem" data-mg="renomear" data-grupo="200">Renomear<\/button><button type="button" role="menuitem" data-mg="editar" data-grupo="200">Editar<\/button><button type="button" role="menuitem" data-mg="mover" data-grupo="200">Mover para outro espaço…<\/button>/);
   // o segundo passo: os outros espaços
   assert.equal(
     htmlDoMenuEspacos(s, casa),
@@ -82,7 +84,7 @@ test('rodada 21 §1: o menu ⋯ do grupo; com um espaço só, sem "Mover para ou
   );
   // com um espaço só, a opção some
   const so = umEspaco();
-  assert.deepEqual(itensDoMenuGrupo(so, so.grupos[1]).map((i) => i.id), ['editar', 'arquivar']);
+  assert.deepEqual(itensDoMenuGrupo(so, so.grupos[1]).map((i) => i.id), ['renomear', 'editar', 'arquivar']);
   // o ⋯ fica no cabeçalho do grupo (não no "Sem grupo") e chama o menu
   assert.match(cabecalhoGrupo(casa, AGORA, true), /<button class="ge" data-acao="menu-grupo" data-grupo="200" title="Mais" aria-label="Mais: Casa" aria-haspopup="menu" aria-expanded="false">⋯<\/button>/);
   assert.doesNotMatch(cabecalhoGrupo(s.grupos[2], AGORA, true), /menu-grupo/);

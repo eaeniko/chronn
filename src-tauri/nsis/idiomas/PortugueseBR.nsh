@@ -1,0 +1,33 @@
+; Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
+; Os textos do instalador em português (rodada 23, 0.4.0), no lugar dos do tauri-bundler 2.10.5
+; (src/bundle/windows/nsis/languages/PortugueseBR.nsh): as mesmas chaves do English.nsh, com o
+; nome de exibição (${PRODUCTNAME}) e o português revisto. O tauri.conf.json aponta este arquivo
+; em customLanguageFiles; as telas do NSIS (MUI) vêm do próprio NSIS.
+LangString addOrReinstall ${LANG_PORTUGUESEBR} "Adicionar ou reinstalar componentes"
+LangString alreadyInstalled ${LANG_PORTUGUESEBR} "Já instalado"
+LangString alreadyInstalledLong ${LANG_PORTUGUESEBR} "O ${PRODUCTNAME} ${VERSION} já está instalado. Escolha o que fazer e clique em Avançar para continuar."
+LangString appRunning ${LANG_PORTUGUESEBR} "O ${PRODUCTNAME} está aberto! Feche o app e tente de novo."
+LangString noPermissionToCloseApp ${LANG_PORTUGUESEBR} "Sem permissão para fechar o ${PRODUCTNAME}. Feche o app e tente de novo."
+LangString appRunningOkKill ${LANG_PORTUGUESEBR} "O ${PRODUCTNAME} está aberto!$\nClique em OK para fechá-lo."
+LangString chooseMaintenanceOption ${LANG_PORTUGUESEBR} "Escolha a opção de manutenção."
+LangString chooseHowToInstall ${LANG_PORTUGUESEBR} "Escolha como instalar o ${PRODUCTNAME}."
+LangString createDesktop ${LANG_PORTUGUESEBR} "Criar um atalho na área de trabalho"
+LangString dontUninstall ${LANG_PORTUGUESEBR} "Não desinstalar"
+LangString dontUninstallDowngrade ${LANG_PORTUGUESEBR} "Não desinstalar (instalar uma versão anterior sem desinstalar está desligado neste instalador)"
+LangString failedToKillApp ${LANG_PORTUGUESEBR} "Não deu para fechar o ${PRODUCTNAME}. Feche o app primeiro e tente de novo."
+LangString installingWebview2 ${LANG_PORTUGUESEBR} "Instalando o WebView2..."
+LangString newerVersionInstalled ${LANG_PORTUGUESEBR} "Uma versão mais nova do ${PRODUCTNAME} já está instalada! Instalar uma versão anterior não é recomendado. Se você quer mesmo instalar esta versão anterior, é melhor desinstalar a atual antes. Escolha o que fazer e clique em Avançar para continuar."
+LangString older ${LANG_PORTUGUESEBR} "mais antiga"
+LangString olderOrUnknownVersionInstalled ${LANG_PORTUGUESEBR} "Uma versão $R4 do ${PRODUCTNAME} está instalada neste computador. É recomendado desinstalar a versão atual antes de instalar. Escolha o que fazer e clique em Avançar para continuar."
+LangString silentDowngrades ${LANG_PORTUGUESEBR} "Instalar uma versão anterior está desligado neste instalador, e a instalação silenciosa não pode seguir. Use o instalador com as telas.$\n"
+LangString unableToUninstall ${LANG_PORTUGUESEBR} "Não deu para desinstalar!"
+LangString uninstallApp ${LANG_PORTUGUESEBR} "Desinstalar o ${PRODUCTNAME}"
+LangString uninstallBeforeInstalling ${LANG_PORTUGUESEBR} "Desinstalar antes de instalar"
+LangString unknown ${LANG_PORTUGUESEBR} "desconhecida"
+LangString webview2AbortError ${LANG_PORTUGUESEBR} "Não deu para instalar o WebView2! O app não funciona sem ele. Tente abrir o instalador de novo."
+LangString webview2DownloadError ${LANG_PORTUGUESEBR} "Erro: não deu para baixar o WebView2 - $0"
+LangString webview2DownloadSuccess ${LANG_PORTUGUESEBR} "Instalador do WebView2 baixado"
+LangString webview2Downloading ${LANG_PORTUGUESEBR} "Baixando o instalador do WebView2..."
+LangString webview2InstallError ${LANG_PORTUGUESEBR} "Erro: a instalação do WebView2 falhou com o código $1"
+LangString webview2InstallSuccess ${LANG_PORTUGUESEBR} "WebView2 instalado"
+LangString deleteAppData ${LANG_PORTUGUESEBR} "Apagar os dados do app"

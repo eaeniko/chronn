@@ -3,6 +3,27 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.4.0] - 2026-11-20
+
+First alpha release.
+
+### Added
+- English and Portuguese (Brazil). Settings → Language: System (default), Português (Brasil) or
+  English. Changes apply right away in every window, the dock and the tray. The installer
+  follows the Windows language.
+- Updates from inside the app. Once a day, when it opens, Chronn asks GitHub for a new version
+  (the only time it uses the internet; turn it off in Settings → About). When one is out, an
+  icon shows in the header: one click downloads it, checks its signature, installs and reopens.
+  Settings → About also has "Check for updates".
+- Rename a group straight from its ⋯ menu.
+- Settings → Dock: how the collapsed dock shows a timer's space (only the timer's color, the
+  space name as text, or the space color).
+- "alpha" next to the version in Settings → About and in the tray.
+
+### Changed
+- The collapsed dock shows a single dot per timer; the space is in the dot's tooltip.
+- Dates and durations follow the language.
+
 ## [0.3.1] - 2026-11-20
 
 ### Changed

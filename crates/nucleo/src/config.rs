@@ -69,6 +69,22 @@ pub struct ConfigApp {
     pub espaco_aba: Option<i64>,
     /// "Mostrar a linha do tempo no Painel" (Ajustes → Painel, rodada 21): ligado por padrão.
     pub painel_linha: bool,
+    /// O idioma da interface (Ajustes → Idioma, rodada 23): `"sistema"` (o padrão: o do Windows),
+    /// `"pt-BR"` ou `"en"`. A config de antes não tem o campo e fica no "sistema": quem usa o app
+    /// com o Windows em português continua em português.
+    pub idioma: String,
+    /// O espaço no dock recolhido (Ajustes → Dock, rodada 24), com 2 ou mais espaços:
+    /// `"timer"` (o padrão, "Só o timer": um ponto na cor do timer e o espaço na dica dele),
+    /// `"texto"` ("Espaço em texto": o nome do espaço na linha da situação) ou `"cor"` ("Cor do
+    /// espaço": o ponto na cor do espaço). A config de antes fica no `"timer"`.
+    pub dock_espaco: String,
+    /// "Procurar atualizações automaticamente" (Ajustes → Sobre, rodada 25): ligada por padrão,
+    /// também para a config de antes. Uma vez por dia, ao abrir o app
+    /// (`atualizacao::busca_automatica_devida`).
+    pub atualizar_auto: bool,
+    /// Quando a última busca de atualização deu certo (ms desde 1970), automática ou pelo
+    /// "Verificar atualizações"; nula antes da primeira.
+    pub atualizacao_ultima: Option<i64>,
 }
 
 impl ConfigApp {
@@ -126,6 +142,10 @@ impl Default for ConfigApp {
             dicas_vistas: vec![],
             espaco_aba: None,
             painel_linha: true,
+            idioma: crate::idioma::IDIOMA_SISTEMA.into(),
+            dock_espaco: DOCK_ESPACO_TIMER.into(),
+            atualizar_auto: true,
+            atualizacao_ultima: None,
         }
     }
 }
@@ -164,6 +184,11 @@ pub const CONVERSA_NOVA_REGRA: &str = "regra";
 pub const DOCK_SEMPRE: &str = "sempre";
 pub const DOCK_SO_PERGUNTAS: &str = "perguntas";
 
+/// Valores de `dock_espaco` (rodada 24).
+pub const DOCK_ESPACO_TIMER: &str = "timer";
+pub const DOCK_ESPACO_TEXTO: &str = "texto";
+pub const DOCK_ESPACO_COR: &str = "cor";
+
 /// Valores de `ao_minimizar`.
 pub const AO_MINIMIZAR_PERGUNTAR: &str = "perguntar";
 pub const AO_MINIMIZAR_BANDEJA: &str = "bandeja";
@@ -177,7 +202,9 @@ pub const TEMPO_MIN_S: u32 = 60;
 impl ConfigApp {
     /// Os tempos com nome para mensagens: (rótulo, valor em segundos).
     pub fn tempos(&self) -> [(&'static str, u32); 3] {
-        [("uso recente", self.uso_s), ("inatividade", self.inatividade_s), ("sessão parada", self.sessao_parada_s)]
+        // os nomes no idioma de agora (rodada 23)
+        use crate::idioma::ta;
+        [(ta("tempo.uso"), self.uso_s), (ta("tempo.inatividade"), self.inatividade_s), (ta("tempo.sessao_parada"), self.sessao_parada_s)]
     }
 
     /// Tempos que valem: sem o modo desenvolvedor, os padrões; com ele, os gravados, subindo para
@@ -232,6 +259,14 @@ impl ConfigApp {
         }
         if !PAUSADO_OPCOES_MIN.contains(&c.pausado_dock_min) {
             c.pausado_dock_min = PAUSADO_DOCK_PADRAO_MIN;
+        }
+        // idioma desconhecido (config estragada): segue o Windows (rodada 23)
+        if ![crate::idioma::IDIOMA_SISTEMA, crate::idioma::IDIOMA_PT, crate::idioma::IDIOMA_EN].contains(&c.idioma.as_str()) {
+            c.idioma = crate::idioma::IDIOMA_SISTEMA.into();
+        }
+        // espaço no dock desconhecido (config estragada): o padrão (rodada 24)
+        if ![DOCK_ESPACO_TIMER, DOCK_ESPACO_TEXTO, DOCK_ESPACO_COR].contains(&c.dock_espaco.as_str()) {
+            c.dock_espaco = DOCK_ESPACO_TIMER.into();
         }
         Ok(c.normalizada())
     }
@@ -311,6 +346,57 @@ mod testes {
         let c = ConfigApp::de_json(r#"{"ao_minimizar": "bandeja", "dock_ao_minimizar": true}"#).unwrap();
         assert_eq!(c.ao_minimizar, "bandeja");
         assert!(serde_json::to_value(&c).unwrap().get("dock_ao_minimizar").is_none());
+    }
+
+    #[test]
+    fn idioma_novo_segue_o_sistema_e_a_config_de_antes_fica_igual() {
+        assert_eq!(ConfigApp::default().idioma, "sistema");
+        // a config de antes (sem o campo): os campos dela ficam, e o idioma segue o Windows
+        let velha = r#"{"tema": "claro", "corte_min": 180, "dock_modo": "perguntas", "espaco_aba": 2, "painel_linha": false, "dicas_vistas": ["zerar"]}"#;
+        let c = ConfigApp::de_json(velha).unwrap();
+        assert_eq!(c.idioma, "sistema");
+        assert_eq!((c.tema.as_str(), c.corte_min, c.dock_modo.as_str(), c.espaco_aba, c.painel_linha), ("claro", 180, "perguntas", Some(2), false));
+        assert_eq!(c.dicas_vistas, ["zerar"]);
+        // a escolha vai e volta no JSON
+        for id in ["pt-BR", "en", "sistema"] {
+            let c2 = ConfigApp { idioma: id.into(), ..c.clone() };
+            assert_eq!(ConfigApp::de_json(&serde_json::to_string(&c2).unwrap()).unwrap(), c2);
+        }
+        // valor estragado: o sistema
+        assert_eq!(ConfigApp::de_json(r#"{"idioma": "xx"}"#).unwrap().idioma, "sistema");
+    }
+
+    #[test]
+    fn espaco_no_dock_comeca_so_no_timer_e_a_config_de_antes_fica_igual() {
+        assert_eq!(ConfigApp::default().dock_espaco, DOCK_ESPACO_TIMER);
+        // a config de antes (sem o campo): "Só o timer", e os outros campos ficam
+        let velha = r#"{"tema": "escuro", "dock_situacao": false, "dock_botoes": "dois", "idioma": "en"}"#;
+        let c = ConfigApp::de_json(velha).unwrap();
+        assert_eq!(c.dock_espaco, "timer");
+        assert_eq!((c.tema.as_str(), c.dock_situacao, c.dock_botoes.as_str(), c.idioma.as_str()), ("escuro", false, "dois", "en"));
+        // as três escolhas vão e voltam no JSON
+        for v in [DOCK_ESPACO_TIMER, DOCK_ESPACO_TEXTO, DOCK_ESPACO_COR] {
+            let c2 = ConfigApp { dock_espaco: v.into(), ..c.clone() };
+            assert_eq!(ConfigApp::de_json(&serde_json::to_string(&c2).unwrap()).unwrap(), c2);
+        }
+        // valor estragado: o padrão
+        assert_eq!(ConfigApp::de_json(r#"{"dock_espaco": "xx"}"#).unwrap().dock_espaco, "timer");
+    }
+
+    #[test]
+    fn atualizar_comeca_ligado_e_a_config_de_antes_fica_igual() {
+        let d = ConfigApp::default();
+        assert!(d.atualizar_auto);
+        assert_eq!(d.atualizacao_ultima, None);
+        // a config de antes (sem os dois campos): a busca automática ligada, nunca buscou
+        let velha = r#"{"tema": "claro", "dock_espaco": "cor", "idioma": "en", "corte_min": 120}"#;
+        let c = ConfigApp::de_json(velha).unwrap();
+        assert!(c.atualizar_auto);
+        assert_eq!(c.atualizacao_ultima, None);
+        assert_eq!((c.tema.as_str(), c.dock_espaco.as_str(), c.idioma.as_str(), c.corte_min), ("claro", "cor", "en", 120));
+        // os dois vão e voltam no JSON
+        let c2 = ConfigApp { atualizar_auto: false, atualizacao_ultima: Some(1_800_000_000_000), ..c };
+        assert_eq!(ConfigApp::de_json(&serde_json::to_string(&c2).unwrap()).unwrap(), c2);
     }
 
     #[test]

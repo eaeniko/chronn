@@ -174,7 +174,8 @@ test('rodada 20 §1: o ponto do espaço no dock, com o nome do espaço na dica',
   assert.equal(pontoDoEspaco(s, leitura), '<i class="desp" style="--e:#e86bd0" title="Espaço: Pessoal" aria-label="Espaço: Pessoal"></i>');
   assert.equal(pontoDoEspaco(umEspaco(), leitura), '', 'com um só espaço, sem ponto');
   const d = fonte('dock.js');
-  assert.equal((d.match(/pontoDoEspaco\(snap, /g) ?? []).length, 2, 'no recolhido e no expandido');
+  // rodada 24: o recolhido segue os Ajustes (espacoNoRecolhido); o expandido fica com o ponto
+  assert.equal((d.match(/pontoDoEspaco\(snap, /g) ?? []).length, 1, 'só no expandido');
   // o dock mostra o que roda em todos os espaços: o total do dock não usa a aba
   assert.doesNotMatch(d, /abaAtual|espaco_aba/);
 });

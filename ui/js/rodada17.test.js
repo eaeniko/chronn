@@ -1,4 +1,5 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
+import { TEXTOS } from './textos.js';
 import { test } from 'node:test'; import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
@@ -108,7 +109,9 @@ test('revisão da rodada 17: o passo das pastas relê o Claude Code e se redesen
 
 test('revisão da rodada 17: o foco do "Pronto" começa em "Fazer o tour (1 min)"', () => {
   const pu = fonte('primeiro-uso.js');
-  assert.match(pu, /enviar: 'Fazer o tour \(1 min\)',[\s\S]*?aoMontar\(form\) \{\s*form\.querySelector\('\[type="submit"\]'\)\?\.setAttribute\('autofocus', ''\);/);
+  // (rodada 23: o texto do botão vem do textos.js)
+  assert.equal(TEXTOS.puFazerTour, 'Fazer o tour (1 min)');
+  assert.match(pu, /enviar: TEXTOS\.puFazerTour,[\s\S]*?aoMontar\(form\) \{\s*form\.querySelector\('\[type="submit"\]'\)\?\.setAttribute\('autofocus', ''\);/);
   // o diálogo foca o [autofocus] depois do aoMontar
   assert.match(fonte('editar.js'), /aoMontar\?\.\(form\);\s*const primeiro = form\.querySelector\('\[autofocus\]'\)/);
 });

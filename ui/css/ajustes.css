@@ -42,11 +42,28 @@
 /* escolha segmentada (tema, botões do dock, arredondamento) */
 .seg { display: inline-flex; flex-wrap: wrap; align-self: flex-start; gap: 2px; padding: 3px; border-radius: 11px; background: var(--pn); border: 1px solid var(--bd); }
 .seg-op { position: relative; cursor: pointer; }
+/* Sobre → atualizações (rodada 25): o botão com o resultado na linha, a caixa e a data */
+.aj-atu { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 8px; }
+.aj-atu-linha { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.aj-atu-res { font-size: 12.5px; color: var(--tx3); }
+.aj-atu-res.ok { color: var(--tx2); }
+.aj-atu-res.nova { color: var(--acento); font-weight: 550; }
+.aj-atu-res.erro { color: var(--tx2); }
+.aj-atu-data { font-size: 11.5px; color: var(--mu); }
 .seg-op input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
 .seg-op span { display: block; padding: 6px 13px; border-radius: 8px; font-size: 12.5px; color: var(--tx3); transition: background .15s, color .15s; }
 .seg-op:hover span { color: var(--tx); }
 .seg-op input:checked + span { background: var(--btn-h); color: var(--tx); font-weight: 550; }
 .seg-op input:focus-visible + span { outline: 2px solid color-mix(in srgb, var(--acento) 70%, transparent); outline-offset: 1px; }
+/* "Espaço no dock recolhido" (rodada 24): cada opção com a prévia da linha do dock em cima */
+.seg-dkesp .seg-op > span { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 10px; }
+.dkp { --c: #5b9cf5; --e: #e86bd0; display: flex; align-items: center; gap: 7px; height: 34px; padding: 0 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--bd); font-style: normal; font-size: 11.5px; color: var(--tx); font-weight: 400; }
+.dkp i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 30%, transparent); flex-shrink: 0; }
+.dkp i.e { background: var(--e); box-shadow: 0 0 0 3px color-mix(in srgb, var(--e) 30%, transparent); }
+.dkp b { display: flex; flex-direction: column; width: 92px; line-height: 1.2; font-weight: 400; text-align: left; }
+.dkp small { font-size: 9.5px; color: var(--mu); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dkp u { text-decoration: none; color: var(--e); font-weight: 600; }
+.dkp strong { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* botões */
 .aj .bt { padding: 7px 13px; border-radius: 9px; background: var(--btn); color: var(--tx2); font-weight: 550; font-size: 12.5px; transition: background .15s; }

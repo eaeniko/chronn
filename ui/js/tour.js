@@ -9,79 +9,61 @@ import { NOME_APP } from './nome.js';
 import { TEXTOS } from './textos.js';
 
 /**
+ * Um passo com o título e o texto no idioma de agora (rodada 23): `grupo` e `id` acham o par
+ * [título, texto] em `TEXTOS.tour` (o caminho dos mini-tours é "mini.<tela>"). `extra`: o alvo e
+ * o resto.
+ */
+function passo(grupo, id, extra = {}) {
+  const par = () => grupo.split('.').reduce((o, k) => o[k], TEXTOS.tour)[id];
+  return {
+    id,
+    get titulo() {
+      return par()[0];
+    },
+    get texto() {
+      const t = par()[1];
+      return typeof t === 'function' ? t(NOME_APP) : t;
+    },
+    ...extra,
+  };
+}
+
+/** Um passo com título e texto vindos de duas chaves do `TEXTOS` (os da rodada 20 e 22). */
+const passoDe = (id, titulo, texto, extra = {}) => ({
+  id,
+  get titulo() {
+    return TEXTOS[titulo];
+  },
+  get texto() {
+    return TEXTOS[texto];
+  },
+  ...extra,
+});
+
+/** O passo do dock: com o texto do dock escondido (o modo "Só quando houver uma pergunta"). */
+const PASSO_DOCK = Object.defineProperty(passo('completo', 'dock', { alvo: null, dock: true }), 'textoEscondido', {
+  enumerable: true,
+  get: () => TEXTOS.tour.completo.dock[2],
+});
+
+/**
  * O tour completo (rodada 16, 8 passos; 9 com o "+ Novo" da rodada 20; 10 com o menu das telas
  * da rodada 22), na ordem. `alvo`: o seletor da parte da tela; `dock`: o
- * dock pisca neste passo.
+ * dock pisca neste passo (com o dock escondido, nada pisca; revisão).
  */
 export const PASSOS = [
-  {
-    id: 'cartao',
-    titulo: 'O cartão do timer',
-    texto: '▶ conta à mão, ⏸ pausa e ■ encerra. Clique no cartão para abrir o painel dele.',
-    alvo: '#grupos .k',
-  },
-  {
-    id: 'etiquetas',
-    titulo: 'As etiquetas',
-    texto: '“Claude” aparece quando o Claude Code trabalha numa pasta ligada ao timer. Há também “esperando você”, “segundo plano” e “manual + …”.',
-    alvo: '#grupos .k .kx',
-  },
-  {
-    id: 'hoje',
-    titulo: 'O total de hoje',
-    texto: 'Quanto você trabalhou hoje. Passe o mouse em cima para ver de onde vem o número.',
-    alvo: '#total-dia',
-  },
-  {
-    // rodada 22: as telas foram para um menu ("Painel ▾"); o passo aponta para ele
-    id: 'telas',
-    titulo: TEXTOS.tourTelasTitulo,
-    texto: TEXTOS.tourTelasTexto,
-    alvo: '#bt-telas',
-  },
-  {
-    id: 'perguntas',
-    titulo: 'As perguntas',
-    texto: 'Numa conversa nova do Claude, o app pergunta em qual timer contar. A pergunta aparece aqui e no dock.',
-    alvo: '#perguntas',
-  },
-  {
-    id: 'painel',
-    titulo: 'O painel do timer',
-    texto: 'Mostra as sessões do Claude ligadas ao timer, cada uma com o ✎. O “Ajustar hoje” fica no editar do timer.',
-    alvo: '#foco',
-  },
-  {
-    id: 'dock',
-    titulo: 'O dock',
-    texto: 'A janela pequena sempre à vista, com o que está rodando (ela está piscando agora). Dá para arrastar e expandir; em Ajustes → Dock, ela pode aparecer só para as perguntas.',
-    // com o dock no modo "Só quando houver uma pergunta" (escondido): nada pisca (revisão)
-    textoEscondido: 'A janela pequena que mostra o que está rodando. Agora ela aparece só quando há uma pergunta; em Ajustes → Dock, dá para deixá-la sempre à vista.',
-    alvo: null,
-    dock: true,
-  },
-  {
-    id: 'novo',
-    titulo: TEXTOS.tourNovoTitulo,
-    texto: TEXTOS.tourNovoTexto,
-    alvo: '#bt-novo',
-  },
-  {
-    id: 'zerar',
-    titulo: 'Zerar',
-    texto: '↺ zera um timer e “Zerar todos” zera todos. Nada sai do histórico.',
-    alvo: '#bt-zerar-todos',
-  },
-  {
-    id: 'ajustes',
-    titulo: 'Ajustes ⚙',
-    texto: 'Inatividade, dock, lembretes e Conexões (o Claude Code). Em Ajuda, dá para ver este tour de novo.',
-    alvo: '#bt-ajustes',
-  },
+  passo('completo', 'cartao', { alvo: '#grupos .k' }),
+  passo('completo', 'etiquetas', { alvo: '#grupos .k .kx' }),
+  passo('completo', 'hoje', { alvo: '#total-dia' }),
+  // rodada 22: as telas foram para um menu ("Painel ▾"); o passo aponta para ele
+  passoDe('telas', 'tourTelasTitulo', 'tourTelasTexto', { alvo: '#bt-telas' }),
+  passo('completo', 'perguntas', { alvo: '#perguntas' }),
+  passo('completo', 'painel', { alvo: '#foco' }),
+  PASSO_DOCK,
+  passoDe('novo', 'tourNovoTitulo', 'tourNovoTexto', { alvo: '#bt-novo' }),
+  passo('completo', 'zerar', { alvo: '#bt-zerar-todos' }),
+  passo('completo', 'ajustes', { alvo: '#bt-ajustes' }),
 ];
-
-/** O passo do dock (o mesmo nos dois tours). */
-const PASSO_DOCK = PASSOS.find((p) => p.id === 'dock');
 
 /**
  * O tour essencial (rodada 17, 5 passos): o que o "Fazer o tour", a faixa "Novo: um tour…" e o
@@ -89,68 +71,64 @@ const PASSO_DOCK = PASSOS.find((p) => p.id === 'dock');
  * está ligado.
  */
 export const PASSOS_ESSENCIAL = [
-  {
-    id: 'cartao',
-    titulo: 'O cartão do timer',
-    texto: '▶ conta à mão e ⏸ pausa. Clique no cartão para abrir o painel dele.',
-    alvo: '#grupos .k',
-  },
-  {
-    id: 'claude',
-    titulo: 'Apps conectados contam sozinhos',
-    texto: 'Um app conectado conta sozinho quando trabalha numa pasta do timer. Com o Claude Code, aparece a etiqueta “Claude”, e “esperando você” quando ele termina.',
-    alvo: '#grupos .k .kx',
-  },
-  {
-    id: 'pastas',
-    titulo: 'As pastas',
-    texto: 'Uma conversa nova do Claude pergunta aqui em qual timer contar. A pasta de cada timer fica no editar timer, em “Pastas deste timer”.',
+  passo('essencial', 'cartao', { alvo: '#grupos .k' }),
+  passo('essencial', 'claude', { alvo: '#grupos .k .kx' }),
+  passo('essencial', 'pastas', {
     alvo: '#perguntas',
     semClaude: {
-      texto: 'O Claude Code ainda não está conectado: sem ele, os timers só contam à mão. Conectado, cada pasta conta no timer dela.',
+      get texto() {
+        return TEXTOS.tour.essencial.pastasSemClaude[0];
+      },
       acao: 'ligar-claude',
-      botao: 'Conectar o Claude Code',
+      get botao() {
+        return TEXTOS.tour.essencial.pastasSemClaude[1];
+      },
     },
-  },
+  }),
   PASSO_DOCK,
-  {
-    id: 'ajuda',
-    titulo: 'Mais ajuda',
-    texto: `Em cada tela, o ? explica o que ela mostra. O tour completo fica em Ajustes → Ajuda. Tudo roda neste computador: o ${NOME_APP} não envia nada para lugar nenhum.`,
-    alvo: '#bt-tour',
-  },
+  passo('essencial', 'ajuda', { alvo: '#bt-tour' }),
 ];
 
-/** O nome de cada tela, como o topo e os Ajustes mostram. */
-export const NOMES_DAS_TELAS = { painel: 'Painel', foco: 'Foco', cartoes: 'Cartões', linha: 'Linha do tempo', ajustes: 'Ajustes' };
+/** O nome de cada tela, como o topo e os Ajustes mostram (no idioma de agora). */
+export const NOMES_DAS_TELAS = {
+  get painel() {
+    return TEXTOS.telaPainel;
+  },
+  get foco() {
+    return TEXTOS.telaFoco;
+  },
+  get cartoes() {
+    return TEXTOS.telaCartoes;
+  },
+  get linha() {
+    return TEXTOS.linhaDoTempo;
+  },
+  get ajustes() {
+    return TEXTOS.telaAjustes;
+  },
+};
 
 /** Os mini-tours de cada tela (o "Esta tela" do ?), de 2 a 4 passos. */
 export const MINI_TOURS = {
   painel: [
-    { id: 'grupos', titulo: 'Grupos e cartões', texto: 'Cada grupo junta os timers de um projeto. O cartão mostra o tempo de hoje e os botões ▶ e ⏸.', alvo: '#grupos' },
-    { id: 'abas', titulo: TEXTOS.tourAbasTitulo, texto: TEXTOS.tourAbasTexto, alvo: '#abas .abas', soComAbas: true },
-    { id: 'novo', titulo: TEXTOS.tourNovoTitulo, texto: TEXTOS.tourNovoTexto, alvo: '#bt-novo' },
-    { id: 'pausar-tudo', titulo: 'Pausar tudo', texto: 'Para de uma vez todos os timers que estão contando (com abas, os da aba).', alvo: '#bt-pausar-tudo' },
-    { id: 'painel', titulo: 'O painel do timer', texto: 'O timer escolhido, à direita: as atividades, o ajuste de hoje e as sessões do Claude ligadas a ele.', alvo: '#foco' },
+    passo('mini.painel', 'grupos', { alvo: '#grupos' }),
+    passoDe('abas', 'tourAbasTitulo', 'tourAbasTexto', { alvo: '#abas .abas', soComAbas: true }),
+    passoDe('novo', 'tourNovoTitulo', 'tourNovoTexto', { alvo: '#bt-novo' }),
+    passo('mini.painel', 'pausar-tudo', { alvo: '#bt-pausar-tudo' }),
+    passo('mini.painel', 'painel', { alvo: '#foco' }),
   ],
-  foco: [
-    { id: 'relogio', titulo: 'O timer grande', texto: 'O tempo de hoje do timer escolhido, com os trechos do dia logo abaixo.', alvo: '#v-foco .fm' },
-    { id: 'lista', titulo: 'A lista', texto: 'Escolha outro timer aqui; o total de hoje fica no topo da lista.', alvo: '#v-foco .fs' },
-  ],
-  cartoes: [
-    { id: 'cartoes', titulo: 'Os cartões', texto: 'Um cartão por timer, com o tempo de hoje, ↺ zerar e ✎ editar.', alvo: '#v-cartoes .k' },
-    { id: 'zoho', titulo: 'O Zoho', texto: 'Embaixo do nome, o card do Zoho para onde as horas vão. O link do card fica no editar timer (✎).', alvo: '#v-cartoes .k .ds' },
-  ],
+  foco: [passo('mini.foco', 'relogio', { alvo: '#v-foco .fm' }), passo('mini.foco', 'lista', { alvo: '#v-foco .fs' })],
+  cartoes: [passo('mini.cartoes', 'cartoes', { alvo: '#v-cartoes .k' }), passo('mini.cartoes', 'zoho', { alvo: '#v-cartoes .k .ds' })],
   linha: [
-    { id: 'trechos', titulo: 'Os trechos', texto: 'Cada barra é um trecho de hoje, na hora em que aconteceu, por atividade.', alvo: '#v-linha .lt-ln' },
-    { id: 'cores', titulo: 'As cores', texto: 'A legenda diz o que cada cor e cada risco querem dizer: ligou sozinho, você deu play.', alvo: '#v-linha .lt-leg' },
-    { id: 'ajuste', titulo: 'O ± do ajuste', texto: 'O ± marca o timer com tempo ajustado à mão hoje.', alvo: '#v-linha .mao' },
+    passo('mini.linha', 'trechos', { alvo: '#v-linha .lt-ln' }),
+    passo('mini.linha', 'cores', { alvo: '#v-linha .lt-leg' }),
+    passo('mini.linha', 'ajuste', { alvo: '#v-linha .mao' }),
   ],
   ajustes: [
-    { id: 'dock', titulo: 'Dock e lembretes', texto: 'Dock: quando ele aparece. Lembretes no dock: quanto tempo o “esperando você” e o pausado ficam à vista.', alvo: '#aj-dock' },
-    { id: 'claude', titulo: 'Conexões e inatividade', texto: 'Conexões: o Claude Code conectado conta sozinho. Inatividade: depois de quanto tempo parado os timers pausam (em Tempos, no modo desenvolvedor).', alvo: '#aj-claude' },
-    { id: 'grupos', titulo: 'Grupos, regras e backups', texto: 'Grupos e regras de pasta: o que entra sozinho em cada timer. Backups: as cópias do banco, para voltar atrás.', alvo: '#aj-grupos' },
-    { id: 'ajuda', titulo: 'Ajuda', texto: 'As dicas na tela e os tours, a qualquer hora.', alvo: '#aj-ajuda' },
+    passo('mini.ajustes', 'dock', { alvo: '#aj-dock' }),
+    passo('mini.ajustes', 'claude', { alvo: '#aj-claude' }),
+    passo('mini.ajustes', 'grupos', { alvo: '#aj-grupos' }),
+    passo('mini.ajustes', 'ajuda', { alvo: '#aj-ajuda' }),
   ],
 };
 
@@ -158,15 +136,15 @@ export const MINI_TOURS = {
 export function itensDoMenuAjuda(visao) {
   const nome = NOMES_DAS_TELAS[visao] ?? NOMES_DAS_TELAS.painel;
   return [
-    { id: 'essencial', rotulo: 'Como começar' },
-    { id: 'tela', rotulo: `Esta tela: ${nome}` },
-    { id: 'completo', rotulo: 'Tour completo' },
+    { id: 'essencial', rotulo: TEXTOS.comoComecar },
+    { id: 'tela', rotulo: TEXTOS.estaTela(nome) },
+    { id: 'completo', rotulo: TEXTOS.tourCompleto },
   ];
 }
 
 /** O menu do ? (o HTML). */
 export const htmlDoMenuAjuda = (visao) =>
-  `<div class="menu-ajuda" role="menu" aria-label="Ajuda">${itensDoMenuAjuda(visao)
+  `<div class="menu-ajuda" role="menu" aria-label="${esc(TEXTOS.ajudaMenu)}">${itensDoMenuAjuda(visao)
     .map((it) => `<button type="button" role="menuitem" data-ajuda="${it.id}">${esc(it.rotulo)}</button>`)
     .join('')}</div>`;
 
@@ -228,11 +206,11 @@ export function htmlDoBalao(i, contexto = {}) {
   const acao = semClaudeNoPasso(p, contexto)
     ? `<div class="tour-acao"><button type="button" class="bt" data-tour="acao" data-acao="${esc(p.semClaude.acao)}">${esc(p.semClaude.botao)}</button></div>`
     : '';
-  return `<button type="button" class="tour-x" data-tour="fechar" title="Fechar o tour" aria-label="Fechar o tour">×</button>
-<small class="tour-n">Passo ${i + 1} de ${passos.length}</small>
+  return `<button type="button" class="tour-x" data-tour="fechar" title="${esc(TEXTOS.fecharTour)}" aria-label="${esc(TEXTOS.fecharTour)}">×</button>
+<small class="tour-n">${esc(TEXTOS.passoNDe(i + 1, passos.length))}</small>
 <h3 id="tour-t">${esc(p.titulo)}</h3>
 <p id="tour-d">${esc(textoDoPasso(p, contexto))}</p>
-${acao}<div class="tour-pe"><button type="button" class="tour-pular" data-tour="pular">Pular tour</button><span class="sp"></span><button type="button" class="bt" data-tour="voltar"${i === 0 ? ' disabled' : ''}>Voltar</button><button type="button" class="bt pri" data-tour="proximo">${ultimo ? 'Concluir' : 'Próximo'}</button></div>`;
+${acao}<div class="tour-pe"><button type="button" class="tour-pular" data-tour="pular">${esc(TEXTOS.pularTour)}</button><span class="sp"></span><button type="button" class="bt" data-tour="voltar"${i === 0 ? ' disabled' : ''}>${esc(TEXTOS.voltarBt)}</button><button type="button" class="bt pri" data-tour="proximo">${esc(ultimo ? TEXTOS.concluir : TEXTOS.proximo)}</button></div>`;
 }
 
 /**

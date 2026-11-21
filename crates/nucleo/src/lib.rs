@@ -23,6 +23,11 @@ pub const APPLICATION_ID: i32 = 0x4348_524E;
 /// também ficam.
 pub const NOME_INTERNO: &str = "Work Timer";
 
+/// O canal da versão (rodada 25): o rótulo depois do número, no "Sobre" dos Ajustes e na
+/// bandeja ("0.4.0 · alpha"). O número segue sem sufixo; virar "beta" é mudar esta linha.
+pub const CANAL: &str = "alpha";
+
+pub mod atualizacao;
 pub mod claude_registros;
 pub mod hooks_claude;
 pub mod banco;
@@ -30,6 +35,7 @@ pub mod config;
 pub mod dados;
 pub mod dicas;
 pub mod fim_do_transcript;
+pub mod idioma;
 pub mod modelo;
 pub mod pastas;
 pub mod recentes;

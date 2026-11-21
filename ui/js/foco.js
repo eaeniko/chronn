@@ -1,7 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 // Visão "Foco": a lista por grupo à esquerda e o relógio grande do timer selecionado
 // à direita, com os trechos do dia (mockup B).
-import { relogio, relogioGrande, curto, totalDeTimers, horaDoDia, textoDoAjuste } from './formato.js';
+import { relogio, relogioGrande, curto, totalDeTimers, horaDoDia, textoDoAjuste, minusculas } from './formato.js';
 import {
   esc,
   cor,
@@ -22,8 +22,7 @@ import {
   motivoNaTela,
 } from './componentes.js';
 import { nomeDoGrupo } from './espacos.js';
-
-const ORIGEM = { claude: 'Claude trabalhando', leitura: 'Você lendo', manual: 'Play manual' };
+import { TEXTOS } from './textos.js';
 
 function item(timer, agora, selecionado) {
   const cls = ['fi', timer.rodando && 'run', selecionado && 'sel'].filter(Boolean).join(' ');
@@ -41,8 +40,8 @@ function lista(snap, agora, fechados, selecionado) {
       return `<section class="fg${aberto ? '' : ' fechado'}">${cabecalhoGrupo({ ...g, nome: nomeDoGrupo(snap, g) }, agora, aberto, 'gh fgh')}${itens}</section>`;
     })
     .join('');
-  return `<nav class="fs" data-rolagem="foco-lista" aria-label="Timers">
-  <h4>Hoje · <span class="mono" data-total-dia>${curto(total)}</span></h4>
+  return `<nav class="fs" data-rolagem="foco-lista" aria-label="${TEXTOS.timersRotulo}">
+  <h4>${TEXTOS.hoje} · <span class="mono" data-total-dia>${curto(total)}</span></h4>
   ${grupos || semTimerNenhum()}
 </nav>`;
 }
@@ -53,25 +52,25 @@ function trechos(timer, meiaNoite, agora) {
   const ajustes = (timer.ajustes ?? [])
     .map((a) => {
       const at = (a.atividade_id ?? 1) !== (timer.atividade_padrao_id ?? 1) ? atividadePorId(a.atividade_id) : null;
-      const nome = at ? ` · ${esc(at.nome.toLowerCase())}` : '';
-      return `<div class="sg sg-mao"><b>à mão</b><span>${esc(a.motivo ?? 'ajuste')}${nome}</span><em class="mono">${esc(textoDoAjuste(a.delta_ms))}</em></div>`;
+      const nome = at ? ` · ${esc(minusculas(at.nome))}` : '';
+      return `<div class="sg sg-mao"><b>${TEXTOS.aMao}</b><span>${esc(a.motivo ?? TEXTOS.ajuste)}${nome}</span><em class="mono">${esc(textoDoAjuste(a.delta_ms))}</em></div>`;
     })
     .join('');
-  if (!v.length && !ajustes) return '<p class="vazio">Nada contado hoje.</p>';
+  if (!v.length && !ajustes) return `<p class="vazio">${TEXTOS.nadaContadoHojePonto}</p>`;
   return v
     .map((t) => {
-      const fim = t.fim === null ? 'agora' : horaDoDia(t.fim, meiaNoite);
+      const fim = t.fim === null ? TEXTOS.agora : horaDoDia(t.fim, meiaNoite);
       const dur = curto((t.fim ?? agora) - t.inicio);
       // a atividade, quando não é a padrão do timer ("Play manual · reunião")
       const at = (t.atividade_id ?? 1) !== (timer.atividade_padrao_id ?? 1) ? atividadePorId(t.atividade_id) : null;
-      const nome = at ? ` · ${esc(at.nome.toLowerCase())}` : '';
-      return `<div class="sg${t.fim === null ? ' on' : ''}"><b class="mono">${horaDoDia(t.inicio, meiaNoite)} – ${fim}</b><span>${ORIGEM[t.origem] ?? esc(t.origem)}${nome}</span><em class="mono">${dur}</em></div>`;
+      const nome = at ? ` · ${esc(minusculas(at.nome))}` : '';
+      return `<div class="sg${t.fim === null ? ' on' : ''}"><b class="mono">${horaDoDia(t.inicio, meiaNoite)} – ${fim}</b><span>${TEXTOS.origemFoco(t.origem) ?? esc(t.origem)}${nome}</span><em class="mono">${dur}</em></div>`;
     })
     .join('') + ajustes;
 }
 
 function principal(timer, grupo, meiaNoite, agora) {
-  if (!timer) return '<div class="fm"><p class="vazio">Crie um timer para começar.</p></div>';
+  if (!timer) return `<div class="fm"><p class="vazio">${TEXTOS.crieUmTimer}</p></div>`;
   const { hm, s } = relogioGrande(msDoTimer(timer, agora));
   const motivo = timer.rodando && timer.motivo ? `<i></i>${motivoNaTela(timer, agora)}` : textoLembrete(timer, agora) || marcaEncerrado(timer);
   const caminho = grupo && grupo.id !== null ? `<span class="pt">${esc(grupo.nome)}</span>` : '';
@@ -83,7 +82,7 @@ function principal(timer, grupo, meiaNoite, agora) {
   ${linhasAtividades(timer, agora)}
   ${marcaAjuste(timer)}
   ${controles(timer, agora)}
-  <div class="segs"><h5>Hoje</h5>${trechos(timer, meiaNoite, agora)}</div>
+  <div class="segs"><h5>${TEXTOS.hoje}</h5>${trechos(timer, meiaNoite, agora)}</div>
   ${destino(timer, grupo)}
 </div>`;
 }

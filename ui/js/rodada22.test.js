@@ -55,7 +55,8 @@ test('rodada 22: o "+ Novo" é o principal (preenchido, 36 px, ícone + texto); 
   // os textos do cabeçalho vêm do TEXTOS (o HTML traz os mesmos, para a primeira pintura)
   for (const m of INDEX.matchAll(/data-texto="(\w+)">([^<]*)</g)) assert.equal(TEXTOS[m[1]], m[2], m[1]);
   for (const m of INDEX.matchAll(/title="([^"]*)" data-dica="(\w+)"/g)) assert.equal(TEXTOS[m[2]], m[1], m[2]);
-  assert.match(PAINEL, /for \(const el of document\.querySelectorAll\('\[data-texto\]'\)\) trocarTexto\(el, TEXTOS\[el\.dataset\.texto\]\);/);
+  // (rodada 23: pelo aplicarTextos do textos.js, na carga e a cada troca de idioma)
+  assert.match(PAINEL, /aplicarTextos\(document\);/);
 });
 
 test('rodada 22: a linha 2: o menu das telas, as abas e, à direita, as ações em fantasma', () => {

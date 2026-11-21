@@ -7,7 +7,7 @@ use crate::config::{texto_de_corte, ConfigApp};
 use crate::modelo::{Atividade, EstadoSessao, Grupo, Ligacao, MotivoFim, Origem, Pergunta, Sessao, Timer, Trecho, ATIVIDADE_REUNIAO};
 use crate::motor::{raiz_do_projeto, sugestao_de_pasta, Motor, AVISO_LIGADA_MS};
 use crate::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
-use crate::APP_NOME;
+use crate::idioma::{self, tf, Idioma};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Snapshot {
@@ -34,6 +34,10 @@ pub struct Snapshot {
     /// Os grupos e timers de um espaço arquivado ficam fora de `grupos`.
     pub espacos: Vec<EspacoDto>,
     pub config: ConfigApp,
+    /// O idioma que vale agora ("pt-BR" ou "en"; rodada 23): a escolha da config, com o
+    /// "sistema" resolvido pelo idioma do Windows. As páginas seguem este, para os textos que vêm
+    /// do núcleo (as perguntas) e os delas saírem no mesmo idioma.
+    pub idioma: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -223,22 +227,23 @@ const COR_SEM_GRUPO: &str = "#8a8f98";
 /// Valor da opção "+ Novo timer…" da pergunta de sessão nova (a página trata; não é resposta).
 pub const OPCAO_NOVO_TIMER: &str = "novo";
 
-/// Motivo de o timer estar rodando: Claude vence leitura (ou escrita na conversa lida), que vence
-/// o play manual. A reunião manual (👥) vem na frente: "reunião", ou "reunião · Claude
-/// trabalhando" com o Claude trabalhando junto (a sobreposição permitida).
+/// Motivo de o timer estar rodando, como chave (rodada 23: a interface monta o texto): Claude
+/// ("claude") vence leitura ("leitura", ou "escrita" na conversa lida), que vence o play manual
+/// ("manual"). A reunião manual (👥) vem na frente: "reuniao", ou "reuniao+claude" com o Claude
+/// trabalhando junto (a sobreposição permitida).
 fn motivo(origens: &[Origem], escrevendo: bool, reuniao: bool) -> Option<String> {
     let m = if origens.contains(&Origem::Claude) {
-        Some("Claude trabalhando")
+        Some("claude")
     } else if origens.contains(&Origem::Leitura) {
-        Some(if escrevendo { "você escrevendo" } else { "você lendo" })
+        Some(if escrevendo { "escrita" } else { "leitura" })
     } else if origens.contains(&Origem::Manual) && !reuniao {
-        Some("play manual")
+        Some("manual")
     } else {
         None
     };
     match (reuniao, m) {
-        (true, Some(m)) => Some(format!("reunião · {m}")),
-        (true, None) => Some("reunião".to_string()),
+        (true, Some(m)) => Some(format!("reuniao+{m}")),
+        (true, None) => Some("reuniao".to_string()),
         (false, m) => m.map(str::to_string),
     }
 }
@@ -359,22 +364,13 @@ fn pasta_curta(cwd: &str) -> String {
 }
 
 /// "A", "A e B", "A, B e C".
-fn lista_de_nomes(nomes: &[String]) -> String {
-    match nomes {
-        [] => String::new(),
-        [um] => um.clone(),
-        [inicio @ .., ultimo] => format!("{} e {ultimo}", inicio.join(", ")),
-    }
+fn lista_de_nomes(i: Idioma, nomes: &[String]) -> String {
+    idioma::lista(i, nomes)
 }
 
 /// "25 min" ou "8h 00min", como o total do dia.
-fn duracao(de: Ms, ate: Ms) -> String {
-    let min = ((ate - de).max(0) + MIN / 2) / MIN;
-    if min < 60 {
-        format!("{min} min")
-    } else {
-        format!("{}h {:02}min", min / 60, min % 60)
-    }
+fn duracao(i: Idioma, de: Ms, ate: Ms) -> String {
+    idioma::duracao_min(i, ((ate - de).max(0) + MIN / 2) / MIN)
 }
 
 pub fn nome_da_sessao(s: &Sessao) -> String {
@@ -409,19 +405,19 @@ fn sessao_dto_com(s: &Sessao, estado: EstadoSessao, regras: &[crate::modelo::Reg
 
 /// Os avisos de ligada sozinha que valem agora, com o nome do timer (timer fora da lista, como
 /// um arquivado: sem aviso).
-fn avisos(motor: &Motor, timers: &[Timer], agora: Ms) -> Vec<AvisoDto> {
+fn avisos(i: Idioma, motor: &Motor, timers: &[Timer], agora: Ms) -> Vec<AvisoDto> {
     motor
         .avisos_de_ligacao(agora)
         .into_iter()
         .filter_map(|(s, l)| {
             let t = timers.iter().find(|t| t.id == l.timer_id)?;
-            let por = if l.como == Ligacao::Herdada { "pela conversa anterior" } else { "pela pasta" };
+            let chave = if l.como == Ligacao::Herdada { "aviso.pela_conversa" } else { "aviso.pela_pasta" };
             Some(AvisoDto {
                 sessao_id: s.id.clone(),
                 sessao_nome: nome_da_sessao(s),
                 cwd: s.cwd.clone(),
                 timer_id: t.id,
-                texto: format!("Ligada a {} {por}", t.nome),
+                texto: tf(i, chave, &[&t.nome]),
                 ate: l.em + AVISO_LIGADA_MS,
             })
         })
@@ -442,11 +438,11 @@ fn estado_na_tela(motor: &Motor, s: &Sessao, dia_inicio: Ms, agora: Ms) -> Estad
 }
 
 /// Ausência que começou antes do corte do dia: " desde 00:00 (8h 12min)", que é o que o "Contar" faz.
-fn desde_o_corte(de: Ms, ate: Ms, dia_inicio: Ms, corte_min: u32) -> String {
+fn desde_o_corte(i: Idioma, de: Ms, ate: Ms, dia_inicio: Ms, corte_min: u32) -> String {
     if de >= dia_inicio {
         return String::new();
     }
-    format!(" desde {} ({})", texto_de_corte(corte_min), duracao(dia_inicio, ate))
+    tf(i, "pg.desde_o_corte", &[&texto_de_corte(corte_min), &duracao(i, dia_inicio, ate)])
 }
 
 /// `dia_inicio` e `corte_min`: o "Contar" nunca atravessa o corte do dia, e o texto diz isso.
@@ -462,7 +458,9 @@ fn pergunta_dto(
     dia_inicio: Ms,
     corte_min: u32,
     motor: &Motor,
+    i: Idioma,
 ) -> PerguntaDto {
+    let t_ = |k: &str| idioma::t(i, k).to_string();
     let nomes = |ids: &[i64], de: &std::collections::BTreeMap<i64, i64>| {
         let v: Vec<String> = ids
             .iter()
@@ -475,7 +473,7 @@ fn pergunta_dto(
                 None => t.nome.clone(),
             })
             .collect();
-        lista_de_nomes(&v)
+        lista_de_nomes(i, &v)
     };
     // Na volta do mesmo dia, "Retomar agora" na frente (o botão destacado): religa os mesmos timers
     // sem contar o tempo fora. A ausência que atravessou o corte do dia não retoma (o manual para na
@@ -484,17 +482,17 @@ fn pergunta_dto(
     // ontem não muda e nada religa.
     let contar_ou_nao = |de: Ms, ate: Ms| {
         if ate < dia_inicio {
-            vec![("pausado".to_string(), "Deixar pausado".to_string())]
+            vec![("pausado".to_string(), t_("pg.pausado"))]
         } else if de < dia_inicio {
             vec![
-                ("pausado".to_string(), "Deixar pausado".to_string()),
-                ("contar".to_string(), format!("Contar desde {}", texto_de_corte(corte_min))),
+                ("pausado".to_string(), t_("pg.pausado")),
+                ("contar".to_string(), tf(i, "pg.contar_desde", &[&texto_de_corte(corte_min)])),
             ]
         } else {
             vec![
-                ("retomar".to_string(), "Retomar agora".to_string()),
-                ("contar".to_string(), "Contar o tempo fora".to_string()),
-                ("pausado".to_string(), "Deixar pausado".to_string()),
+                ("retomar".to_string(), t_("pg.retomar_agora")),
+                ("contar".to_string(), t_("pg.contar_fora")),
+                ("pausado".to_string(), t_("pg.pausado")),
             ]
         }
     };
@@ -519,36 +517,35 @@ fn pergunta_dto(
                 // a regra continua possível pelo "Outro timer…" (a caixa vem desmarcada, com o aviso)
                 Some(t) if *pasta_mae => {
                     opcoes.push((format!("ligar:{}", t.id), rotulo(t)));
-                    "Outro timer…"
+                    t_("pg.outro_timer")
                 }
                 Some(t) => {
                     // o botão cria a regra de pasta: o rótulo diz isso
-                    opcoes.push((format!("ligar:{}:regra", t.id), format!("{} · sempre nesta pasta", rotulo(t))));
-                    "Outro timer…"
+                    opcoes.push((format!("ligar:{}:regra", t.id), tf(i, "pg.sempre_na_pasta", &[&rotulo(t)])));
+                    t_("pg.outro_timer")
                 }
-                None => "Escolher timer…",
+                None => t_("pg.escolher_timer"),
             };
-            opcoes.push(("outro".to_string(), escolher.to_string()));
+            opcoes.push(("outro".to_string(), escolher));
             // "novo" abre a janela principal com o "Novo timer" (nome pela pasta) e liga a sessão
             // ao timer criado; também nunca vai ao núcleo como resposta
-            opcoes.push((OPCAO_NOVO_TIMER.to_string(), "+ Novo timer…".to_string()));
-            opcoes.push(("nao".to_string(), "Não contar".to_string()));
+            opcoes.push((OPCAO_NOVO_TIMER.to_string(), t_("pg.novo_timer")));
+            opcoes.push(("nao".to_string(), t_("pg.nao_contar")));
             // num worktree, a pasta do projeto (é onde a regra fica)
-            let texto =
-                format!("Sessão nova do Claude na pasta {}. Em qual timer contar?", pasta_curta(raiz_do_projeto(cwd)));
+            let texto = tf(i, "pg.sessao_nova", &[&pasta_curta(raiz_do_projeto(cwd))]);
             ("sessao_nova", texto, opcoes)
         }
         // a conversa nova numa pasta com regra (rodada 15): já conta no timer da regra
         Pergunta::ConversaNova { sessao_id, cwd, timer_id } => {
             let nome = motor.sessoes.get(sessao_id).map_or_else(|| sugestao_de_pasta(raiz_do_projeto(cwd)), nome_da_sessao);
-            let timer = timers.iter().find(|t| t.id == *timer_id).map_or("o timer da regra", |t| t.nome.as_str());
+            let timer = timers.iter().find(|t| t.id == *timer_id).map_or_else(|| t_("pg.timer_da_regra"), |t| t.nome.clone());
             (
                 "conversa_nova",
-                format!("Conversa nova: {nome} · contando em {timer} pela pasta"),
+                tf(i, "pg.conversa_nova", &[&nome, &timer]),
                 vec![
-                    ("certo".to_string(), "Certo".to_string()),
-                    ("outro".to_string(), "Outro timer…".to_string()),
-                    (OPCAO_NOVO_TIMER.to_string(), "+ Novo timer…".to_string()),
+                    ("certo".to_string(), t_("pg.certo")),
+                    ("outro".to_string(), t_("pg.outro_timer")),
+                    (OPCAO_NOVO_TIMER.to_string(), t_("pg.novo_timer")),
                 ],
             )
         }
@@ -557,41 +554,29 @@ fn pergunta_dto(
         Pergunta::VoltaInatividade { timer_ids, de, ate, atividades } => (
             "volta_inatividade",
             if *ate < dia_inicio {
-                format!(
-                    "Antes da virada do dia, você ficou {} sem mexer no PC com {} {}. O tempo daquele dia fica como está.",
-                    duracao(*de, *ate),
-                    nomes(timer_ids, atividades),
-                    if timer_ids.len() > 1 { "ligados" } else { "ligado" }
-                )
+                tf(i, "pg.inat_antes", &[&duracao(i, *de, *ate), &nomes(timer_ids, atividades), &t_(ligados(timer_ids))])
             } else if *de < dia_inicio {
-                format!(
-                    "Você ficou {} sem mexer no PC. Contar em {}{}?",
-                    duracao(*de, *ate),
-                    nomes(timer_ids, atividades),
-                    desde_o_corte(*de, *ate, dia_inicio, corte_min)
+                tf(
+                    i,
+                    "pg.inat_contar",
+                    &[&duracao(i, *de, *ate), &nomes(timer_ids, atividades), &desde_o_corte(i, *de, *ate, dia_inicio, corte_min)],
                 )
             } else {
-                format!("Você ficou {} sem mexer no PC. Retomar {}?", duracao(*de, *ate), nomes(timer_ids, atividades))
+                tf(i, "pg.inat_retomar", &[&duracao(i, *de, *ate), &nomes(timer_ids, atividades)])
             },
             contar_ou_nao(*de, *ate),
         ),
         Pergunta::AppFechado { timer_ids, de, ate, atividades } => (
             "app_fechado",
             if *ate < dia_inicio {
-                format!(
-                    "Antes da virada do dia, o {APP_NOME} ficou fechado {} com {} {}. O tempo daquele dia fica como está.",
-                    duracao(*de, *ate),
-                    nomes(timer_ids, atividades),
-                    if timer_ids.len() > 1 { "ligados" } else { "ligado" }
-                )
+                tf(i, "pg.fechado_antes", &[&duracao(i, *de, *ate), &nomes(timer_ids, atividades), &t_(ligados(timer_ids))])
             } else {
-                format!(
-                    "O {APP_NOME} ficou fechado {} com {} {}. {}?",
-                    duracao(*de, *ate),
-                    nomes(timer_ids, atividades),
-                    if timer_ids.len() > 1 { "ligados" } else { "ligado" },
-                    if *de < dia_inicio { format!("Contar{}", desde_o_corte(*de, *ate, dia_inicio, corte_min)) } else { "Retomar".to_string() }
-                )
+                let acao = if *de < dia_inicio {
+                    tf(i, "pg.contar", &[&desde_o_corte(i, *de, *ate, dia_inicio, corte_min)])
+                } else {
+                    t_("pg.retomar")
+                };
+                tf(i, "pg.fechado", &[&duracao(i, *de, *ate), &nomes(timer_ids, atividades), &t_(ligados(timer_ids)), &acao])
             },
             contar_ou_nao(*de, *ate),
         ),
@@ -599,7 +584,19 @@ fn pergunta_dto(
     PerguntaDto { id, tipo: tipo.to_string(), texto, opcoes, sessao_id, pasta, pasta_curta: curta }
 }
 
+/// "ligado" ou "ligados", pelo número de timers.
+fn ligados(ids: &[i64]) -> &'static str {
+    if ids.len() > 1 { "pg.ligados" } else { "pg.ligado" }
+}
+
+/// O estado no idioma da config (o "sistema" pelo idioma do Windows; rodada 23).
 pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snapshot> {
+    let i = idioma::da_escolha(&banco.config_app()?.idioma);
+    montar_em(banco, motor, agora, i)
+}
+
+/// O estado com os textos do núcleo (as perguntas, os avisos, o "Sem grupo") no idioma `i`.
+pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite::Result<Snapshot> {
     let (corte, fuso) = (motor.cfg.corte_min, motor.cfg.fuso_min);
     let dia = dia_de(agora, corte, fuso);
     let dia_inicio = inicio_do_dia(dia, corte, fuso);
@@ -768,7 +765,7 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
         grupos_dto.push(GrupoDto {
             id: None,
             espaco_id: e.id,
-            nome: "Sem grupo".to_string(),
+            nome: idioma::t(i, "padrao.sem_grupo").to_string(),
             cor: COR_SEM_GRUPO.to_string(),
             link_projeto: None,
             card_padrao: None,
@@ -807,14 +804,15 @@ pub fn montar(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Result<Snaps
         perguntas: motor
             .perguntas
             .iter()
-            .map(|(id, p)| pergunta_dto(*id, p, &timers, &rotulos, &atividades, dia_inicio, corte, motor))
+            .map(|(id, p)| pergunta_dto(*id, p, &timers, &rotulos, &atividades, dia_inicio, corte, motor, i))
             .collect(),
         lendo: motor.lendo_agora().map(str::to_string),
         escrevendo: motor.escrevendo_agora(),
-        avisos: avisos(motor, &timers, agora),
+        avisos: avisos(i, motor, &timers, agora),
         atividades,
         espacos: espacos_dto,
         config: banco.config_app()?,
+        idioma: i.codigo().to_string(),
     })
 }
 
@@ -823,6 +821,7 @@ mod testes {
     use super::*;
     use crate::config::{ConfigApp, ConfigMotor};
     use crate::modelo::*;
+    use crate::APP_NOME;
     use crate::tempo::*;
     use fila::EventoHook;
 
@@ -938,7 +937,7 @@ mod testes {
         let timers: Vec<&TimerDto> = s.grupos.iter().flat_map(|g| &g.timers).collect();
         let projeto_a = timers.iter().find(|x| x.id == t).unwrap();
         assert!(projeto_a.rodando);
-        assert_eq!(projeto_a.motivo.as_deref(), Some("Claude trabalhando"));
+        assert_eq!(projeto_a.motivo.as_deref(), Some("claude"));
         assert_eq!(projeto_a.trechos, vec![TrechoDto { inicio: h(9, 0), fim: None, origem: "claude".into(), atividade_id: 1 }]);
         assert_eq!(projeto_a.sessoes.len(), 1);
         assert_eq!(projeto_a.sessoes[0].id, "s1");
@@ -960,8 +959,8 @@ mod testes {
         m.abertos.push(TrechoAberto { timer_id: Some(t2), sessao_id: Some("s2".into()), origem: Origem::Leitura, inicio: h(9, 5), atividade_id: 1 });
         let s = montar(&b, &m, h(9, 10)).unwrap();
         let ts: Vec<&TimerDto> = s.grupos.iter().flat_map(|g| &g.timers).collect();
-        assert_eq!(ts[0].motivo.as_deref(), Some("play manual"));
-        assert_eq!(ts[1].motivo.as_deref(), Some("você lendo"));
+        assert_eq!(ts[0].motivo.as_deref(), Some("manual"));
+        assert_eq!(ts[1].motivo.as_deref(), Some("leitura"));
         assert_eq!(s.rodando, 2);
         assert_eq!(s.lendo.as_deref(), Some("s2"));
     }
@@ -1047,13 +1046,13 @@ mod testes {
         let ts: Vec<&TimerDto> = s.grupos.iter().flat_map(|g| &g.timers).collect();
         let cliente_a = ts.iter().find(|x| x.id == t).unwrap();
         assert_eq!(cliente_a.situacao.as_deref(), Some("reuniao"));
-        assert_eq!(cliente_a.motivo.as_deref(), Some("reunião"));
+        assert_eq!(cliente_a.motivo.as_deref(), Some("reuniao"));
         assert_eq!(cliente_a.manual_atividade_id, Some(ATIVIDADE_REUNIAO));
         assert_eq!(cliente_a.atividade_padrao_id, ATIVIDADE_TRABALHO);
         assert_eq!(cliente_a.trechos, vec![TrechoDto { inicio: h(9, 0), fim: None, origem: "manual".into(), atividade_id: ATIVIDADE_REUNIAO }]);
         assert_eq!(cliente_a.ajustes[0].atividade_id, ATIVIDADE_REUNIAO);
         let projeto_a = ts.iter().find(|x| x.id == outro).unwrap();
-        assert_eq!((projeto_a.situacao.as_deref(), projeto_a.motivo.as_deref()), (Some("manual"), Some("play manual")), "o ▶ tem a etiqueta \"manual\" (rodada 13)");
+        assert_eq!((projeto_a.situacao.as_deref(), projeto_a.motivo.as_deref()), (Some("manual"), Some("manual")), "o ▶ tem a etiqueta \"manual\" (rodada 13)");
         assert_eq!(s.atividades.iter().map(|a| a.nome.as_str()).collect::<Vec<_>>(), ["Trabalho", "Reunião", "Estudo"]);
         // o Claude trabalhando junto: a reunião segue na frente
         m.regras_pasta = vec![RegraPasta { id: 1, pasta: "G:\\Cliente A".into(), timer_id: t }];
@@ -1061,7 +1060,7 @@ mod testes {
         b.aplicar(&m.evento(&ev)).unwrap();
         let s = montar(&b, &m, h(9, 45)).unwrap();
         let cliente_a = s.grupos.iter().flat_map(|g| &g.timers).find(|x| x.id == t).unwrap();
-        assert_eq!((cliente_a.situacao.as_deref(), cliente_a.motivo.as_deref()), (Some("reuniao"), Some("reunião · Claude trabalhando")));
+        assert_eq!((cliente_a.situacao.as_deref(), cliente_a.motivo.as_deref()), (Some("reuniao"), Some("reuniao+claude")));
     }
 
     #[test]
@@ -1076,6 +1075,36 @@ mod testes {
         assert_eq!(p.texto, format!("O {APP_NOME} ficou fechado 40 min com A e B ligados. Retomar?"));
         let valores: Vec<&str> = p.opcoes.iter().map(|o| o.0.as_str()).collect();
         assert_eq!(valores, ["retomar", "contar", "pausado"]);
+    }
+
+    /// Rodada 23: as perguntas do núcleo saem no idioma da config, nos dois idiomas.
+    #[test]
+    fn as_perguntas_saem_nos_dois_idiomas() {
+        let b = Banco::abrir_memoria().unwrap();
+        let t1 = b.criar_timer(None, "A", "#a00").unwrap();
+        let t2 = b.criar_timer(None, "B", "#b00").unwrap();
+        let mut m = motor(h(9, 0));
+        m.perguntas.push((1, Pergunta::AppFechado { timer_ids: vec![t1, t2], de: h(8, 0), ate: h(8, 40), atividades: Default::default() }));
+        m.perguntas.push((2, Pergunta::VoltaInatividade { timer_ids: vec![t1], de: h(0, 0) - 48 * MIN, ate: h(8, 12), atividades: Default::default() }));
+        m.perguntas.push((3, Pergunta::SessaoNova { sessao_id: "s1".into(), cwd: r"D:\Projetos\Site".into(), sugestao: String::new(), pasta_mae: false }));
+        let en = montar_em(&b, &m, h(9, 0), Idioma::En).unwrap();
+        assert_eq!(en.idioma, "en");
+        assert_eq!(en.perguntas[0].texto, format!("{APP_NOME} was closed for 40 min with A and B running. Resume?"));
+        assert_eq!(en.perguntas[0].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Resume now", "Count the time away", "Leave paused"]);
+        assert_eq!(en.perguntas[1].texto, "You were away from the PC for 9h 00m. Count it in A from 00:00 (8h 12m)?");
+        assert_eq!(en.perguntas[1].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Leave paused", "Count from 00:00"]);
+        assert_eq!(en.perguntas[2].texto, r"New Claude session in the folder Projetos\Site. Which timer should count it?");
+        assert_eq!(en.perguntas[2].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Choose timer…", "+ New timer…", "Don’t count"]);
+        let pt = montar_em(&b, &m, h(9, 0), Idioma::Pt).unwrap();
+        assert_eq!(pt.idioma, "pt-BR");
+        assert_eq!(pt.perguntas[0].texto, format!("O {APP_NOME} ficou fechado 40 min com A e B ligados. Retomar?"));
+        assert_eq!(pt.perguntas[1].texto, "Você ficou 9h 00min sem mexer no PC. Contar em A desde 00:00 (8h 12min)?");
+        assert_eq!(pt.perguntas[2].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Escolher timer…", "+ Novo timer…", "Não contar"]);
+        // o "Sem grupo" também, e o idioma da config manda no `montar`
+        assert_eq!(en.grupos.last().unwrap().nome, "No group");
+        let cfg = ConfigApp { idioma: "en".into(), ..b.config_app().unwrap() };
+        b.salvar_config_app(&cfg).unwrap();
+        assert_eq!(montar(&b, &m, h(9, 0)).unwrap().idioma, "en");
     }
 
     #[test]
@@ -1239,7 +1268,7 @@ mod testes {
         let s = montar(&b, &m, h(9, 16)).unwrap();
         assert_eq!(situacao_de(&s, t).as_deref(), Some("escrevendo"));
         let timer = s.grupos.iter().flat_map(|g| &g.timers).find(|x| x.id == t).unwrap();
-        assert_eq!(timer.motivo.as_deref(), Some("você escrevendo"));
+        assert_eq!(timer.motivo.as_deref(), Some("escrita"));
         assert!(s.escrevendo);
         assert_eq!(situacao_de(&s, manual).as_deref(), Some("manual"));
         // a leitura fechou (você mandou a mensagem): nada de "escrevendo" sobrando

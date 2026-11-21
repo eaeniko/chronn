@@ -371,7 +371,7 @@ pub fn titulo_principal(rodando: usize) -> String {
     if rodando == 0 {
         nome
     } else {
-        format!("● {rodando} rodando · {nome}")
+        nucleo::idioma::tfa("janela.rodando", &[&rodando.to_string(), &nome])
     }
 }
 
@@ -976,6 +976,9 @@ pub struct AvisoDoDock {
     pub botao2: Option<String>,
     pub ms: u64,
     pub tema: Option<String>,
+    /// O idioma do texto (o `lang` da página do aviso; rodada 23).
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 /// Onde fica o aviso de `w`×`h`: logo abaixo do dock, centralizado nele; se não couber embaixo

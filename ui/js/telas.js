@@ -4,12 +4,12 @@
 import { esc } from './componentes.js';
 import { TEXTOS } from './textos.js';
 
-/** As telas do menu, na ordem. `atalho`: a tecla, se houver (hoje nenhuma tem). */
+/** As telas do menu, na ordem (o rótulo no idioma de agora). `atalho`: a tecla, se houver (hoje nenhuma tem). */
 export const ITENS_DAS_TELAS = [
-  { id: 'painel', rotulo: TEXTOS.telaPainel, atalho: null },
-  { id: 'foco', rotulo: TEXTOS.telaFoco, atalho: null },
-  { id: 'cartoes', rotulo: TEXTOS.telaCartoes, atalho: null },
-  { id: 'linha', rotulo: TEXTOS.linhaDoTempo, atalho: null },
+  { id: 'painel', get rotulo() { return TEXTOS.telaPainel; }, atalho: null },
+  { id: 'foco', get rotulo() { return TEXTOS.telaFoco; }, atalho: null },
+  { id: 'cartoes', get rotulo() { return TEXTOS.telaCartoes; }, atalho: null },
+  { id: 'linha', get rotulo() { return TEXTOS.linhaDoTempo; }, atalho: null },
 ];
 
 /** O nome da tela no botão do menu (nos Ajustes, "Ajustes"). */

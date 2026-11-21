@@ -10,12 +10,12 @@
 pub fn escolher_pasta(dono: Option<isize>, inicial: Option<String>, titulo: String) -> Result<Option<String>, String> {
     std::thread::spawn(move || unsafe { abrir(dono, inicial.as_deref(), &titulo) })
         .join()
-        .map_err(|_| "O seletor de pasta parou".to_string())?
+        .map_err(|_| nucleo::idioma::ta("erro.seletor_parou").to_string())?
 }
 
 #[cfg(not(windows))]
 pub fn escolher_pasta(_dono: Option<isize>, _inicial: Option<String>, _titulo: String) -> Result<Option<String>, String> {
-    Err("Seletor de pasta só no Windows".into())
+    Err(nucleo::idioma::ta("erro.seletor_so_windows").into())
 }
 
 /// SAFETY: chamada numa thread nova, que inicia e encerra o COM dela; os objetos COM saem antes do
@@ -58,5 +58,5 @@ unsafe fn abrir(dono: Option<isize>, inicial: Option<&str>, titulo: &str) -> Res
     if iniciou {
         unsafe { CoUninitialize() };
     }
-    r.map_err(|e| format!("Não deu para abrir o seletor de pasta: {}", e.message()))
+    r.map_err(|e| nucleo::idioma::tfa("erro.seletor_abrir", &[&e.message().to_string()]))
 }

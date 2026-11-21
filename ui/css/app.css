@@ -79,6 +79,12 @@ svg { display: block; fill: currentColor; }
   color: var(--mu); font-size: 15px; transition: background .15s, color .15s;
 }
 .ic:hover, .ic.on, .ic[aria-expanded="true"] { background: var(--btn); color: var(--tx); }
+/* a versão nova (rodada 25): o ícone na cor de destaque, com um ponto, como o do VS Code */
+.ic.atu { position: relative; color: var(--acento); }
+.ic.atu[hidden] { display: none; }
+.ic.atu:hover { color: var(--acento); background: color-mix(in srgb, var(--acento) 14%, transparent); }
+.ic.atu .bi { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ic.atu::after { content: ''; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--acento); box-shadow: 0 0 0 2px var(--bg); }
 .sp { flex: 1; }
 /* o total da aba, sozinho à direita: o maior texto da tela; a data pequena em cima */
 .day { position: relative; text-align: right; padding-left: 24px; line-height: 1.05; }
@@ -153,6 +159,9 @@ svg { display: block; fill: currentColor; }
 .gh .fd { font-size: 13px; width: 10px; color: var(--mu); flex-shrink: 0; }
 .gh b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gd:hover b { color: var(--tx); }
+/* o nome do grupo virando campo (⋯ → Renomear, rodada 24) */
+.gd-ren { flex: 0 1 auto; }
+.g-ren { font: inherit; font-weight: 600; color: var(--tx); min-width: 0; width: 22ch; max-width: 100%; padding: 1px 6px; margin: -2px 0; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--acento) 70%, transparent); background: var(--bg); outline: none; }
 .gh .lk {
   font-size: 11px; color: var(--mu); background: var(--pn); border: 1px solid var(--bd);
   padding: 2px 8px; border-radius: 99px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;

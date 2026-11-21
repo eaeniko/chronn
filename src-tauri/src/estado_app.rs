@@ -1,6 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 //! Estado do app: banco e motor atrás de um único `Mutex` no `tauri::State`.
 //! A lógica dos comandos mora aqui (sem Tauri) para ser testável.
+use nucleo::idioma::{ta, tfa};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -39,6 +40,9 @@ pub const GRAVAR_TIQUE_MS: Ms = 60_000;
 pub const MOTIVO_MAX: usize = 80;
 /// Nome de uma atividade (Ajustes → Atividades): até isto de letras.
 pub const ATIVIDADE_NOME_MAX: usize = 40;
+/// Nome de um grupo (revisão da rodada 24): até isto de letras, o mesmo limite do Renomear, do
+/// "Novo grupo" e do "Editar grupo" (`GRUPO_NOME_MAX` no `editar.js`).
+pub const GRUPO_NOME_MAX: usize = 60;
 
 /// Tamanho e data de modificação do transcript: se não mudaram, o título também não.
 type Assinatura = (u64, Option<std::time::SystemTime>);
@@ -143,11 +147,17 @@ pub struct Zerado {
 pub const ESPACO_NOME_MAX: usize = 24;
 
 /// A recusa de apagar um espaço com grupos ou timers à vista (revisão da rodada 20: o mesmo texto
-/// da dica do "Apagar" nos Ajustes).
-pub const MOVA_OS_GRUPOS: &str = "Mova os grupos para outro espaço antes";
+/// da dica do "Apagar" nos Ajustes), no idioma de agora (rodada 23).
+#[allow(non_snake_case)]
+pub fn MOVA_OS_GRUPOS() -> &'static str {
+    ta("erro.mova_os_grupos")
+}
 
 /// A recusa de apagar ou arquivar o último espaço não arquivado.
-pub const ULTIMO_ESPACO: &str = "Precisa sobrar pelo menos um espaço";
+#[allow(non_snake_case)]
+pub fn ULTIMO_ESPACO() -> &'static str {
+    ta("erro.ultimo_espaco")
+}
 
 /// O que um "Mover" mudou (rodada 21), para o "Desfazer": o grupo ou o timer e onde ele estava.
 #[derive(Clone, Debug, PartialEq, Serialize, serde::Deserialize)]
@@ -169,7 +179,10 @@ pub struct Movido {
 }
 
 /// A recusa do "Desfazer" quando o grupo ou o timer já mudou de lugar depois do mover.
-pub const DESFAZER_JA_MUDOU: &str = "Não dá mais para desfazer: ele já mudou de lugar";
+#[allow(non_snake_case)]
+pub fn DESFAZER_JA_MUDOU() -> &'static str {
+    ta("erro.desfazer_ja_mudou")
+}
 
 /// A frase com a primeira letra minúscula (para entrar no meio de outra).
 fn minuscula(frase: &str) -> String {
@@ -181,7 +194,10 @@ fn minuscula(frase: &str) -> String {
 }
 
 /// A recusa de ocultar a atividade padrão do timer no painel.
-pub const PADRAO_NAO_OCULTA: &str = "A atividade padrão do timer não pode ser ocultada";
+#[allow(non_snake_case)]
+pub fn PADRAO_NAO_OCULTA() -> &'static str {
+    ta("erro.padrao_nao_oculta")
+}
 
 /// Chave da config do banco com o corte do dia em que o "Zerar sozinho na virada" zerou pela
 /// última vez (ms). Vazia com a opção desligada.
@@ -290,6 +306,7 @@ impl Nucleo {
     /// (o que ficou aberto fecha no último tique e o motor pergunta pelos manuais).
     pub fn abrir(banco: Banco, agora: Ms, fuso_min: i32, fuso_dia: NaiveDate) -> Result<Nucleo, String> {
         let cfg = banco.config_app().map_err(texto)?;
+        nucleo::idioma::usar(nucleo::idioma::da_escolha(&cfg.idioma));
         let mut motor = Motor::novo(ConfigMotor::de(&cfg, fuso_min), agora);
         motor.regras_pasta = banco.regras_pasta().map_err(texto)?;
         motor.atividades_padrao = banco.atividades_padrao().map_err(texto)?;
@@ -362,7 +379,7 @@ impl Nucleo {
     /// Erro se o núcleo ficou sem banco (`quebrado`): nada é lido nem gravado.
     pub fn checar_banco(&self) -> Result<(), String> {
         match &self.quebrado {
-            Some(e) => Err(format!("O banco não abriu ({e}). Feche e abra o {}; os backups estão na pasta de dados.", nucleo::APP_NOME)),
+            Some(e) => Err(tfa("erro.banco_nao_abriu", &[e])),
             None => Ok(()),
         }
     }
@@ -396,9 +413,9 @@ impl Nucleo {
         // fecha a conexão com o arquivo (o SQLite passa o WAL para o banco)
         drop(std::mem::replace(&mut self.banco, Banco::abrir_memoria().map_err(texto)?));
         let erro = match apagar_banco(&anterior).and_then(|_| mover_banco(banco, &anterior)) {
-            Err(e) => format!("não consegui guardar o banco de agora: {e}"),
+            Err(e) => tfa("erro.guardar_banco", &[&e.to_string()]),
             Ok(()) => match std::fs::rename(novo, banco) {
-                Err(e) => format!("não consegui pôr o banco novo no lugar: {e}"),
+                Err(e) => tfa("erro.por_banco", &[&e.to_string()]),
                 Ok(()) => match abrir(banco) {
                     Ok(n) => {
                         *self = n;
@@ -413,7 +430,7 @@ impl Nucleo {
                             let _ = apagar_banco(&falhou);
                             let _ = mover_banco(banco, &falhou);
                         }
-                        format!("o banco novo não abriu: {e}")
+                        tfa("erro.banco_novo", &[&e.to_string()])
                     }
                 },
             },
@@ -425,11 +442,11 @@ impl Nucleo {
         match abrir(banco) {
             Ok(n) => *self = n,
             Err(e) => {
-                self.quebrado = Some(format!("{erro}; o de antes também não abriu: {e}"));
-                return Err(format!("{erro}; o de antes também não abriu: {e}"));
+                self.quebrado = Some(tfa("erro.de_antes_tambem", &[&erro, &e.to_string()]));
+                return Err(tfa("erro.de_antes_tambem", &[&erro, &e.to_string()]));
             }
         }
-        Err(format!("{erro}. Nada mudou."))
+        Err(tfa("erro.nada_mudou", &[&erro]))
     }
 
     /// Backup automático: na primeira abertura do dia (`abertura`) e a cada 6 h. Sem timers
@@ -478,11 +495,11 @@ impl Nucleo {
         dia: NaiveDate,
     ) -> Result<(), String> {
         if dados::ler_nome(nome).is_none() {
-            return Err(format!("backup desconhecido: {nome}"));
+            return Err(tfa("erro.backup_desconhecido", &[nome]));
         }
         let origem = dir.join(nome);
         if !origem.is_file() {
-            return Err("Esse backup não existe mais".into());
+            return Err(ta("erro.backup_sumiu").into());
         }
         self.checar_banco()?;
         let novo = banco.parent().unwrap_or(Path::new(".")).join("restaurando.db");
@@ -492,7 +509,7 @@ impl Nucleo {
             Ok(p) => p,
             Err(e) => {
                 let _ = apagar_banco(&novo);
-                return Err(format!("não consegui guardar o estado de agora antes de restaurar: {e}"));
+                return Err(tfa("erro.guardar_antes_restaurar", &[&e.to_string()]));
             }
         };
         let preparar = || -> Result<(), String> {
@@ -572,7 +589,10 @@ impl Nucleo {
 
     pub fn snapshot(&self, agora: Ms) -> Result<Snapshot, String> {
         self.checar_banco()?;
-        snapshot::montar(&self.banco, &self.motor, agora).map_err(texto)
+        let s = snapshot::montar(&self.banco, &self.motor, agora).map_err(texto)?;
+        // o idioma do estado vale para o resto do app: a bandeja, os títulos e os erros (rodada 23)
+        nucleo::idioma::usar(if s.idioma == nucleo::idioma::IDIOMA_EN { nucleo::idioma::Idioma::En } else { nucleo::idioma::Idioma::Pt });
+        Ok(s)
     }
 
     /// Timers rodando agora (distintos).
@@ -596,7 +616,7 @@ impl Nucleo {
         if self.banco.timers().map_err(texto)?.iter().any(|t| t.id == id) {
             Ok(())
         } else {
-            Err("Timer não encontrado".into())
+            Err(ta("erro.timer_nao_encontrado").into())
         }
     }
 
@@ -647,7 +667,7 @@ impl Nucleo {
         self.checar_banco()?;
         self.checar_timer(timer_id)?;
         if !self.banco.atividades().map_err(texto)?.iter().any(|a| a.id == atividade_id) {
-            return Err("Atividade não encontrada".into());
+            return Err(ta("erro.atividade_nao_encontrada").into());
         }
         let antes = self.banco.zerar_atividade(timer_id, atividade_id, agora).map_err(texto)?;
         Ok(Zerado { em: agora, antes: vec![], limpas: vec![], atividade: Some((timer_id, atividade_id, antes)) })
@@ -687,7 +707,7 @@ impl Nucleo {
     pub fn mover_grupo(&mut self, grupo_id: i64, espaco_id: i64) -> Result<Movido, String> {
         self.checar_banco()?;
         self.checar_espaco(espaco_id, true)?;
-        let g = self.banco.grupos().map_err(texto)?.into_iter().find(|g| g.id == grupo_id).ok_or("Grupo não encontrado")?;
+        let g = self.banco.grupos().map_err(texto)?.into_iter().find(|g| g.id == grupo_id).ok_or(ta("erro.grupo_nao_encontrado"))?;
         self.banco.mover_grupo(grupo_id, espaco_id).map_err(texto)?;
         Ok(Movido { tipo: "grupo".into(), id: grupo_id, grupo_id: None, espaco_id: g.espaco_id, para_grupo_id: None, para_espaco_id: espaco_id })
     }
@@ -696,7 +716,7 @@ impl Nucleo {
     /// "Sem grupo" do espaço `espaco_id`. O histórico vai junto. Devolve o de antes.
     pub fn mover_timer(&mut self, timer_id: i64, grupo_id: Option<i64>, espaco_id: i64) -> Result<Movido, String> {
         self.checar_banco()?;
-        let t = self.banco.timers().map_err(texto)?.into_iter().find(|t| t.id == timer_id).ok_or("Timer não encontrado")?;
+        let t = self.banco.timers().map_err(texto)?.into_iter().find(|t| t.id == timer_id).ok_or(ta("erro.timer_nao_encontrado"))?;
         let antes = Movido {
             tipo: "timer".into(),
             id: timer_id,
@@ -707,7 +727,7 @@ impl Nucleo {
         };
         let espaco = match grupo_id {
             Some(g) => {
-                let grupo = self.banco.grupos().map_err(texto)?.into_iter().find(|x| x.id == g).ok_or("Grupo não encontrado")?;
+                let grupo = self.banco.grupos().map_err(texto)?.into_iter().find(|x| x.id == g).ok_or(ta("erro.grupo_nao_encontrado"))?;
                 self.checar_espaco(grupo.espaco_id, true)?;
                 grupo.espaco_id
             }
@@ -727,26 +747,26 @@ impl Nucleo {
         self.checar_banco()?;
         match m.tipo.as_str() {
             "grupo" => {
-                let g = self.banco.grupos().map_err(texto)?.into_iter().find(|g| g.id == m.id).ok_or(DESFAZER_JA_MUDOU)?;
+                let g = self.banco.grupos().map_err(texto)?.into_iter().find(|g| g.id == m.id).ok_or(DESFAZER_JA_MUDOU())?;
                 if g.espaco_id != m.para_espaco_id {
-                    return Err(DESFAZER_JA_MUDOU.into());
+                    return Err(DESFAZER_JA_MUDOU().into());
                 }
-                self.checar_espaco(m.espaco_id, true).map_err(|e| format!("Não dá para desfazer: {}", minuscula(&e)))?;
+                self.checar_espaco(m.espaco_id, true).map_err(|e| tfa("erro.nao_da_desfazer", &[&minuscula(&e)]))?;
                 self.banco.mover_grupo(m.id, m.espaco_id).map_err(texto)?
             }
             "timer" => {
-                let t = self.banco.timers().map_err(texto)?.into_iter().find(|t| t.id == m.id).ok_or(DESFAZER_JA_MUDOU)?;
+                let t = self.banco.timers().map_err(texto)?.into_iter().find(|t| t.id == m.id).ok_or(DESFAZER_JA_MUDOU())?;
                 let espaco_agora = self.banco.espacos_dos_timers().map_err(texto)?.get(&m.id).copied().unwrap_or(t.espaco_id);
                 if t.grupo_id != m.para_grupo_id || espaco_agora != m.para_espaco_id {
-                    return Err(DESFAZER_JA_MUDOU.into());
+                    return Err(DESFAZER_JA_MUDOU().into());
                 }
                 match m.grupo_id {
                     Some(g) => {
                         let grupo = self.banco.grupos().map_err(texto)?.into_iter().find(|x| x.id == g);
-                        let grupo = grupo.ok_or("Não dá para desfazer: o grupo de antes foi arquivado")?;
-                        self.checar_espaco(grupo.espaco_id, true).map_err(|e| format!("Não dá para desfazer: {}", minuscula(&e)))?;
+                        let grupo = grupo.ok_or(ta("erro.grupo_arquivado"))?;
+                        self.checar_espaco(grupo.espaco_id, true).map_err(|e| tfa("erro.nao_da_desfazer", &[&minuscula(&e)]))?;
                     }
-                    None => self.checar_espaco(m.espaco_id, true).map_err(|e| format!("Não dá para desfazer: {}", minuscula(&e)))?,
+                    None => self.checar_espaco(m.espaco_id, true).map_err(|e| tfa("erro.nao_da_desfazer", &[&minuscula(&e)]))?,
                 }
                 self.banco.mover_timer(m.id, m.grupo_id, m.espaco_id).map_err(texto)?
             }
@@ -760,9 +780,9 @@ impl Nucleo {
     /// Erro se o espaço não existe (ou, com `ativo`, se está arquivado).
     pub fn checar_espaco(&self, id: i64, ativo: bool) -> Result<(), String> {
         match self.banco.espacos().map_err(texto)?.iter().find(|e| e.id == id) {
-            Some(e) if ativo && e.arquivado => Err(format!("O espaço {} está arquivado", e.nome)),
+            Some(e) if ativo && e.arquivado => Err(tfa("erro.espaco_arquivado", &[&e.nome])),
             Some(_) => Ok(()),
-            None => Err("Espaço não encontrado".into()),
+            None => Err(ta("erro.espaco_nao_encontrado").into()),
         }
     }
 
@@ -770,14 +790,14 @@ impl Nucleo {
     /// maiúsculas).
     fn checar_nome_de_espaco(&self, nome: &str, id: Option<i64>) -> Result<(), String> {
         if nome.is_empty() {
-            return Err("O nome não pode ficar vazio".into());
+            return Err(ta("erro.nome_vazio").into());
         }
         if nome.chars().count() > ESPACO_NOME_MAX {
-            return Err(format!("O nome vai até {ESPACO_NOME_MAX} letras"));
+            return Err(tfa("erro.nome_max", &[&ESPACO_NOME_MAX.to_string()]));
         }
         let igual = nome.to_lowercase();
         if self.banco.espacos().map_err(texto)?.iter().any(|e| Some(e.id) != id && e.nome.trim().to_lowercase() == igual) {
-            return Err(format!("Já existe o espaço {nome}"));
+            return Err(tfa("erro.espaco_existe", &[nome]));
         }
         Ok(())
     }
@@ -801,7 +821,7 @@ impl Nucleo {
         let mut mud = vec![];
         if e.arquivado && !todos.iter().any(|x| x.id == e.id && x.arquivado) {
             if !todos.iter().any(|x| x.id != e.id && !x.arquivado) {
-                return Err(ULTIMO_ESPACO.into());
+                return Err(ULTIMO_ESPACO().into());
             }
             let ids = self.timers_do_espaco(Some(e.id))?.unwrap_or_default();
             mud = self.motor.pausar_timers(&ids, agora);
@@ -827,8 +847,8 @@ impl Nucleo {
     pub fn apagar_espaco(&mut self, id: i64) -> Result<i64, String> {
         self.checar_banco()?;
         self.checar_espaco(id, false)?;
-        let destino = self.destino_ao_apagar(id)?.ok_or(ULTIMO_ESPACO)?;
-        let foram = self.banco.apagar_espaco(id, destino).map_err(texto)?.ok_or(MOVA_OS_GRUPOS)?;
+        let destino = self.destino_ao_apagar(id)?.ok_or(ULTIMO_ESPACO())?;
+        let foram = self.banco.apagar_espaco(id, destino).map_err(texto)?.ok_or(MOVA_OS_GRUPOS())?;
         self.largar_aba(id)?;
         Ok(foram)
     }
@@ -905,14 +925,14 @@ impl Nucleo {
         let atividade_id = atividade_id.unwrap_or_else(|| self.motor.atividade_padrao(Some(timer_id)));
         self.checar_atividade(atividade_id)?;
         if delta_ms == 0 {
-            return Err("Diga quantos minutos a mais ou a menos".into());
+            return Err(ta("erro.ajuste_minutos").into());
         }
         if delta_ms.abs() > DIA_MS {
-            return Err("O ajuste vai até 24 h, para mais ou para menos".into());
+            return Err(ta("erro.ajuste_24h").into());
         }
         let motivo = motivo.map(str::trim).filter(|m| !m.is_empty());
         if motivo.is_some_and(|m| m.chars().count() > MOTIVO_MAX) {
-            return Err(format!("O motivo vai até {MOTIVO_MAX} letras"));
+            return Err(tfa("erro.motivo_max", &[&MOTIVO_MAX.to_string()]));
         }
         Ok(atividade_id)
     }
@@ -921,13 +941,31 @@ impl Nucleo {
         if self.banco.remover_ajuste(id).map_err(texto)? {
             Ok(())
         } else {
-            Err("Ajuste não encontrado".into())
+            Err(ta("erro.ajuste_nao_encontrado").into())
+        }
+    }
+
+    /// O nome de um grupo cabe em `GRUPO_NOME_MAX` letras (revisão da rodada 24). Um nome de antes,
+    /// mais comprido e sem mudar, segue valendo: editar a cor de um grupo assim não pede para
+    /// encurtar o nome. `id`: o grupo editado (nulo: um grupo novo).
+    pub fn checar_nome_de_grupo(&self, nome: &str, id: Option<i64>) -> Result<(), String> {
+        if nome.trim().chars().count() <= GRUPO_NOME_MAX {
+            return Ok(());
+        }
+        let igual_ao_de_antes = id.is_some_and(|id| {
+            self.banco.grupos().map(|gs| gs.iter().any(|x| x.id == id && x.nome == nome)).unwrap_or(false)
+        });
+        if igual_ao_de_antes {
+            Ok(())
+        } else {
+            Err(tfa("erro.nome_max", &[&GRUPO_NOME_MAX.to_string()]))
         }
     }
 
     /// Arquivar um grupo pausa os timers dele que estão rodando. O espaço (rodada 20) tem de
     /// existir e não estar arquivado.
     pub fn editar_grupo(&mut self, g: &Grupo, agora: Ms) -> Result<Vec<Mudanca>, String> {
+        self.checar_nome_de_grupo(&g.nome, Some(g.id))?;
         self.checar_espaco(g.espaco_id, true)?;
         let mut mud = vec![];
         if g.arquivado {
@@ -978,11 +1016,11 @@ impl Nucleo {
         self.checar_atividade(t.atividade_padrao_id)?;
         if let Some(o) = ocultas {
             if o.contains(&t.atividade_padrao_id) {
-                return Err(PADRAO_NAO_OCULTA.into());
+                return Err(PADRAO_NAO_OCULTA().into());
             }
             let existem = self.banco.atividades().map_err(texto)?;
             if let Some(a) = o.iter().find(|a| !existem.iter().any(|x| x.id == **a)) {
-                return Err(format!("Atividade não encontrada: {a}"));
+                return Err(format!("{}: {a}", ta("erro.atividade_nao_encontrada")));
             }
         }
         let mut t = t.clone();
@@ -1002,9 +1040,9 @@ impl Nucleo {
     /// arquivado, com o que fazer.
     pub fn checar_destino(&self, espaco: i64) -> Result<(), String> {
         match self.banco.espacos().map_err(texto)?.iter().find(|e| e.id == espaco) {
-            Some(e) if e.arquivado => Err(format!("Escolha outro grupo: {} está arquivado.", e.nome)),
+            Some(e) if e.arquivado => Err(tfa("erro.escolha_outro_grupo", &[&e.nome])),
             Some(_) => Ok(()),
-            None => Err("Espaço não encontrado".into()),
+            None => Err(ta("erro.espaco_nao_encontrado").into()),
         }
     }
 
@@ -1012,8 +1050,8 @@ impl Nucleo {
     pub fn checar_atividade(&self, id: i64) -> Result<(), String> {
         match self.banco.atividades().map_err(texto)?.iter().find(|a| a.id == id) {
             Some(a) if !a.arquivada => Ok(()),
-            Some(a) => Err(format!("A atividade {} está arquivada", a.nome)),
-            None => Err("Atividade não encontrada".into()),
+            Some(a) => Err(tfa("erro.atividade_arquivada", &[&a.nome])),
+            None => Err(ta("erro.atividade_nao_encontrada").into()),
         }
     }
 
@@ -1027,14 +1065,14 @@ impl Nucleo {
 
     fn checar_nome_de_atividade(&self, nome: &str, id: Option<i64>) -> Result<(), String> {
         if nome.is_empty() {
-            return Err("O nome não pode ficar vazio".into());
+            return Err(ta("erro.nome_vazio").into());
         }
         if nome.chars().count() > ATIVIDADE_NOME_MAX {
-            return Err(format!("O nome vai até {ATIVIDADE_NOME_MAX} letras"));
+            return Err(tfa("erro.nome_max", &[&ATIVIDADE_NOME_MAX.to_string()]));
         }
         let igual = nome.to_lowercase();
         if self.banco.atividades().map_err(texto)?.iter().any(|a| Some(a.id) != id && a.nome.trim().to_lowercase() == igual) {
-            return Err(format!("Já existe a atividade {nome}"));
+            return Err(tfa("erro.atividade_existe", &[nome]));
         }
         Ok(())
     }
@@ -1046,11 +1084,11 @@ impl Nucleo {
     pub fn editar_atividade(&mut self, a: &Atividade, confirmar: bool) -> Result<(), String> {
         self.checar_banco()?;
         let todas = self.banco.atividades().map_err(texto)?;
-        let antes = todas.iter().find(|x| x.id == a.id).ok_or("Atividade não encontrada")?;
+        let antes = todas.iter().find(|x| x.id == a.id).ok_or(ta("erro.atividade_nao_encontrada"))?;
         let nome = a.nome.trim();
         self.checar_nome_de_atividade(nome, Some(a.id))?;
         if a.arquivada && !antes.arquivada {
-            let sobra = todas.iter().find(|x| x.id != a.id && !x.arquivada).ok_or("Precisa sobrar pelo menos uma atividade")?;
+            let sobra = todas.iter().find(|x| x.id != a.id && !x.arquivada).ok_or(ta("erro.ultima_atividade"))?;
             let usam: Vec<String> = self
                 .banco
                 .timers()
@@ -1061,7 +1099,7 @@ impl Nucleo {
                 .collect();
             if !usam.is_empty() {
                 if !confirmar {
-                    return Err(format!("{} é a atividade padrão de {}", antes.nome, usam.join(", ")));
+                    return Err(tfa("erro.atividade_padrao_de", &[&antes.nome, &usam.join(", ")]));
                 }
                 self.banco.trocar_atividade_padrao(a.id, sobra.id).map_err(texto)?;
             }
@@ -1092,7 +1130,7 @@ impl Nucleo {
         }
         if let Some(id) = trocar {
             if !self.motor.regras_pasta.iter().any(|r| r.id == id && r.timer_id == timer_id) {
-                return Err("Regra não encontrada".into());
+                return Err(ta("erro.regra_nao_encontrada").into());
             }
         }
         let nova = self.banco.criar_regra_pasta(&c.pasta, timer_id).map_err(texto)?;
@@ -1108,7 +1146,7 @@ impl Nucleo {
     /// nada e diz de quem ela é.
     pub fn restaurar_regra(&mut self, pasta: &str, timer_id: i64) -> Result<(), String> {
         if let Some(nome) = self.conferir_regra(pasta, Some(timer_id))?.outro_timer_nome {
-            return Err(format!("A pasta já é de {nome}."));
+            return Err(tfa("erro.pasta_ja_e_de", &[&nome]));
         }
         self.salvar_regra(pasta, timer_id, None)
     }
@@ -1117,8 +1155,8 @@ impl Nucleo {
     /// valer só em `pasta`, a pasta da regra ou uma subpasta dela que contenha a pasta da sessão.
     /// As sessões já ligadas ficam onde estão.
     pub fn trocar_por_subpasta(&mut self, regra_id: i64, pasta: &str, sessao_id: &str) -> Result<(), String> {
-        let regra = self.motor.regras_pasta.iter().find(|r| r.id == regra_id).cloned().ok_or("Regra não encontrada")?;
-        let cwd = self.motor.sessoes.get(sessao_id).ok_or("Sessão não encontrada")?.cwd.clone();
+        let regra = self.motor.regras_pasta.iter().find(|r| r.id == regra_id).cloned().ok_or(ta("erro.regra_nao_encontrada"))?;
+        let cwd = self.motor.sessoes.get(sessao_id).ok_or(ta("erro.sessao_nao_encontrada"))?.cwd.clone();
         if !nucleo::pastas::subpasta_valida(&regra.pasta, pasta, &cwd) {
             return Err(format!(
                 "Escolha {} ou uma subpasta dela que tenha a pasta desta conversa.",
@@ -1143,7 +1181,7 @@ impl Nucleo {
     pub fn remover_regra(&mut self, id: i64) -> Result<(), String> {
         self.checar_banco()?;
         if !self.banco.remover_regra_pasta(id).map_err(texto)? {
-            return Err("Regra não encontrada".into());
+            return Err(ta("erro.regra_nao_encontrada").into());
         }
         self.motor.regras_pasta = self.banco.regras_pasta().map_err(texto)?;
         Ok(())
@@ -1174,7 +1212,7 @@ impl Nucleo {
         agora: Ms,
     ) -> Result<Vec<Mudanca>, String> {
         self.checar_timer(timer_id)?;
-        let cwd = self.motor.sessoes.get(sessao_id).ok_or("Sessão não encontrada")?.cwd.clone();
+        let cwd = self.motor.sessoes.get(sessao_id).ok_or(ta("erro.sessao_nao_encontrada"))?.cwd.clone();
         let mud = if desde_inicio && so_hoje {
             self.motor.ligar_sessao_hoje(sessao_id, timer_id, agora)
         } else {
@@ -1204,7 +1242,7 @@ impl Nucleo {
                     }
                     _ => None,
                 })
-                .ok_or("Sessão não encontrada")?,
+                .ok_or(ta("erro.sessao_nao_encontrada"))?,
         };
         let raiz = raiz_do_projeto(&cwd);
         let c = self.conferir_regra(raiz, None)?;
@@ -1271,13 +1309,13 @@ impl Nucleo {
             let curtos: Vec<&str> =
                 cfg.tempos().iter().filter(|(_, s)| *s < TEMPO_MIN_S).map(|(n, _)| *n).collect();
             if !curtos.is_empty() {
-                return Err(format!("Os tempos precisam ser de pelo menos 1 minuto ({})", curtos.join(", ")));
+                return Err(tfa("erro.tempos_minimo", &[&curtos.join(", ")]));
             }
             if cfg.inatividade_s > INATIVIDADE_MAX_S {
-                return Err("A inatividade vai de 1 a 30 minutos".into());
+                return Err(ta("erro.inatividade_faixa").into());
             }
             if cfg.uso_s > TEMPO_MAX_S || cfg.sessao_parada_s > TEMPO_MAX_S {
-                return Err("Uso recente e sessão parada vão até 24 h".into());
+                return Err(ta("erro.tempos_24h").into());
             }
         }
         let atual = self.banco.config_app().map_err(texto)?;
@@ -1292,6 +1330,8 @@ impl Nucleo {
             // as dicas também: só pelos comandos delas (rodada 16)
             dicas_ligadas: atual.dicas_ligadas,
             dicas_vistas: atual.dicas_vistas.clone(),
+            // só a busca de atualização muda isto (rodada 25)
+            atualizacao_ultima: atual.atualizacao_ultima,
             ..cfg.clone()
         }
         .normalizada();
@@ -2000,7 +2040,7 @@ mod testes {
         let m = n.mover_timer(leitura, None, ESPACO_PRIMEIRO).unwrap();
         assert_eq!((m.para_grupo_id, m.para_espaco_id), (None, ESPACO_PRIMEIRO));
         n.mover_timer(leitura, None, pessoal).unwrap();
-        assert_eq!(n.desfazer_mover(&m), Err(DESFAZER_JA_MUDOU.into()));
+        assert_eq!(n.desfazer_mover(&m), Err(DESFAZER_JA_MUDOU().into()));
         assert_eq!(onde(&n, leitura), (None, pessoal));
         // o espaço de antes foi arquivado: o Desfazer recusa e o timer fica onde está
         let velho = n.criar_espaco("Velho", "#333").unwrap();
@@ -2017,7 +2057,7 @@ mod testes {
         let casa = n.banco.grupos().unwrap().into_iter().find(|g| g.espaco_id == pessoal).unwrap().id;
         let m = n.mover_grupo(casa, ESPACO_PRIMEIRO).unwrap();
         n.mover_grupo(casa, pessoal).unwrap();
-        assert_eq!(n.desfazer_mover(&m), Err(DESFAZER_JA_MUDOU.into()));
+        assert_eq!(n.desfazer_mover(&m), Err(DESFAZER_JA_MUDOU().into()));
         let m = n.mover_grupo(casa, ESPACO_PRIMEIRO).unwrap();
         let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == pessoal).unwrap();
         e.arquivado = true;
@@ -2033,7 +2073,7 @@ mod testes {
         // um Movido sem o destino (de antes desta versão) não desfaz às cegas
         let velho_json = format!(r#"{{"tipo":"timer","id":{leitura},"grupo_id":null,"espaco_id":{ESPACO_PRIMEIRO}}}"#);
         let sem_destino: Movido = serde_json::from_str(&velho_json).unwrap();
-        assert_eq!(n.desfazer_mover(&sem_destino), Err(DESFAZER_JA_MUDOU.into()));
+        assert_eq!(n.desfazer_mover(&sem_destino), Err(DESFAZER_JA_MUDOU().into()));
     }
 
     #[test]
@@ -2041,7 +2081,7 @@ mod testes {
         let mut n = nucleo(h(8, 0));
         let (pessoal, obra, leitura, _) = dois_espacos(&mut n);
         // com grupo ou timer à vista: recusa, com o texto da dica dos Ajustes
-        assert_eq!(n.apagar_espaco(pessoal).unwrap_err(), MOVA_OS_GRUPOS);
+        assert_eq!(n.apagar_espaco(pessoal).unwrap_err(), MOVA_OS_GRUPOS());
         let s = n.snapshot(h(8, 0)).unwrap();
         let e = s.espacos.iter().find(|e| e.id == pessoal).unwrap();
         assert_eq!((e.ativos, e.arquivados), (2, 0), "a tela sabe o mesmo que o núcleo");
@@ -2064,7 +2104,7 @@ mod testes {
         assert!(!n.banco.timers().unwrap().iter().any(|t| t.id == leitura), "segue arquivado");
         assert_eq!(n.banco.config_app().unwrap().espaco_aba, None, "a aba dele volta a Todos");
         // o último espaço não arquivado nunca: nem apagar nem arquivar
-        assert_eq!(n.apagar_espaco(ESPACO_PRIMEIRO).unwrap_err(), ULTIMO_ESPACO);
+        assert_eq!(n.apagar_espaco(ESPACO_PRIMEIRO).unwrap_err(), ULTIMO_ESPACO());
         let mut e = n.banco.espacos().unwrap()[0].clone();
         e.arquivado = true;
         assert!(n.editar_espaco(&e, h(9, 0)).is_err());
@@ -2086,6 +2126,34 @@ mod testes {
         g.espaco_id = outro;
         assert!(n.editar_grupo(&g, h(9, 0)).is_err());
         g.espaco_id = 999;
+        assert!(n.editar_grupo(&g, h(9, 0)).is_err());
+    }
+
+    /// Revisão da rodada 24: o nome do grupo vai até `GRUPO_NOME_MAX` letras, no grupo novo e no
+    /// editado; um nome de antes, mais comprido e sem mudar, segue valendo.
+    #[test]
+    fn nome_do_grupo_tem_limite() {
+        let mut n = nucleo(h(8, 0));
+        let cabe = "a".repeat(GRUPO_NOME_MAX);
+        let passa = format!("{cabe}b");
+        assert!(n.checar_nome_de_grupo(&cabe, None).is_ok());
+        assert_eq!(n.checar_nome_de_grupo(&passa, None).unwrap_err(), tfa("erro.nome_max", &["60"]));
+        // letras, não bytes
+        assert!(n.checar_nome_de_grupo(&"é".repeat(GRUPO_NOME_MAX), None).is_ok());
+        // editar: o nome novo comprido não grava
+        let id = n.banco.criar_grupo("Casa", "#111").unwrap();
+        let mut g = n.banco.grupos().unwrap().into_iter().find(|g| g.id == id).unwrap();
+        g.nome = passa.clone();
+        assert!(n.editar_grupo(&g, h(9, 0)).is_err());
+        assert_eq!(n.banco.grupos().unwrap().iter().find(|g| g.id == id).unwrap().nome, "Casa");
+        // um nome de antes (gravado direto no banco), sem mudar: a cor muda
+        g.nome = passa.clone();
+        n.banco.editar_grupo(&g).unwrap();
+        g.cor = "#222".into();
+        n.editar_grupo(&g, h(9, 0)).unwrap();
+        assert_eq!(n.banco.grupos().unwrap().iter().find(|g| g.id == id).unwrap().cor, "#222");
+        // mudar para outro nome comprido, não
+        g.nome = format!("{passa}c");
         assert!(n.editar_grupo(&g, h(9, 0)).is_err());
     }
 
@@ -2152,7 +2220,7 @@ mod testes {
         assert_eq!(n.banco.atividades_ocultas().unwrap()[&t], [ATIVIDADE_REUNIAO, 3]);
         // recusado antes de gravar qualquer coisa (revisão da rodada 20): o nome não muda
         x.nome = "Outro nome".into();
-        assert_eq!(n.editar_timer_com(&x, h(8, 0), Some(&[ATIVIDADE_TRABALHO])).unwrap_err(), PADRAO_NAO_OCULTA);
+        assert_eq!(n.editar_timer_com(&x, h(8, 0), Some(&[ATIVIDADE_TRABALHO])).unwrap_err(), PADRAO_NAO_OCULTA());
         assert!(n.editar_timer_com(&x, h(8, 0), Some(&[999])).is_err());
         assert_eq!(n.banco.timers().unwrap()[0].nome, "A");
         assert_eq!(n.banco.atividades_ocultas().unwrap()[&t], [ATIVIDADE_REUNIAO, 3]);
@@ -2588,7 +2656,7 @@ mod testes {
         n.aplicar(&mud).unwrap();
         assert!(n.motor.perguntas.is_empty());
         let s = n.snapshot(h(9, 2)).unwrap();
-        assert_eq!(s.grupos[0].timers[0].motivo.as_deref(), Some("Claude trabalhando"));
+        assert_eq!(s.grupos[0].timers[0].motivo.as_deref(), Some("claude"));
         assert_eq!(n.sessoes_recentes(h(9, 2)).unwrap()[0].id, "s1");
     }
 

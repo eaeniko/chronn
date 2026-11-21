@@ -42,7 +42,8 @@ import { faixa, faixaEncerrado, usarFaixa } from './editar.js';
 import { DICAS, gatilhos, criarFila } from './dicas.js';
 import { nomearPagina, marcaDeTeste } from './nome.js';
 import { vigiarTitulos, trocarTitulo } from './titulos.js';
-import { pontoDoEspaco, nomeDoGrupo } from './espacos.js';
+import { pontoDoEspaco, nomeDoGrupo, espacoNoRecolhido, pontoRecolhido, espacoEmTexto } from './espacos.js';
+import { TEXTOS, definirIdioma, idiomaDoEstado, idiomaInicial, aplicarTextos, CHAVE_IDIOMA } from './textos.js';
 
 // as dicas longas em linhas curtas (rodada 19)
 vigiarTitulos();
@@ -73,7 +74,7 @@ async function agir(nome, args) {
   } catch (e) {
     console.error(`worktimer: ${nome} falhou`, e);
     // o aviso fica fora do dock (rodada 15): aparece também no recolhido
-    faixa(typeof e === 'string' ? e : 'Não deu certo. Tente de novo.');
+    faixa(typeof e === 'string' ? e : TEXTOS.naoDeuCerto);
     return null;
   }
 }
@@ -105,13 +106,21 @@ const ICONE_RECOLHER =
 /**
  * Nome do timer no recolhido. Com a situação ligada, a etiqueta fica em cima do nome, numa coluna
  * de largura fixa (o dock não muda de largura quando a etiqueta troca) e sempre com a linha dela,
- * mesmo vazia (a altura não pula quando uma etiqueta aparece).
+ * mesmo vazia (a altura não pula quando uma etiqueta aparece). No modo "Espaço em texto" (rodada
+ * 24), a linha começa pelo nome do espaço ("Pessoal · escrevendo"; sem situação, só "Pessoal"), e
+ * as reticências cortam a linha inteira.
  */
-function nomeRecolhido(t, sit) {
+function nomeRecolhido(t, sit, esp = { modo: 'timer', espaco: null }) {
   const nome = `<span class="nm" title="${esc(t.nome)}">${esc(t.nome)}</span>`;
-  if (!sit) return nome;
+  const espaco = espacoEmTexto(esp);
+  if (!sit && !espaco) return nome;
   // a coluna fixa de 104 px: com mais de 16 letras, a segunda parte vira um ponto (rodada 14)
-  const e = t.etiqueta;
+  const e = sit ? t.etiqueta : null;
+  if (espaco) {
+    const dica = esc(e ? `${esp.espaco.nome} · ${e.texto}` : esp.espaco.nome);
+    const resto = e ? `<span class="mais"> · </span>${htmlEtiqueta(e, 16)}` : '';
+    return `<span class="tx"><small class="sit${e ? ` ${e.p1.k}` : ''}" title="${dica}">${espaco}${resto}</small>${nome}</span>`;
+  }
   const etiqueta = e ? `<small class="sit ${e.p1.k}" title="${esc(e.texto)}">${htmlEtiqueta(e, 16)}</small>` : '<small class="sit"></small>';
   return `<span class="tx">${etiqueta}${nome}</span>`;
 }
@@ -135,9 +144,9 @@ function timerRecolhido(t, sit) {
       ? botaoEncerrar(t, 'p')
       : '<span class="p lembrete" aria-hidden="true"></span>';
   const dica = t.rodando ? '' : ` title="${esc(dicaDoLembrete(t))}"`;
-  // com 2 ou mais espaços, o ponto na cor do espaço do timer (rodada 20)
-  const ponto = pontoDoEspaco(snap, snap.grupos.flatMap((g) => g.timers).find((x) => x.id === t.id) ?? t);
-  return `<div class="dk${t.rodando ? '' : ' parado'}" style="--c:${cor(t.cor)}${corDaReuniao()}"${dica}><i></i>${ponto}${nomeRecolhido(t, sit)}<span class="t mono" data-hm="${t.id}"${t.desde ? ` title="${esc(t.desde)}"` : ''}>${horaMin(t.ms)}</span>${fim}</div>`;
+  // com 2 ou mais espaços, o espaço do timer como os Ajustes pedem (rodada 24): um ponto só
+  const esp = espacoNoRecolhido(snap, snap.grupos.flatMap((g) => g.timers).find((x) => x.id === t.id) ?? t);
+  return `<div class="dk${t.rodando ? '' : ' parado'}" style="--c:${cor(t.cor)}${corDaReuniao()}"${dica}>${pontoRecolhido(t, esp)}${nomeRecolhido(t, sit, esp)}<span class="t mono" data-hm="${t.id}"${t.desde ? ` title="${esc(t.desde)}"` : ''}>${horaMin(t.ms)}</span>${fim}</div>`;
 }
 
 function recolhido(agora) {
@@ -149,12 +158,12 @@ function recolhido(agora) {
       .join('') +
     (fora ? `<span class="dmais" title="${esc(fora.dica)}">${esc(fora.texto)}</span>` : '');
   const dois = snap.config.dock_botoes === 'dois'
-    ? '<button class="dbt" data-acao="abrir" title="Abrir o app" aria-label="Abrir o app">⧉</button>'
+    ? `<button class="dbt" data-acao="abrir" title="${TEXTOS.abrirOApp}" aria-label="${TEXTOS.abrirOApp}">⧉</button>`
     : '';
   const p = snap.perguntas[0];
   const ask = p ? `<div class="ask">${textoDaPergunta(p)}${opcoes(p)}</div>` : '';
-  const total = `<div class="dtot" title="${dicaDoTotal(agora)}">hoje <b class="mono" data-total-dia>${totalDoDia(agora)}</b></div>`;
-  return `<div class="pilula">${marcaDeTeste()}${timers}${total}<button class="dbt" data-acao="expandir" title="Expandir" aria-label="Expandir o dock">${ICONE_EXPANDIR}</button>${dois}</div>${ask}${avisoDeLigacao('dav')}`;
+  const total = `<div class="dtot" title="${dicaDoTotal(agora)}">${TEXTOS.hojeMin} <b class="mono" data-total-dia>${totalDoDia(agora)}</b></div>`;
+  return `<div class="pilula">${marcaDeTeste()}${timers}${total}<button class="dbt" data-acao="expandir" title="${TEXTOS.expandir}" aria-label="${TEXTOS.expandirODock}">${ICONE_EXPANDIR}</button>${dois}</div>${ask}${avisoDeLigacao('dav')}`;
 }
 
 /** Os avisos de ligada sozinha que ainda valem (o núcleo diz até quando). */
@@ -169,7 +178,7 @@ function avisoDeLigacao(classe) {
   const a = avisosAgora().reduce((x, y) => (x && x.ate >= y.ate ? x : y), null);
   if (!a) return '';
   const dica = `${a.sessao_nome}${a.cwd ? ` — ${a.cwd}` : ''}`;
-  return `<div class="${classe}" role="status" title="${esc(dica)}"><span>${esc(a.texto)}</span> · <button data-acao="trocar" data-sessao="${esc(a.sessao_id)}">Trocar</button></div>`;
+  return `<div class="${classe}" role="status" title="${esc(dica)}"><span>${esc(a.texto)}</span> · <button data-acao="trocar" data-sessao="${esc(a.sessao_id)}">${TEXTOS.trocar}</button></div>`;
 }
 
 /** Redesenha quando o aviso de ligada sozinha vence. */
@@ -193,8 +202,8 @@ function sessoesLigadas() {
  */
 function lendoAgora() {
   if (!snap.lendo) return '';
-  const nome = sessoesLigadas().get(snap.lendo)?.nome ?? 'uma sessão do Claude';
-  return `<div class="dx-lendo" title="${esc(nome)}">${snap.escrevendo ? 'escrevendo' : 'lendo'}: <b>${esc(nome)}</b></div>`;
+  const nome = sessoesLigadas().get(snap.lendo)?.nome ?? TEXTOS.umaSessaoDoClaude;
+  return `<div class="dx-lendo" title="${esc(nome)}">${snap.escrevendo ? TEXTOS.escrevendoEm : TEXTOS.lendoEm}: <b>${esc(nome)}</b></div>`;
 }
 
 /**
@@ -227,21 +236,21 @@ function expandidoHtml(agora) {
   // uma pergunta por vez (como no recolhido): a lista de timers fica sempre à vista
   const [p, ...resto] = snap.perguntas;
   const mais = resto.length
-    ? `<small class="dx-mais">+${resto.length} ${resto.length === 1 ? 'pergunta' : 'perguntas'} depois desta</small>`
+    ? `<small class="dx-mais">${TEXTOS.perguntasDepois(resto.length)}</small>`
     : '';
   const pergunta = p ? `<div class="dx-ask">${textoDaPergunta(p)}${opcoes(p)}${mais}</div>` : '';
   // o aviso de ligada sozinha vem antes da pergunta: dura só ~15 s e não pode ficar rolado para fora
   const asks = avisoDeLigacao('dx-aviso') + pergunta + lendoAgora();
   // com algo rodando, o "Pausar tudo" toma o lugar da contagem (as linhas acesas já mostram quais)
-  const pausarTudo = n ? `<button class="dpa" data-acao="pausar-tudo" title="${n} rodando">Pausar tudo</button>` : '';
-  return `<div class="dx-top">${marcaDeTeste()}<b class="mono" data-total-dia title="${dicaDoTotal(agora)}">${totalDoDia(agora)}</b><small>hoje</small><span class="sp"></span>
+  const pausarTudo = n ? `<button class="dpa" data-acao="pausar-tudo" title="${esc(TEXTOS.rodando(n))}">${TEXTOS.pausarTudo}</button>` : '';
+  return `<div class="dx-top">${marcaDeTeste()}<b class="mono" data-total-dia title="${dicaDoTotal(agora)}">${totalDoDia(agora)}</b><small>${TEXTOS.hojeMin}</small><span class="sp"></span>
   ${pausarTudo}
-  <button class="dbt" data-acao="recolher" title="Recolher" aria-label="Recolher o dock">${ICONE_RECOLHER}</button>
-  <button class="dbt" data-acao="ajustes" title="Ajustes" aria-label="Ajustes">⚙&#xFE0E;</button></div>
+  <button class="dbt" data-acao="recolher" title="${TEXTOS.recolher}" aria-label="${TEXTOS.recolherODock}">${ICONE_RECOLHER}</button>
+  <button class="dbt" data-acao="ajustes" title="${TEXTOS.ajustesDica}" aria-label="${TEXTOS.ajustesDica}">⚙&#xFE0E;</button></div>
 ${asks ? `<div class="dx-asks" data-tauri-drag-region="false">${asks}</div>` : ''}
-<div class="dx-lista" data-tauri-drag-region="false">${grupos || '<p class="dx-vazio">Nenhum timer ainda.</p>'}</div>
-<button class="dx-open" data-acao="abrir">Abrir o app</button>
-<button class="grip" data-acao="redimensionar" title="Redimensionar" aria-label="Redimensionar o dock" tabindex="-1"></button>`;
+<div class="dx-lista" data-tauri-drag-region="false">${grupos || `<p class="dx-vazio">${TEXTOS.nenhumTimerAinda}</p>`}</div>
+<button class="dx-open" data-acao="abrir">${TEXTOS.abrirOApp}</button>
+<button class="grip" data-acao="redimensionar" title="${TEXTOS.redimensionar}" aria-label="${TEXTOS.redimensionarODock}" tabindex="-1"></button>`;
 }
 
 function desenhar() {
@@ -272,7 +281,7 @@ function avisoForaDoDock(msg, botao = null, acao = null, ms = 4000, extra = {}) 
   const vence = setTimeout(() => fecharAviso(id), ms);
   avisoAtual = { id, acao, vence, acao2: extra.acao2 ?? null, aoSair: extra.aoSair ?? null };
   const tema = document.documentElement.dataset.tema;
-  const aviso = { id, texto: msg, botao, botao2: extra.botao2 ?? null, ms, tema };
+  const aviso = { id, texto: msg, botao, botao2: extra.botao2 ?? null, ms, tema, lang: document.documentElement.lang };
   chamar('aviso_mostrar', { aviso }).catch((e) => console.error('worktimer: aviso_mostrar', e));
   return null;
 }
@@ -303,7 +312,7 @@ window.__TAURI__.event.listen('aviso-clicado', async (ev) => {
     fecharAviso(a.id, 'clique');
   } catch (e) {
     console.error('worktimer: aviso', e);
-    avisoForaDoDock(typeof e === 'string' ? e : 'Não deu certo. Tente de novo.');
+    avisoForaDoDock(typeof e === 'string' ? e : TEXTOS.naoDeuCerto);
   }
 });
 usarFaixa(avisoForaDoDock);
@@ -328,8 +337,8 @@ const dicaNoAviso = (id, texto) =>
         ok(r);
       }
     };
-    avisoForaDoDock(texto, 'Entendi', async () => sair('entendi'), DICA_NO_DOCK_MS, {
-      botao2: 'Não mostrar mais dicas',
+    avisoForaDoDock(texto, TEXTOS.entendi, async () => sair('entendi'), DICA_NO_DOCK_MS, {
+      botao2: TEXTOS.naoMostrarDicas,
       acao2: async () => {
         await chamar('dicas_ligar', { ligadas: false });
         sair('desligar');
@@ -580,8 +589,22 @@ function ligarRelogio() {
 document.addEventListener('visibilitychange', ligarRelogio);
 nomearPagina(document, ' — dock');
 
+/** Lê o idioma guardado pela página (a primeira pintura, antes do estado). */
+function lerIdiomaGuardado() {
+  try {
+    return JSON.parse(localStorage.getItem(CHAVE_IDIOMA));
+  } catch {
+    return null;
+  }
+}
+definirIdioma(idiomaInicial(lerIdiomaGuardado(), navigator.language));
+aplicarTextos(document);
+
 aoMudar((s) => {
   snap = s;
+  // o idioma do estado (rodada 23): trocado, o dock se redesenha nele logo abaixo
+  const idioma = idiomaDoEstado(s, navigator.language);
+  if (definirIdioma(idioma)) aplicarTextos(document);
   usarAtividades(s.atividades);
   usarCorte(s.config?.corte_min);
   usarEsperaApp(s.config?.espera_app_min);

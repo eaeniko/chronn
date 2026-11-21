@@ -44,6 +44,10 @@ html[data-lado-y="baixo"] .rec { flex-direction: column-reverse; }
 .dk .tx { display: flex; flex-direction: column; width: 104px; min-width: 0; line-height: 1.2; }
 .dk .tx .nm { max-width: none; white-space: nowrap; }
 .dk .sit { height: 12px; font-size: 10px; line-height: 12px; color: var(--mu); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* o nome do espaço na linha da situação ("Espaço em texto", rodada 24), na cor do espaço */
+/* o nome do espaço no "Espaço em texto": a cor do espaço com o mesmo ajuste de contraste do nome do
+   timer (--ct), que escurece no tema claro (revisão da rodada 24) */
+.dk .sit .sesp { color: color-mix(in srgb, var(--e), #000 var(--texto-cor)); font-weight: 600; }
 .dk .sit.trabalhando, .dk .sit.lendo, .dk .sit.escrevendo { color: var(--ct); }
 .dk .sit.esperando { color: var(--acento); font-weight: 600; }
 /* parado (só o lembrete "esperando você"): bolinha apagada, sem anel */

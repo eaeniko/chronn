@@ -1,6 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 //! Comandos invocáveis pela UI. Argumentos em snake_case (`{timer_id: 1}`).
 //! Cada comando trava o núcleo, age, grava, monta o snapshot, solta a trava e só então avisa.
+use nucleo::idioma::{ta, tfa};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -41,7 +42,7 @@ fn agir(
 fn nome_valido(nome: &str) -> Result<&str, String> {
     let n = nome.trim();
     if n.is_empty() {
-        Err("O nome não pode ficar vazio".into())
+        Err(ta("erro.nome_vazio").into())
     } else {
         Ok(n)
     }
@@ -219,7 +220,9 @@ pub fn criar_grupo(app: AppHandle, estado: State<'_, Estado>, nome: String, cor:
             None => n.banco.espaco_padrao().map_err(texto)?,
         };
         n.checar_espaco(espaco, true)?;
-        n.banco.criar_grupo_em(nome_valido(&nome)?, &cor, espaco).map_err(texto)?;
+        let nome = nome_valido(&nome)?;
+        n.checar_nome_de_grupo(nome, None)?;
+        n.banco.criar_grupo_em(nome, &cor, espaco).map_err(texto)?;
         Ok(vec![])
     })
 }
@@ -438,6 +441,8 @@ pub struct AjustesInfo {
     pub corte: String,
     /// A marca de autoria (rodada 18), no "Sobre".
     pub assinatura: &'static str,
+    /// O canal da versão ("alpha", rodada 25): "Versão 0.4.0 · alpha".
+    pub canal: &'static str,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -448,6 +453,7 @@ pub fn ajustes_info(app: AppHandle, estado: State<'_, Estado>) -> Result<Ajustes
         settings: caminho_settings().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
         corte: nucleo::config::texto_de_corte(cfg.corte_min),
         assinatura: nucleo::ASSINATURA,
+        canal: nucleo::CANAL,
     })
 }
 
@@ -460,7 +466,7 @@ pub struct Corte {
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn ler_corte(texto: String) -> Result<Corte, String> {
-    let min = nucleo::config::corte_de_texto(&texto).ok_or("Use HH:MM, de 00:00 a 23:59")?;
+    let min = nucleo::config::corte_de_texto(&texto).ok_or(ta("erro.corte"))?;
     Ok(Corte { min, texto: nucleo::config::texto_de_corte(min) })
 }
 
@@ -544,7 +550,7 @@ pub async fn escolher_pasta(app: AppHandle, inicial: Option<String>, titulo: Opt
         let _ = &app;
         None
     };
-    let titulo = titulo.unwrap_or_else(|| "Escolher a pasta".into());
+    let titulo = titulo.unwrap_or_else(|| ta("janela.escolher_pasta").into());
     tauri::async_runtime::spawn_blocking(move || crate::escolher_pasta::escolher_pasta(dono, inicial, titulo))
         .await
         .map_err(texto)?
@@ -783,10 +789,10 @@ pub fn link_dos_creditos(qual: &str) -> Option<&'static str> {
 /// Abre um link dos créditos ("autor" ou "codigo") no navegador padrão, fora do app (rodada 18).
 #[tauri::command(rename_all = "snake_case")]
 pub fn abrir_link(qual: String) -> Result<(), String> {
-    let url = link_dos_creditos(&qual).ok_or("link desconhecido")?;
+    let url = link_dos_creditos(&qual).ok_or(ta("erro.link"))?;
     // o Explorer entrega o https ao navegador padrão (como o "Abrir pasta" dos backups)
     let programa = if cfg!(windows) { "explorer" } else { "open" };
-    std::process::Command::new(programa).arg(url).spawn().map_err(|e| format!("não consegui abrir o link: {e}"))?;
+    std::process::Command::new(programa).arg(url).spawn().map_err(|e| tfa("erro.abrir_link", &[&e.to_string()]))?;
     Ok(())
 }
 
@@ -894,9 +900,9 @@ pub fn comando_hook() -> String {
 pub fn previa_em(settings: &Path, comando: &str) -> Result<String, String> {
     let antes: Value = match std::fs::read_to_string(settings) {
         Ok(t) if t.trim().is_empty() => json!({}),
-        Ok(t) => serde_json::from_str(&t).map_err(|e| format!("JSON inválido, nada foi alterado: {e}"))?,
+        Ok(t) => serde_json::from_str(&t).map_err(|e| tfa("erro.json", &[&e.to_string()]))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(e) => return Err(format!("não consegui ler: {e}")),
+        Err(e) => return Err(tfa("erro.ler", &[&e.to_string()])),
     };
     let depois = hooks_claude::mesclar(antes.clone(), comando);
     Ok(hooks_claude::previa(&antes, &depois))
@@ -1017,7 +1023,7 @@ pub fn backups_abrir_pasta() -> Result<(), String> {
     let dir = fila::caminhos::backups();
     std::fs::create_dir_all(&dir).map_err(texto)?;
     let programa = if cfg!(windows) { "explorer" } else { "open" };
-    std::process::Command::new(programa).arg(&dir).spawn().map_err(|e| format!("não consegui abrir a pasta: {e}"))?;
+    std::process::Command::new(programa).arg(&dir).spawn().map_err(|e| tfa("erro.abrir_pasta", &[&e.to_string()]))?;
     Ok(())
 }
 
@@ -1062,11 +1068,11 @@ pub fn inicio_windows(app: AppHandle, ligar: Option<bool>) -> Result<bool, Strin
 #[tauri::command(rename_all = "snake_case")]
 pub fn apagar_perfil_teste(app: AppHandle) -> Result<(), String> {
     if !crate::perfil::e_teste() {
-        return Err("Só existe no perfil de teste".into());
+        return Err(ta("erro.so_perfil_teste").into());
     }
     let pasta = fila::caminhos::base();
     if !pasta_do_perfil_teste(&pasta) {
-        return Err("A pasta não é a do perfil de teste: nada foi apagado".into());
+        return Err(ta("erro.nao_e_perfil_teste").into());
     }
     let mut pastas = vec![pasta];
     // a pasta do WebView2 do perfil (o `localStorage` da página), pelo identificador do perfil
@@ -1087,7 +1093,7 @@ pub fn apagar_perfil_teste(app: AppHandle) -> Result<(), String> {
             .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &linha_de_apagar(std::process::id(), &pastas)])
             .creation_flags(SEM_JANELA)
             .spawn()
-            .map_err(|e| format!("não consegui apagar o perfil de teste: {e}"))?;
+            .map_err(|e| tfa("erro.apagar_perfil", &[&e.to_string()]))?;
     }
     app.exit(0);
     Ok(())
@@ -1140,8 +1146,17 @@ mod testes {
     #[test]
     fn a_assinatura_vai_no_sobre() {
         assert_eq!(nucleo::ASSINATURA, "chronn-eaeniko-7f3a9c");
-        let info = AjustesInfo { versao: "0.3.1".into(), settings: String::new(), corte: "00:00".into(), assinatura: nucleo::ASSINATURA };
-        assert_eq!(serde_json::to_value(&info).unwrap()["assinatura"], "chronn-eaeniko-7f3a9c");
+        let info = AjustesInfo {
+            versao: "0.4.0".into(),
+            settings: String::new(),
+            corte: "00:00".into(),
+            assinatura: nucleo::ASSINATURA,
+            canal: nucleo::CANAL,
+        };
+        let v = serde_json::to_value(&info).unwrap();
+        assert_eq!(v["assinatura"], "chronn-eaeniko-7f3a9c");
+        // rodada 25: o canal vem da constante única
+        assert_eq!(v["canal"], "alpha");
     }
 
     #[test]

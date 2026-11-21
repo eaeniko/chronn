@@ -35,40 +35,42 @@
     <div class="top-l1">
       <div class="logo"><b aria-hidden="true"></b><span data-nome-app></span></div>
       <div class="l1-criar">
-        <button class="novo principal" id="bt-novo" data-acao="novo-menu" title="Novo timer, grupo ou espaço (tecla N)" aria-haspopup="menu" aria-expanded="false"><svg class="bi" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg><span data-texto="novoRotulo">Novo</span></button>
+        <button class="novo principal" id="bt-novo" data-acao="novo-menu" title="Novo timer, grupo ou espaço (tecla N)" data-dica="novoDica" aria-haspopup="menu" aria-expanded="false"><svg class="bi" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg><span data-texto="novoRotulo">Novo</span></button>
         <span class="cta-dica" title="Lançar o dia: disponível numa próxima versão" data-dica="lancarDiaDica"><button class="lancar" id="bt-lancar" disabled><svg class="bi" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 11V3M4.5 6.5 8 3l3.5 3.5M3 13h10"/></svg><span class="rot" data-texto="lancarDia">Lançar o dia</span><span class="breve" data-texto="emBreve">em breve</span></button></span>
       </div>
       <div class="l1-ajuda">
-        <button class="ic" id="bt-tour" data-acao="tour" title="Tour de 1 minuto" aria-label="Ver o tour" aria-haspopup="menu" aria-expanded="false">?</button>
-        <button class="ic" id="bt-ajustes" data-acao="ajustes" title="Ajustes" aria-label="Ajustes">⚙&#xFE0E;</button>
+        <!-- rodada 25: só com versão nova (a dica diz a versão); como o do VS Code, na cor de destaque -->
+        <button class="ic atu" id="bt-atualizar" data-acao="atualizar" hidden><svg class="bi" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7M5 6.5l3 3 3-3"/><path d="M3 11.5v1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1"/></svg></button>
+        <button class="ic" id="bt-tour" data-acao="tour" title="Tour de 1 minuto" data-dica="tourDica" aria-label="Ver o tour" data-rotulo="tourRotulo" aria-haspopup="menu" aria-expanded="false">?</button>
+        <button class="ic" id="bt-ajustes" data-acao="ajustes" title="Ajustes" data-dica="ajustesDica" aria-label="Ajustes" data-rotulo="ajustesDica">⚙&#xFE0E;</button>
       </div>
       <div class="sp"></div>
       <div class="day"><small id="data"></small><b class="mono" id="total-dia">0min</b></div>
     </div>
     <div class="top-l2">
-      <nav class="telas" aria-label="Telas">
-        <button class="telas-bt" id="bt-telas" data-acao="telas-menu" title="Trocar de tela" aria-haspopup="menu" aria-expanded="false"><span class="tn">Painel</span><span class="seta" aria-hidden="true">▾</span></button>
+      <nav class="telas" aria-label="Telas" data-rotulo="telasRotulo">
+        <button class="telas-bt" id="bt-telas" data-acao="telas-menu" title="Trocar de tela" data-dica="telasDica" aria-haspopup="menu" aria-expanded="false"><span class="tn">Painel</span><span class="seta" aria-hidden="true">▾</span></button>
       </nav>
       <span class="sep-v" id="abas-sep" aria-hidden="true" hidden></span>
       <div class="abas-topo" id="abas"></div>
       <div class="sp"></div>
       <div class="acoes">
         <span class="rodando-n" id="rodando" hidden><i class="pt-on" aria-hidden="true"></i><b class="rn mono"></b><span class="rt"></span></span>
-        <button class="acao" id="bt-pausar-tudo" data-acao="pausar-tudo" title="Pausar tudo" hidden><span class="ai" aria-hidden="true">⏸&#xFE0E;</span><span class="rot">Pausar tudo</span></button>
-        <button class="acao" id="bt-zerar-todos" data-acao="zerar-todos" title="Zerar todos: o número de cada timer volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão"><span class="ai" aria-hidden="true">↺</span><span class="rot">Zerar todos</span></button>
+        <button class="acao" id="bt-pausar-tudo" data-acao="pausar-tudo" title="Pausar tudo" data-dica="pausarTudoDica" hidden><span class="ai" aria-hidden="true">⏸&#xFE0E;</span><span class="rot" data-texto="pausarTudo">Pausar tudo</span></button>
+        <button class="acao" id="bt-zerar-todos" data-acao="zerar-todos" title="Zerar todos: o número de cada timer volta a 0:00 agora. Nada é apagado: o total do dia, a linha do tempo e o relatório ficam como estão" data-dica="zerarTodosDica"><span class="ai" aria-hidden="true">↺</span><span class="rot" data-texto="zerarTodos">Zerar todos</span></button>
       </div>
     </div>
   </header>
-  <div class="pergunta-topo" id="perguntas" role="region" aria-label="Pergunta" hidden></div>
+  <div class="pergunta-topo" id="perguntas" role="region" aria-label="Pergunta" data-rotulo="perguntaRotulo" hidden></div>
   <div class="faixa-topo" id="faixa-tour" role="status" hidden>
-    <span>Novo: um tour de 1 minuto pelo <span data-nome-app></span></span>
-    <button type="button" id="bt-tour-ver">Ver</button>
-    <button type="button" class="esconder-txt" id="bt-tour-agora-nao">Agora não</button>
+    <span data-texto-app="faixaTourTexto"></span>
+    <button type="button" id="bt-tour-ver" data-texto="ver">Ver</button>
+    <button type="button" class="esconder-txt" id="bt-tour-agora-nao" data-texto="agoraNao">Agora não</button>
   </div>
   <div class="faixa-topo" id="faixa-hooks" role="status" hidden>
     <span></span>
-    <button type="button" id="bt-hooks-atualizar">Atualizar</button>
-    <button type="button" class="esconder" id="bt-hooks-esconder" title="Esconder até a próxima abertura" aria-label="Esconder">×</button>
+    <button type="button" id="bt-hooks-atualizar" data-texto="atualizar">Atualizar</button>
+    <button type="button" class="esconder" id="bt-hooks-esconder" title="Esconder até a próxima abertura" data-dica="esconderAteAbrir" aria-label="Esconder" data-rotulo="esconder">×</button>
   </div>
 
   <main class="corpo">

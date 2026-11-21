@@ -11,6 +11,7 @@ macro_rules! log_debug {
     }};
 }
 
+mod atualizar;
 mod bandeja;
 mod comandos;
 mod escolher_pasta;
@@ -38,10 +39,26 @@ fn script_do_nome() -> String {
     )
 }
 
+/// O idioma da interface do Windows, como o `navigator.language` do WebView (rodada 23): "pt" para
+/// qualquer português, "en" para o resto (o "Sistema" dos Ajustes → Idioma só separa os dois).
+fn idioma_do_windows() -> &'static str {
+    #[cfg(windows)]
+    {
+        // o idioma primário são os 10 bits de baixo do LANGID; LANG_PORTUGUESE = 0x16
+        let id = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
+        if id & 0x3ff == 0x16 {
+            return "pt";
+        }
+    }
+    "en"
+}
+
 /// Prepara a pasta de dados (`%USERPROFILE%\.worktimer`), abre o banco, reabre o motor e põe o
 /// núcleo no estado do Tauri.
 fn iniciar_nucleo(app: &tauri::App) -> Result<(), String> {
     log_debug!("{} {} · © 2026 {} · {}", APP_NOME, app.package_info().version, nucleo::AUTOR, nucleo::ASSINATURA);
+    // antes do banco: os nomes padrão de um banco novo nascem no idioma do Windows
+    nucleo::idioma::definir_sistema(idioma_do_windows());
     let base = fila::caminhos::base();
     std::fs::create_dir_all(&base).map_err(|e| format!("não consegui criar {}: {e}", base.display()))?;
     // a cópia do hook que os comandos do settings.json chamam; em uso, fica para a próxima. No
@@ -163,6 +180,7 @@ fn main() {
     contexto.config_mut().identifier = id;
     tauri::Builder::default()
         .manage::<comandos::EstadoDicas>(Mutex::new(nucleo::dicas::Dicas::default()))
+        .manage::<atualizar::EstadoAtualizacao>(Mutex::new(atualizar::Atualizacao::default()))
         // o nome de exibição chega às páginas (principal e dock) antes dos scripts delas
         .plugin(tauri::plugin::Builder::<tauri::Wry>::new("nome-app").js_init_script(script_do_nome()).build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -173,6 +191,9 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![janelas::ARG_BANDEJA]),
         ))
+        // atualizar pelo app (rodada 25): o endpoint, a chave pública e o modo passivo ficam no
+        // tauri.conf.json; a página não chama o plugin direto (os comandos em `atualizar`)
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             iniciar_nucleo(app)?;
 
@@ -195,6 +216,8 @@ fn main() {
 
             laco::iniciar(app.handle().clone());
             laco::avisar(app.handle());
+            // uma vez por dia, ao abrir (fora do perfil de teste e com a opção ligada)
+            atualizar::buscar_ao_abrir(app.handle());
             Ok(())
         })
         .on_window_event(eventos_da_principal)
@@ -285,6 +308,9 @@ fn main() {
             comandos::aviso_fechar,
             comandos::aviso_clicado,
             comandos::aviso_atual,
+            atualizar::atualizacao_estado,
+            atualizar::atualizacao_procurar,
+            atualizar::atualizacao_instalar,
         ])
         .build(contexto)
         .unwrap_or_else(|e| panic!("erro ao executar o {APP_NOME}: {e}"))
@@ -324,27 +350,127 @@ mod testes {
         assert_eq!(nsi.matches("--remover-hooks").count(), 1);
     }
 
-    /// Rodada 22 (era a 0.3.0 da rodada 21): a versão 0.3.1 no `tauri.conf.json` e nos
+    /// Rodada 23 (era a 0.3.1 da rodada 22): a versão 0.4.0 no `tauri.conf.json` e nos
     /// `Cargo.toml`, e o instalador que o `build.ps1` copia com o nome de exibição:
-    /// `Chronn_0.3.1_x64-setup.exe`.
+    /// `Chronn_0.4.0_x64-setup.exe`.
     #[test]
-    fn versao_0_3_1_e_o_nome_do_instalador() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.3.1");
+    fn versao_0_4_0_e_o_nome_do_instalador() {
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.0");
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(conf["version"], "0.3.1");
+        assert_eq!(conf["version"], "0.4.0");
         for toml in [
             include_str!("../../crates/fila/Cargo.toml"),
             include_str!("../../crates/hook/Cargo.toml"),
             include_str!("../../crates/nucleo/Cargo.toml"),
             include_str!("../../crates/sinais/Cargo.toml"),
         ] {
-            assert!(toml.replace("\r\n", "\n").contains("\nversion = \"0.3.1\"\n"), "{toml}");
+            assert!(toml.replace("\r\n", "\n").contains("\nversion = \"0.4.0\"\n"), "{toml}");
         }
-        // o build.ps1 troca o "Work Timer_" do nome gerado pelo nome de exibição
+        // o Cargo.lock acompanha os pacotes do workspace
+        let lock = include_str!("../../Cargo.lock").replace("\r\n", "\n");
+        for nome in ["fila", "nucleo", "sinais", "work-timer", "work-timer-hook"] {
+            assert!(lock.contains(&format!("name = \"{nome}\"\nversion = \"0.4.0\"\n")), "{nome} no Cargo.lock");
+        }
+        // o build.ps1 pega o instalador da versão do tauri.conf.json (revisão da rodada 25) e faz a
+        // cópia com o nome de exibição
         let ps1 = include_str!("../../scripts/build.ps1");
-        assert!(ps1.contains(r#"-replace '^Work Timer_', "${nome}_""#));
-        let gerado = format!("Work Timer_{}_x64-setup.exe", conf["version"].as_str().unwrap());
-        assert_eq!(gerado.replacen("Work Timer_", &format!("{APP_NOME}_"), 1), "Chronn_0.3.1_x64-setup.exe");
+        assert!(ps1.contains(r#"$versao = $conf.version"#));
+        assert!(ps1.contains(r#"(Join-Path $pasta "Work Timer_${versao}_x64-setup.exe")"#));
+        assert!(ps1.contains(r#"$copia = Join-Path $pasta "${nome}_${versao}_x64-setup.exe""#));
+        let versao = conf["version"].as_str().unwrap();
+        assert_eq!(format!("{APP_NOME}_{versao}_x64-setup.exe"), "Chronn_0.4.0_x64-setup.exe");
+        // as variáveis da chave saem do ambiente no fim, com ou sem erro
+        assert!(ps1.contains("Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD"));
+    }
+
+    /// Rodada 23: o instalador em inglês e em português, escolhido pelo idioma do Windows (sem a
+    /// caixa de escolha; o inglês vem primeiro, para os outros idiomas). Os nossos textos
+    /// (`LangString`) nos dois idiomas, com as mesmas chaves, e toda chave que o modelo lê existe
+    /// nos dois.
+    #[test]
+    fn instalador_em_ingles_e_em_portugues() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let nsis = &conf["bundle"]["windows"]["nsis"];
+        assert_eq!(nsis["languages"], serde_json::json!(["English", "PortugueseBR"]));
+        assert_eq!(nsis["displayLanguageSelector"], false);
+        assert_eq!(nsis["customLanguageFiles"]["English"], "nsis/idiomas/English.nsh");
+        assert_eq!(nsis["customLanguageFiles"]["PortugueseBR"], "nsis/idiomas/PortugueseBR.nsh");
+        let chaves = |texto: &str, lang: &str| -> Vec<String> {
+            texto
+                .lines()
+                .filter(|l| l.starts_with("LangString "))
+                .map(|l| {
+                    let mut p = l.split_whitespace();
+                    p.next();
+                    let k = p.next().unwrap().to_string();
+                    assert_eq!(p.next(), Some(lang), "{l}");
+                    assert!(l.ends_with('"') && l.matches('"').count() >= 2, "{l}");
+                    k
+                })
+                .collect()
+        };
+        let en = chaves(include_str!("../nsis/idiomas/English.nsh"), "${LANG_ENGLISH}");
+        let pt = chaves(include_str!("../nsis/idiomas/PortugueseBR.nsh"), "${LANG_PORTUGUESEBR}");
+        assert_eq!(en, pt, "as mesmas chaves, na mesma ordem");
+        // o que o modelo lê com $(chave) existe nos dois (menos o choowHowToInstall, que ele mesmo põe)
+        let nsi = include_str!("../nsis/instalador.nsi");
+        for parte in nsi.split("$(").skip(1) {
+            let k = &parte[..parte.find(')').unwrap()];
+            if k.starts_with('^') || k == "choowHowToInstall" {
+                continue;
+            }
+            assert!(en.iter().any(|x| x == k), "{k} falta nos textos do instalador");
+        }
+        // as do utils.nsh do bundler (fechar o app aberto) também
+        for k in ["appRunning", "appRunningOkKill", "failedToKillApp", "noPermissionToCloseApp"] {
+            assert!(en.iter().any(|x| x == k), "{k}");
+        }
+        // o nome de exibição em todos (nunca o {{product_name}} do bundler, que é o nome interno)
+        for f in [include_str!("../nsis/idiomas/English.nsh"), include_str!("../nsis/idiomas/PortugueseBR.nsh")] {
+            assert!(!f.contains("{{product_name}}"));
+            assert!(f.contains("${PRODUCTNAME}"));
+        }
+    }
+
+    /// Revisão da rodada 23 (M1): a instalação grava o idioma do instalador sempre, também na
+    /// silenciosa, para o desinstalador sair no mesmo idioma sem perguntar.
+    #[test]
+    fn instalador_grava_o_idioma_para_o_desinstalador() {
+        let nsi = include_str!("../nsis/instalador.nsi").replace("\r\n", "\n");
+        let sec = &nsi[nsi.find("Section Install\n").unwrap()..];
+        let sec = &sec[..sec.find("SectionEnd").unwrap()];
+        assert!(sec.contains(r#"WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" $LANGUAGE"#));
+        assert!(nsi.contains(r#"!define MUI_LANGDLL_REGISTRY_VALUENAME "Installer Language""#));
+        assert!(nsi.contains("!insertmacro MUI_UNGETLANGUAGE"));
+    }
+
+    /// Rodada 25: o atualizador no tauri.conf.json: a chave pública do usuário, o endpoint da
+    /// última release, o instalador passivo e os artefatos assinados na build.
+    #[test]
+    fn atualizador_configurado() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let u = &conf["plugins"]["updater"];
+        assert_eq!(
+            u["pubkey"],
+            "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFDMENFOTcwODk0QTdFQUEKUldTcWZrcUpjT2tNcklZV1dhMGZpNVBzaUtrcGsyM2lkMm45ZmNvTHBPUmhTRHZZL1lWNUJkSlEK"
+        );
+        assert_eq!(u["endpoints"], serde_json::json!(["https://github.com/eaeniko/chronn/releases/latest/download/latest.json"]));
+        assert_eq!(u["windows"]["installMode"], "passive");
+        assert_eq!(conf["bundle"]["createUpdaterArtifacts"], true);
+        // revisão da rodada 25: a versão do latest.json tem de ser a assinada no .sig (o latest.json
+        // não é assinado; sem isto, ele poderia apontar uma versão nova para um instalador velho)
+        assert_eq!(u["requireSignedVersion"], true);
+        // e o plugin lê a opção como está escrita
+        let lida: tauri_plugin_updater::Config = serde_json::from_value(u.clone()).unwrap();
+        assert!(lida.require_signed_version);
+        // o instalador do Chronn aceita o que o plugin passa (/P /UPDATE /R /ARGS) e reabre o app
+        let nsi = include_str!("../nsis/instalador.nsi").replace("\r\n", "\n");
+        for opcao in [r#"${GetOptions} $CMDLINE "/P" $PassiveMode"#, r#"${GetOptions} $CMDLINE "/UPDATE" $UpdateMode"#, r#"${GetOptions} $CMDLINE "/R" $R0"#, r#"${GetOptions} $CMDLINE "/ARGS" $R0"#] {
+            assert!(nsi.contains(opcao), "{opcao}");
+        }
+        let fim = &nsi[nsi.find("Function .onInstSuccess").unwrap()..];
+        let fim = &fim[..fim.find("FunctionEnd").unwrap()];
+        assert!(fim.contains(r#"nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0""#));
     }
 
     /// Rodada 18: o publisher "eaeniko" vai para o "Aplicativos instalados" e muda a chave do

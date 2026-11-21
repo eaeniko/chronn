@@ -157,11 +157,14 @@ export function textoAoApagar(snap, e) {
 export const espacosParaMover = (snap, g) => espacosAtivos(snap).filter((e) => e.id !== espacoDoGrupo(g));
 
 /**
- * O menu ⋯ do cabeçalho de um grupo: Editar, "Mover para outro espaço…" (só com 2 ou mais
- * espaços) e Arquivar.
+ * O menu ⋯ do cabeçalho de um grupo: Renomear (o primeiro, rodada 24), Editar, "Mover para outro
+ * espaço…" (só com 2 ou mais espaços) e Arquivar.
  */
 export function itensDoMenuGrupo(snap, g) {
-  const v = [{ id: 'editar', rotulo: TEXTOS.editar }];
+  const v = [
+    { id: 'renomear', rotulo: TEXTOS.renomear },
+    { id: 'editar', rotulo: TEXTOS.editar },
+  ];
   if (comAbas(snap) && espacosParaMover(snap, g).length) v.push({ id: 'mover', rotulo: TEXTOS.moverParaOutroEspaco });
   v.push({ id: 'arquivar', rotulo: TEXTOS.arquivar });
   return v;
@@ -181,10 +184,10 @@ export const htmlDoMenuEspacos = (snap, g) =>
     .map((e) => botaoDeMenu(`data-mover-grupo="${g.id}" data-espaco="${e.id}"`, e.nome))
     .join('')}</div>`;
 
-/** O menu ⋯ do cartão de um timer: Editar e "Mover para…". */
+/** O menu ⋯ do cartão de um timer: Editar e "Mover para…" (o rótulo no idioma de agora). */
 export const ITENS_DO_MENU_TIMER = [
-  { id: 'editar', rotulo: TEXTOS.editar },
-  { id: 'mover', rotulo: TEXTOS.moverPara },
+  { id: 'editar', get rotulo() { return TEXTOS.editar; } },
+  { id: 'mover', get rotulo() { return TEXTOS.moverPara; } },
 ];
 
 export const htmlDoMenuTimer = (t) =>
@@ -276,9 +279,9 @@ export function grupoPreEscolhido(snap, aba, timerAberto = null) {
 
 /** Os itens do menu do "+ Novo". */
 export const ITENS_DO_MENU_NOVO = [
-  { id: 'timer', rotulo: TEXTOS.novoTimer },
-  { id: 'grupo', rotulo: TEXTOS.novoGrupo },
-  { id: 'espaco', rotulo: TEXTOS.novoEspaco },
+  { id: 'timer', get rotulo() { return TEXTOS.novoTimer; } },
+  { id: 'grupo', get rotulo() { return TEXTOS.novoGrupo; } },
+  { id: 'espaco', get rotulo() { return TEXTOS.novoEspaco; } },
 ];
 
 /** O menu do "+ Novo" (no estilo do menu do ?). */
@@ -310,6 +313,44 @@ export function pontoDoEspaco(snap, timer) {
   const e = espacoPorId(snap, timer.espaco_id ?? ESPACO_PRIMEIRO);
   if (!e) return '';
   return `<i class="desp" style="--e:${cor(e.cor)}" title="${esc(`${TEXTOS.espaco}: ${e.nome}`)}" aria-label="${esc(`${TEXTOS.espaco}: ${e.nome}`)}"></i>`;
+}
+
+/** As formas do espaço no dock recolhido (Ajustes → Dock, rodada 24); a primeira é o padrão. */
+export const DOCK_ESPACO = ['timer', 'texto', 'cor'];
+
+/**
+ * O espaço de um timer no dock recolhido (rodada 24): `{ modo, espaco }`. `modo` é a escolha dos
+ * Ajustes (`config.dock_espaco`): "timer" (o padrão: um ponto na cor do timer e o espaço na dica
+ * dele), "texto" (o nome do espaço na linha da situação) ou "cor" (o ponto na cor do espaço). Com
+ * um espaço só, ou sem achar o do timer, as três ficam iguais à "timer", sem espaço.
+ */
+export function espacoNoRecolhido(snap, timer) {
+  const escolha = snap?.config?.dock_espaco;
+  const modo = DOCK_ESPACO.includes(escolha) ? escolha : DOCK_ESPACO[0];
+  if (!comAbas(snap)) return { modo: DOCK_ESPACO[0], espaco: null };
+  const espaco = espacoPorId(snap, timer?.espaco_id ?? ESPACO_PRIMEIRO);
+  return espaco ? { modo, espaco } : { modo: DOCK_ESPACO[0], espaco: null };
+}
+
+/**
+ * O ponto do timer no dock recolhido (rodada 24): um só. Na cor do timer (o `--c` da linha) ou,
+ * no modo "cor", na do espaço, com o mesmo halo de rodando. Com o espaço à mão, fora do modo
+ * "texto" (lá o nome já está escrito), a dica diz "Relatório · espaço Pessoal".
+ */
+export function pontoRecolhido(timer, { modo, espaco }) {
+  if (!espaco || modo === 'texto') return '<i></i>';
+  const dica = esc(TEXTOS.dicaPontoEspaco(timer.nome, espaco.nome));
+  const estilo = modo === 'cor' ? ` style="--c:${cor(espaco.cor)}"` : '';
+  return `<i${estilo} title="${dica}" aria-label="${dica}"></i>`;
+}
+
+/**
+ * O nome do espaço na linha da situação (o modo "texto", rodada 24): "Pessoal", na cor do
+ * espaço. Vazio fora do modo "texto" ou sem espaço.
+ */
+export function espacoEmTexto({ modo, espaco }) {
+  if (modo !== 'texto' || !espaco) return '';
+  return `<span class="sesp" style="--e:${cor(espaco.cor)}">${esc(espaco.nome)}</span>`;
 }
 
 /**

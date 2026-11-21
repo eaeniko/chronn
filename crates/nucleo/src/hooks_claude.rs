@@ -95,29 +95,35 @@ pub fn remover(mut settings: Value, marcas: &[&str]) -> Value {
 }
 
 pub fn previa(antes: &Value, depois: &Value) -> String {
+    previa_em(crate::idioma::atual(), antes, depois)
+}
+
+/// A prévia no idioma `i`: "Antes:" e "Depois:" ("Before:" e "After:") com os blocos de hooks.
+pub fn previa_em(i: crate::idioma::Idioma, antes: &Value, depois: &Value) -> String {
+    use crate::idioma::t;
     let bloco = |v: &Value| match v.get("hooks") {
         Some(h) => serde_json::to_string_pretty(h).unwrap_or_default(),
-        None => "(sem hooks)".to_string(),
+        None => t(i, "hooks.sem").to_string(),
     };
-    format!("Antes:
+    format!("{}:
 {}
 
-Depois:
-{}", bloco(antes), bloco(depois))
+{}:
+{}", t(i, "hooks.antes"), bloco(antes), t(i, "hooks.depois"), bloco(depois))
 }
 
 fn ler(caminho: &Path) -> Result<Option<(String, Value)>, String> {
     if !caminho.exists() {
         return Ok(None);
     }
-    let texto = std::fs::read_to_string(caminho).map_err(|e| format!("não consegui ler: {e}"))?;
+    let texto = std::fs::read_to_string(caminho).map_err(|e| crate::idioma::tfa("erro.ler", &[&e.to_string()]))?;
     let valor: Value = if texto.trim().is_empty() {
         json!({})
     } else {
-        serde_json::from_str(&texto).map_err(|e| format!("JSON inválido, nada foi alterado: {e}"))?
+        serde_json::from_str(&texto).map_err(|e| crate::idioma::tfa("erro.json", &[&e.to_string()]))?
     };
     if !valor.is_object() {
-        return Err("JSON inválido, nada foi alterado: a raiz não é um objeto".into());
+        return Err(crate::idioma::ta("erro.json_raiz").into());
     }
     Ok(Some((texto, valor)))
 }
@@ -126,7 +132,7 @@ fn gravar(caminho: &Path, valor: &Value) -> Result<(), String> {
     let mut texto = serde_json::to_string_pretty(valor).map_err(|e| e.to_string())?;
     texto.push('\n');
     if let Some(pai) = caminho.parent() {
-        std::fs::create_dir_all(pai).map_err(|e| format!("não consegui criar a pasta: {e}"))?;
+        std::fs::create_dir_all(pai).map_err(|e| crate::idioma::tfa("erro.criar_pasta", &[&e.to_string()]))?;
     }
     let mut tmp = caminho.as_os_str().to_owned();
     tmp.push(".worktimer-tmp");
@@ -141,7 +147,7 @@ fn gravar(caminho: &Path, valor: &Value) -> Result<(), String> {
     };
     escrever().map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("não consegui gravar: {e}")
+        crate::idioma::tfa("erro.gravar", &[&e.to_string()])
     })
 }
 
@@ -160,11 +166,11 @@ fn copia_de_seguranca(caminho: &Path, texto: &str) -> Result<PathBuf, String> {
             Ok(mut f) => {
                 use std::io::Write;
                 f.write_all(texto.as_bytes())
-                    .map_err(|e| format!("não consegui fazer a cópia de segurança: {e}"))?;
+                    .map_err(|e| crate::idioma::tfa("erro.copia_seguranca", &[&e.to_string()]))?;
                 return Ok(destino);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("não consegui fazer a cópia de segurança: {e}")),
+            Err(e) => return Err(crate::idioma::tfa("erro.copia_seguranca", &[&e.to_string()])),
         }
     }
     unreachable!()
@@ -480,6 +486,17 @@ mod testes {
         let a = base();
         let s = previa(&a, &mesclar(a.clone(), CMD));
         assert!(s.contains("outro.exe") && s.contains("work-timer-hook"));
+    }
+
+    #[test]
+    fn previa_no_idioma_escolhido() {
+        use crate::idioma::Idioma;
+        let a = json!({});
+        let pt = previa_em(Idioma::Pt, &a, &mesclar(a.clone(), CMD));
+        assert!(pt.starts_with("Antes:\n(sem hooks)\n\nDepois:\n"), "{pt}");
+        let en = previa_em(Idioma::En, &a, &mesclar(a.clone(), CMD));
+        assert!(en.starts_with("Before:\n(no hooks)\n\nAfter:\n"), "{en}");
+        assert!(!en.contains("Antes") && !en.contains("Depois"));
     }
 
     #[test]

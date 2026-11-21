@@ -6,12 +6,63 @@
 import { chamar, iniciarComWindows } from './api.js';
 import { esc, cor } from './componentes.js';
 import { abrirDialogo, faixa, textoDoErro, grupoParaSalvar, PALETA, novoEspaco } from './editar.js';
-import { linhas, minutosDeSegundos, segundosDeMinutos, tamanho, abreviarCaminho } from './formato.js';
+import { linhas, minutosDeSegundos, segundosDeMinutos, tamanho, abreviarCaminho, dataDoBackup } from './formato.js';
 import { NOME_APP, PERFIL_TESTE } from './nome.js';
-import { TEXTOS } from './textos.js';
+import { TEXTOS, aoTrocarIdioma, IDIOMAS, IDIOMA_SISTEMA, resolverIdioma } from './textos.js';
 import { podeApagarEspaco, textoAoApagar } from './espacos.js';
+import { htmlAtualizacao, textoDaVersao, linhaDaVerificacao, textoDaUltima, abrirAtualizar } from './atualizacao.js';
 
-export const CREDITOS = 'Criado por @eaeniko (Nikolai Cinotti)';
+// Os textos fixos que outros módulos (e os testes) leem daqui, no idioma de agora: refeitos a cada
+// troca de idioma (rodada 23; os `export let` acompanham, pelo vínculo vivo dos módulos).
+export let CREDITOS;
+export let TEMPOS;
+export let TITULO_MODO_DEV;
+export let AVISO_TEMPOS;
+export let HOOKS_ANTIGOS;
+export let HOOKS_DESLIGADOS;
+export let AO_FECHAR;
+export let AO_MINIMIZAR;
+export let ESPERA_OPCOES;
+export let PAUSADO_OPCOES;
+export let CONVERSA_NOVA;
+export let DOCK_MODO;
+export let FRASE_CLAUDE;
+let SECOES;
+let DICA_PASTAS;
+
+function textosDoModulo() {
+  CREDITOS = TEXTOS.creditos;
+  // campos de tempo (só no modo desenvolvedor; sem ele valem os padrões): config em segundos, tela
+  // em minutos. O último número é o máximo em minutos.
+  TEMPOS = TEXTOS.tempos;
+  TITULO_MODO_DEV = TEXTOS.tituloModoDev;
+  // a faixa fixa da seção Tempos
+  AVISO_TEMPOS = TEXTOS.avisoTempos;
+  // o estado "antigo" dos hooks (Ajustes e a faixa da janela principal)
+  HOOKS_ANTIGOS = TEXTOS.hooksAntigos;
+  // a faixa dos hooks desligados com timers (revisão da rodada 16; "conectado" desde a rodada 18)
+  HOOKS_DESLIGADOS = TEXTOS.hooksDesligados;
+  // "Ao fechar a janela": o que o X da janela principal faz
+  AO_FECHAR = TEXTOS.aoFecharOps;
+  // "Ao minimizar a janela": o que o minimizar da janela principal faz
+  AO_MINIMIZAR = TEXTOS.aoMinimizarOps;
+  // os tempos do "esperando você" (rodada 13), em minutos; 0 = até a virada do dia
+  ESPERA_OPCOES = TEXTOS.esperaOps;
+  // os tempos do pausado no dock recolhido (rodada 14), em minutos; 0 = sai na hora
+  PAUSADO_OPCOES = TEXTOS.pausadoOps;
+  // "Conversa nova numa pasta com regra" (rodada 15)
+  CONVERSA_NOVA = TEXTOS.conversaNovaOps;
+  // "Dock": sempre à vista (o padrão) ou só quando houver uma pergunta (rodada 12)
+  DOCK_MODO = TEXTOS.dockModoOps;
+  // a frase do cartão do Claude Code (rodada 18)
+  FRASE_CLAUDE = TEXTOS.fraseClaude;
+  DICA_PASTAS = TEXTOS.dicaPastas;
+  SECOES = ['idioma', 'aparencia', 'painel', 'dock', 'espera', 'sistema', 'claude', 'pastas', 'dia', 'tempos', 'arredondamento', 'atividades', 'grupos', 'backups', 'ajuda', 'sobre'].map(
+    (id) => [id, TEXTOS.secoes[id]],
+  );
+}
+textosDoModulo();
+aoTrocarIdioma(textosDoModulo);
 
 /**
  * Os créditos do Sobre (rodada 18): o `@eaeniko` abre o site do autor e "Código no GitHub" o
@@ -19,69 +70,36 @@ export const CREDITOS = 'Criado por @eaeniko (Nikolai Cinotti)';
  * versão e a marca de autoria.
  */
 export function htmlCreditos(assinatura = '') {
-  return `<p class="aj-cred">Criado por <button type="button" class="aj-link" data-aj="link" data-link="autor" title="eaeniko.okin.club">@eaeniko</button> (Nikolai Cinotti) · <button type="button" class="aj-link" data-aj="link" data-link="codigo" title="github.com/eaeniko/chronn">Código no GitHub</button></p>
+  const autor = '<button type="button" class="aj-link" data-aj="link" data-link="autor" title="eaeniko.okin.club">@eaeniko</button>';
+  const codigo = `<button type="button" class="aj-link" data-aj="link" data-link="codigo" title="github.com/eaeniko/chronn">${TEXTOS.codigoNoGithub}</button>`;
+  return `<p class="aj-cred">${TEXTOS.creditosHtml(autor, codigo)}</p>
 ${assinatura ? `<p class="aj-assinatura mono">${esc(assinatura)}</p>` : ''}`;
 }
-
-const SECOES = [
-  ['aparencia', 'Aparência'],
-  ['painel', 'Painel'],
-  ['dock', 'Dock'],
-  ['espera', 'Lembretes no dock'],
-  ['sistema', 'Sistema'],
-  ['claude', 'Conexões'],
-  ['pastas', 'Pastas que nunca contam'],
-  ['dia', 'Dia de trabalho'],
-  ['tempos', 'Tempos'],
-  ['arredondamento', 'Arredondamento'],
-  ['atividades', 'Atividades'],
-  ['grupos', 'Grupos e regras'],
-  ['backups', 'Backups'],
-  ['ajuda', 'Ajuda'],
-  ['sobre', 'Sobre'],
-];
 
 /** "Apagar o perfil de teste e recomeçar" (rodada 17): só existe no perfil de teste. */
 export const htmlApagarPerfil = (teste = PERFIL_TESTE) =>
   teste
-    ? `<div class="aj-bts"><button type="button" class="bt perigo" data-aj="apagar-perfil-teste">Apagar o perfil de teste e recomeçar</button></div>
-<small class="aj-dica">Perfil de teste: fecha o app de teste e apaga a pasta dele (os dados, a config e o Claude Code simulado). O perfil de uso não muda.</small>`
+    ? `<div class="aj-bts"><button type="button" class="bt perigo" data-aj="apagar-perfil-teste">${TEXTOS.apagarPerfilTeste}</button></div>
+<small class="aj-dica">${TEXTOS.apagarPerfilTesteDica}</small>`
     : '';
 
 /** Ajustes → Ajuda (rodada 16): as dicas na tela, mostrá-las de novo e o tour. */
 export const htmlAjuda = (c) =>
-  `${caixa('dicas_ligadas', 'Dicas na tela', 'Uma dica curta na primeira vez que cada coisa acontece: o Claude contando, uma pergunta, o ↺ Zerar…', c?.dicas_ligadas !== false)}
+  `${caixa('dicas_ligadas', TEXTOS.dicasNaTela, TEXTOS.dicasNaTelaDica, c?.dicas_ligadas !== false)}
 <div class="aj-bts">
-  <button type="button" class="bt" data-aj="dicas-de-novo">Mostrar as dicas de novo</button>
-  <button type="button" class="bt pri" data-aj="ver-tour">Como começar</button>
-  <button type="button" class="bt" data-aj="tour-completo">Tour completo</button>
+  <button type="button" class="bt" data-aj="dicas-de-novo">${TEXTOS.mostrarDicasDeNovo}</button>
+  <button type="button" class="bt pri" data-aj="ver-tour">${TEXTOS.comoComecar}</button>
+  <button type="button" class="bt" data-aj="tour-completo">${TEXTOS.tourCompleto}</button>
 </div>
-<small class="aj-dica">"Como começar" leva um minuto pelo essencial: os cartões, o Claude contando, as pastas e o dock. O tour completo passa por todas as partes da janela. Em cada tela, o ? do topo explica o que ela mostra.</small>`;
-
-/**
- * Campos de tempo (só no modo desenvolvedor; sem ele valem os padrões): config em segundos, tela
- * em minutos. O último número é o máximo em minutos.
- */
-export const TEMPOS = [
-  ['uso_s', 'Uso recente', 'A leitura da conversa aberta no Claude só conta se houve mouse ou teclado neste tempo. Padrão: 3 min.', 1440],
-  ['inatividade_s', 'Inatividade', 'Sem mouse e teclado por este tempo, os timers manuais pausam. Padrão: 10 min.', 30],
-  ['sessao_parada_s', 'Sessão parada', 'Claude trabalhando sem nenhum evento por este tempo vira parada. Padrão: 10 min.', 1440],
-];
+<small class="aj-dica">${TEXTOS.ajudaDica}</small>`;
 
 /** O interruptor discreto do Sobre. */
 export const campoModoDev = (ligado) => `<label class="chk aj-dev">
-  <input type="checkbox" name="modo_dev"${ligado ? ' checked' : ''}><span>Modo desenvolvedor<small>Mostra a seção Tempos. Ao desligar, os tempos voltam aos padrões.</small></span>
+  <input type="checkbox" name="modo_dev"${ligado ? ' checked' : ''}><span>${TEXTOS.modoDev}<small>${TEXTOS.modoDevDica}</small></span>
 </label>`;
 
-/** Título e corpo da confirmação ao ligar o modo desenvolvedor. */
-export const TITULO_MODO_DEV = 'Modo desenvolvedor: por sua conta e risco';
-export const corpoModoDev = () => `<p class="dlg-p">Ele libera a seção Tempos, que muda quando o app conta uso, inatividade e sessão parada.</p>
-<p class="dlg-p">Tempos fora do padrão podem contar horas a mais ou a menos e deixar os seus números diferentes dos colegas.</p>
-<p class="dlg-p">Só ligue se você sabe o que está fazendo. Ao desligar, os tempos voltam aos padrões.</p>`;
-
-/** Faixa fixa da seção Tempos. */
-export const AVISO_TEMPOS =
-  'Por sua conta e risco: mudar estes tempos pode contar horas a mais ou a menos e deixar seus números diferentes dos colegas.';
+/** O corpo da confirmação ao ligar o modo desenvolvedor (o título é `TITULO_MODO_DEV`). */
+export const corpoModoDev = () => TEXTOS.corpoModoDev.map((p) => `<p class="dlg-p">${p}</p>`).join('\n');
 
 /** A seção Tempos (e o link dela) só aparece no modo desenvolvedor. */
 function mostrarTempos(ligado) {
@@ -146,19 +164,11 @@ function salvar(mudar, { lancar = false } = {}) {
 
 // ---- Claude Code: prévia e instalação ----
 
-const DICA_PASTAS = 'Uma por linha. Sessões do Claude nestas pastas (e subpastas) ficam de fora: o hook nem registra.';
-
 /** Campo "Pastas que nunca contam" (Ajustes e o diálogo de ligar ao Claude Code). */
 const campoPastas = (pastas, rotulo) => `<label class="campo">${rotulo ? `<span>${rotulo}</span>` : ''}
-  <textarea name="pastas_ignoradas" rows="2" spellcheck="false" aria-label="Pastas que nunca contam" placeholder="Ex.: G:\\Projetos pessoais">${esc(pastas.join('\n'))}</textarea>
+  <textarea name="pastas_ignoradas" rows="2" spellcheck="false" aria-label="${esc(TEXTOS.pastasNuncaContam)}" placeholder="${esc(TEXTOS.pastasPlaceholder)}">${esc(pastas.join('\n'))}</textarea>
   <small>${DICA_PASTAS}</small>
 </label>`;
-
-/** Texto do estado "antigo" dos hooks (Ajustes e a faixa da janela principal). */
-export const HOOKS_ANTIGOS = 'Os hooks apontam para a versão antiga. Atualizar?';
-
-/** A faixa dos hooks desligados com timers (revisão da rodada 16; "conectado" desde a rodada 18). */
-export const HOOKS_DESLIGADOS = 'O Claude Code não está conectado: o tempo do Claude não está contando.';
 
 /**
  * A faixa dos hooks na janela principal, ou nula: com os hooks da versão antiga, "Atualizar" (e o
@@ -166,9 +176,9 @@ export const HOOKS_DESLIGADOS = 'O Claude Code não está conectado: o tempo do 
  * timers, quem liga é o primeiro uso. As duas somem até a próxima abertura pelo × ou "Agora não".
  */
 export function faixaDosHooks(estado, temTimers, encontrado = true) {
-  if (estado === 'antigo') return { texto: HOOKS_ANTIGOS, botao: 'Atualizar', atualizar: true, esconder: '×' };
+  if (estado === 'antigo') return { texto: HOOKS_ANTIGOS, botao: TEXTOS.atualizar, atualizar: true, esconder: '×' };
   // sem o Claude Code neste PC, a faixa não oferece conectar (rodada 18)
-  if (estado === 'desligado' && temTimers && encontrado) return { texto: HOOKS_DESLIGADOS, botao: 'Conectar', atualizar: false, esconder: 'Agora não' };
+  if (estado === 'desligado' && temTimers && encontrado) return { texto: HOOKS_DESLIGADOS, botao: TEXTOS.conectar, atualizar: false, esconder: TEXTOS.agoraNao };
   return null;
 }
 
@@ -178,12 +188,13 @@ export function faixaDosHooks(estado, temTimers, encontrado = true) {
  * versão antiga saem e entram os de agora.
  */
 export function corpoPrevia(previa, settings, pastas = [], atualizar = false) {
-  const o = atualizar ? 'trocar os hooks da versão antiga pelos de agora' : 'acrescentar os hooks dele';
+  const o = atualizar ? TEXTOS.previaAtualizar : TEXTOS.previaAcrescentar;
   // o caminho abreviado no texto (rodada 18); a prévia, exata e recolhida em "Ver o que muda"
-  return `<p class="dlg-p">O ${NOME_APP} vai ${o} em <code class="aj-cam">${esc(abreviarCaminho(settings || 'settings.json'))}</code>. O que já existe no arquivo fica como está, e antes de gravar ele faz uma cópia de segurança.</p>
-<details class="mais aj-ver-muda"><summary>Ver o que muda</summary><div class="mais-corpo"><p class="aj-dica">Os caminhos são os do seu usuário neste PC.</p>
-<pre class="aj-previa" tabindex="0" aria-label="Prévia da mudança">${esc(previa)}</pre></div></details>
-${campoPastas(pastas, 'Pastas que nunca contam (opcional)')}`;
+  const cam = `<code class="aj-cam">${esc(abreviarCaminho(settings || 'settings.json'))}</code>`;
+  return `<p class="dlg-p">${TEXTOS.previaTexto(NOME_APP, o, cam)}</p>
+<details class="mais aj-ver-muda"><summary>${TEXTOS.verOQueMuda}</summary><div class="mais-corpo"><p class="aj-dica">${TEXTOS.caminhosDoUsuario}</p>
+<pre class="aj-previa" tabindex="0" aria-label="${TEXTOS.previaRotulo}">${esc(previa)}</pre></div></details>
+${campoPastas(pastas, TEXTOS.pastasOpcional)}`;
 }
 
 /** Grava as pastas que nunca contam do diálogo (e o hook.json que o hook lê). Chamar antes de `hooks_instalar`. */
@@ -197,8 +208,8 @@ export async function gravarPastas(form) {
 /** Texto depois de instalar: onde ficou a cópia de segurança (ou que o arquivo é novo). */
 export function corpoInstalado(copia) {
   return copia
-    ? `<p class="dlg-p">Cópia de segurança do arquivo anterior:</p><code class="aj-cam aj-bloco">${esc(abreviarCaminho(copia))}</code>`
-    : '<p class="dlg-p">Não havia configuração antes: arquivo novo criado.</p>';
+    ? `<p class="dlg-p">${TEXTOS.copiaAnterior}</p><code class="aj-cam aj-bloco">${esc(abreviarCaminho(copia))}</code>`
+    : `<p class="dlg-p">${TEXTOS.semConfigAntes}</p>`;
 }
 
 /** Lê a prévia, o caminho e as pastas ignoradas de agora; `{ previa, settings, pastas }` ou `{ erro }`. */
@@ -218,15 +229,15 @@ export async function lerPrevia() {
  * gravado sem o clique da pessoa. Resolve `true` se instalou.
  */
 export async function ligarAoClaude({ atualizar = false } = {}) {
-  const titulo = atualizar ? 'Atualizar a conexão do Claude Code' : 'Conectar o Claude Code';
+  const titulo = atualizar ? TEXTOS.atualizarConexao : TEXTOS.conectarClaude;
   const { previa, settings, pastas, erro } = await lerPrevia();
   return new Promise((ok) => {
     if (erro) {
       abrirDialogo({
         titulo,
-        corpo: `<p class="dlg-p">Não deu para preparar a mudança: ${esc(erro)}</p>`,
+        corpo: `<p class="dlg-p">${TEXTOS.naoDeuPreparar(esc(erro))}</p>`,
         enviar: null,
-        cancelar: 'Fechar',
+        cancelar: TEXTOS.fechar,
         aoFechar: () => ok(false),
       });
       return;
@@ -236,7 +247,7 @@ export async function ligarAoClaude({ atualizar = false } = {}) {
       titulo,
       classe: 'largo',
       corpo: corpoPrevia(previa, settings, pastas, atualizar),
-      enviar: atualizar ? 'Atualizar' : 'Conectar',
+      enviar: atualizar ? TEXTOS.atualizar : TEXTOS.conectar,
       async aoEnviar(form) {
         // as pastas primeiro: o hook já nasce sabendo o que não registrar
         await gravarPastas(form);
@@ -245,9 +256,9 @@ export async function ligarAoClaude({ atualizar = false } = {}) {
       aoFechar(enviado) {
         if (!enviado) return ok(false);
         abrirDialogo({
-          titulo: atualizar ? 'Conexão atualizada' : 'Claude Code conectado',
+          titulo: atualizar ? TEXTOS.conexaoAtualizada : TEXTOS.claudeConectado,
           corpo: corpoInstalado(copia),
-          enviar: 'OK',
+          enviar: TEXTOS.ok,
           cancelar: null,
           aoFechar: () => ok(true),
         });
@@ -259,9 +270,9 @@ export async function ligarAoClaude({ atualizar = false } = {}) {
 function removerHooks() {
   return new Promise((ok) => {
     abrirDialogo({
-      titulo: 'Desconectar o Claude Code?',
-      corpo: `<p class="dlg-p">Os hooks do ${NOME_APP} saem de <code class="aj-cam">${esc(abreviarCaminho(dados.info?.settings ?? 'settings.json'))}</code> (antes, uma cópia de segurança). O resto do arquivo fica como está. As sessões do Claude deixam de entrar sozinhas nos timers.</p>`,
-      enviar: 'Desconectar',
+      titulo: TEXTOS.desconectarClaude,
+      corpo: `<p class="dlg-p">${TEXTOS.desconectarTexto(NOME_APP, `<code class="aj-cam">${esc(abreviarCaminho(dados.info?.settings ?? 'settings.json'))}</code>`)}</p>`,
+      enviar: TEXTOS.desconectar,
       perigo: true,
       async aoEnviar() {
         await chamar('hooks_remover');
@@ -280,24 +291,10 @@ const caixa = (nome, rotulo, dica, marcada, extra = '') => `<label class="chk">
   <input type="checkbox" name="${nome}"${marcada ? ' checked' : ''} ${extra}><span>${rotulo}${dica ? `<small>${dica}</small>` : ''}</span>
 </label>`;
 
-/** "Ao fechar a janela": o que o X da janela principal faz. */
-export const AO_FECHAR = [
-  ['perguntar', 'Perguntar'],
-  ['bandeja', 'Manter na bandeja'],
-  ['sair', 'Sair'],
-];
-
-export const campoAoFechar = (atual) => `<div class="campo"><span id="aj-ao-fechar">Ao fechar a janela</span>
+/** "Ao fechar a janela" (`AO_FECHAR`): o que o X da janela principal faz. */
+export const campoAoFechar = (atual) => `<div class="campo"><span id="aj-ao-fechar">${TEXTOS.aoFecharRotulo}</span>
 <div class="seg" role="radiogroup" aria-labelledby="aj-ao-fechar">${AO_FECHAR.map(([v, r]) => radio('ao_fechar', v, r, atual)).join('')}</div>
-<small>Na bandeja o ${NOME_APP} continua contando, e a janela sai da memória até você abrir de novo.</small></div>`;
-
-/** "Ao minimizar a janela": o que o minimizar da janela principal faz. */
-export const AO_MINIMIZAR = [
-  ['perguntar', 'Perguntar'],
-  ['bandeja', 'Bandeja'],
-  ['dock', 'Abrir o dock'],
-  ['barra', 'Barra de tarefas'],
-];
+<small>${TEXTOS.aoFecharDica(NOME_APP)}</small></div>`;
 
 /**
  * `modoDock`: com o dock "Só quando houver uma pergunta", a opção do dock não promete o dock
@@ -305,32 +302,12 @@ export const AO_MINIMIZAR = [
  */
 export const campoAoMinimizar = (atual, modoDock = 'sempre') => {
   const escondido = modoDock === 'perguntas';
-  const ops = AO_MINIMIZAR.map(([v, r]) => [v, v === 'dock' && escondido ? 'Dock (escondido)' : r]);
-  const dica = escondido
-    ? 'Bandeja: como fechar, a janela sai da memória. Dock (escondido): com o dock só nas perguntas, só minimiza. Barra de tarefas: só minimiza.'
-    : 'Bandeja: como fechar, a janela sai da memória. Abrir o dock: minimiza e mostra o dock. Barra de tarefas: só minimiza.';
-  return `<div class="campo" data-campo="ao_minimizar"><span id="aj-ao-minimizar">Ao minimizar a janela</span>
+  const ops = AO_MINIMIZAR.map(([v, r]) => [v, v === 'dock' && escondido ? TEXTOS.dockEscondido : r]);
+  const dica = escondido ? TEXTOS.aoMinimizarDicaEscondido : TEXTOS.aoMinimizarDica;
+  return `<div class="campo" data-campo="ao_minimizar"><span id="aj-ao-minimizar">${TEXTOS.aoMinimizarRotulo}</span>
 <div class="seg" role="radiogroup" aria-labelledby="aj-ao-minimizar">${ops.map(([v, r]) => radio('ao_minimizar', v, r, atual)).join('')}</div>
 <small>${dica}</small></div>`;
 };
-
-/** Os tempos do "esperando você" (rodada 13), em minutos; 0 = até a virada do dia. */
-export const ESPERA_OPCOES = [
-  [15, '15 min'],
-  [30, '30 min'],
-  [60, '1 h'],
-  [120, '2 h'],
-  [0, 'Até a virada do dia'],
-];
-
-/** Os tempos do pausado no dock recolhido (rodada 14), em minutos; 0 = sai na hora. */
-export const PAUSADO_OPCOES = [
-  [0, 'Sai na hora'],
-  [5, '5 min'],
-  [10, '10 min'],
-  [30, '30 min'],
-  [60, '1 h'],
-];
 
 /**
  * "Lembretes no dock" (era "Esperando você"): o "esperando você" no dock recolhido (30 min) e no
@@ -338,9 +315,9 @@ export const PAUSADO_OPCOES = [
  */
 export const campoEspera = (c) =>
   [
-    ['espera_dock_min', 'Esperando você, no dock recolhido', c.espera_dock_min ?? 30, ESPERA_OPCOES],
-    ['espera_app_min', 'Esperando você, no dock expandido e no app', c.espera_app_min ?? 0, ESPERA_OPCOES],
-    ['pausado_dock_min', 'Pausado, no dock recolhido', c.pausado_dock_min ?? 10, PAUSADO_OPCOES],
+    ['espera_dock_min', TEXTOS.esperaDock, c.espera_dock_min ?? 30, ESPERA_OPCOES],
+    ['espera_app_min', TEXTOS.esperaApp, c.espera_app_min ?? 0, ESPERA_OPCOES],
+    ['pausado_dock_min', TEXTOS.pausadoDock, c.pausado_dock_min ?? 10, PAUSADO_OPCOES],
   ]
     .map(
       ([nome, rotulo, atual, opcoes]) => `<div class="campo"><span id="aj-${nome}">${rotulo}</span>
@@ -349,27 +326,40 @@ export const campoEspera = (c) =>
     .join('');
 
 /**
- * "Conversa nova numa pasta com regra" (rodada 15): a conversa conta no timer da regra e o dock
- * pergunta "Certo?" (o padrão), ou só a regra, com o aviso "Ligada a X pela pasta".
+ * "Conversa nova numa pasta com regra" (rodada 15; `CONVERSA_NOVA`): a conversa conta no timer da
+ * regra e o dock pergunta "Certo?" (o padrão), ou só a regra, com o aviso "Ligada a X pela pasta".
  */
-export const CONVERSA_NOVA = [
-  ['confirmar', 'Confirmar sempre'],
-  ['regra', 'Usar a regra direto'],
-];
-
-export const campoConversaNova = (atual) => `<div class="campo"><span id="aj-conversa-nova">Conversa nova numa pasta com regra</span>
+export const campoConversaNova = (atual) => `<div class="campo"><span id="aj-conversa-nova">${TEXTOS.conversaNovaRotulo}</span>
 <div class="seg" role="radiogroup" aria-labelledby="aj-conversa-nova">${CONVERSA_NOVA.map(([v, r]) => radio('conversa_nova', v, r, atual ?? 'confirmar')).join('')}</div>
-<small>Confirmar sempre: a conversa já conta no timer da regra e o dock pergunta se está certo (Certo, Outro timer…, + Novo timer…); sem resposta, fica na regra. Usar a regra direto: só o aviso "Ligada a … pela pasta". Uma conversa continuada (o mesmo nome, na mesma pasta) segue o timer da anterior sem perguntar.</small></div>`;
+<small>${TEXTOS.conversaNovaDica}</small></div>`;
 
-/** "Dock": sempre à vista (o padrão) ou só quando houver uma pergunta (rodada 12). */
-export const DOCK_MODO = [
-  ['sempre', 'Sempre à vista'],
-  ['perguntas', 'Só quando houver uma pergunta'],
-];
+/**
+ * "Espaço no dock recolhido" (rodada 24): as três formas, cada uma com uma prévia pequena da linha
+ * do dock (um ponto, a linha da situação e o nome). As cores da prévia são fixas: o timer azul e o
+ * espaço rosa, para a diferença aparecer.
+ */
+export function campoDockEspaco(atual) {
+  const { timer, espaco } = TEXTOS.dockEspacoPrevia;
+  const sit = TEXTOS.situacao.escrevendo.curta;
+  const previa = {
+    timer: `<i></i><b><strong>${esc(timer)}</strong></b>`,
+    texto: `<i></i><b><small><u>${esc(espaco)}</u> · ${esc(sit)}</small><strong>${esc(timer)}</strong></b>`,
+    cor: `<i class="e"></i><b><strong>${esc(timer)}</strong></b>`,
+  };
+  const valor = TEXTOS.dockEspacoOps.some(([v]) => v === atual) ? atual : 'timer';
+  const ops = TEXTOS.dockEspacoOps.map(
+    ([v, r]) =>
+      `<label class="seg-op"><input type="radio" name="dock_espaco" value="${v}"${v === valor ? ' checked' : ''}><span><em class="dkp" aria-hidden="true">${previa[v]}</em>${r}</span></label>`,
+  );
+  return `<div class="campo"><span id="aj-dock-espaco">${TEXTOS.dockEspacoRotulo}</span>
+<div class="seg seg-dkesp" role="radiogroup" aria-labelledby="aj-dock-espaco">${ops.join('')}</div>
+<small>${TEXTOS.dockEspacoDica}</small></div>`;
+}
 
-export const campoDockModo = (atual) => `<div class="campo"><span id="aj-dock-modo">Quando o dock aparece</span>
+/** "Dock" (`DOCK_MODO`): sempre à vista (o padrão) ou só quando houver uma pergunta (rodada 12). */
+export const campoDockModo = (atual) => `<div class="campo"><span id="aj-dock-modo">${TEXTOS.dockModoRotulo}</span>
 <div class="seg" role="radiogroup" aria-labelledby="aj-dock-modo">${DOCK_MODO.map(([v, r]) => radio('dock_modo', v, r, atual ?? 'sempre')).join('')}</div>
-<small>Só quando houver uma pergunta: o dock fica escondido e aparece sozinho com uma pergunta (sessão nova do Claude, volta depois de um tempo sem mexer no PC, app fechado), sem tirar o foco do que você está fazendo; respondida, ele some de novo. As perguntas aparecem também na janela principal. Para ver o dock a qualquer hora: "Mostrar o dock agora", no ícone da bandeja.</small></div>`;
+<small>${TEXTOS.dockModoDica}</small></div>`;
 
 // ---- backups ----
 
@@ -378,27 +368,24 @@ export function htmlBackups(lista) {
   const itens = lista?.length
     ? lista
         .map(
-          (b) => `<li><span class="aj-n mono">${esc(b.quando)}</span><small>${tamanho(b.bytes)}</small><button type="button" class="bt mini" data-aj="backup-restaurar" data-nome="${esc(b.nome)}">Restaurar</button></li>`,
+          (b) => `<li><span class="aj-n mono">${esc(dataDoBackup(b.quando))}</span><small>${tamanho(b.bytes)}</small><button type="button" class="bt mini" data-aj="backup-restaurar" data-nome="${esc(b.nome)}">${TEXTOS.restaurar}</button></li>`,
         )
         .join('')
-    : '<li class="aj-vazio">Nenhum backup ainda.</li>';
+    : `<li class="aj-vazio">${TEXTOS.nenhumBackup}</li>`;
   return `<ul class="aj-lista" data-lista="backups">${itens}</ul>
 <div class="aj-bts">
-  <button type="button" class="bt pri" data-aj="backup-agora">Fazer backup agora</button>
-  <button type="button" class="bt" data-aj="backup-pasta">Abrir pasta</button>
+  <button type="button" class="bt pri" data-aj="backup-agora">${TEXTOS.backupAgora}</button>
+  <button type="button" class="bt" data-aj="backup-pasta">${TEXTOS.abrirPasta}</button>
 </div>`;
 }
 
 /** Corpo da confirmação do "Restaurar". */
 export const corpoRestaurar = (b) =>
-  `<p class="dlg-p">O banco volta a ser como estava em <b>${esc(b.quando)}</b>. As horas contadas depois disso deixam de aparecer.</p>
-<p class="dlg-p">Antes, o estado de agora vira um backup novo: dá para voltar a ele por esta mesma lista. O app reabre o banco na hora, sem reiniciar.</p>`;
+  `<p class="dlg-p">${TEXTOS.restaurarTexto1(`<b>${esc(dataDoBackup(b.quando))}</b>`)}</p>
+<p class="dlg-p">${TEXTOS.restaurarTexto2}</p>`;
 
 const secao = (id, titulo, corpo, dica = '') =>
   `<section class="aj-sec" id="aj-${id}" aria-labelledby="aj-${id}-t"><h3 id="aj-${id}-t">${titulo}</h3>${dica ? `<p class="aj-dica">${dica}</p>` : ''}${corpo}</section>`;
-
-/** A frase do cartão do Claude Code (rodada 18). */
-export const FRASE_CLAUDE = 'Com o Claude Code conectado, o timer da pasta conta sozinho enquanto o Claude trabalha.';
 
 /**
  * O estado do cartão do Claude Code (Ajustes → Conexões e "Conectar apps"): `h` = "desligado" |
@@ -408,15 +395,15 @@ export function estadoDaConexao(h, encontrado = true) {
   if (!encontrado) {
     return {
       id: 'ausente',
-      rotulo: 'Claude Code não encontrado neste PC',
+      rotulo: TEXTOS.claudeNaoEncontrado,
       classe: 'ausente',
-      botao: { aj: 'ligar-claude', texto: 'Conectar', desabilitado: true, dica: 'Instale o Claude Code e volte aqui' },
+      botao: { aj: 'ligar-claude', texto: TEXTOS.conectar, desabilitado: true, dica: TEXTOS.instaleClaude },
     };
   }
-  if (h === 'ligado') return { id: 'ligado', rotulo: 'Conectado', classe: 'on', botao: { aj: 'remover-hooks', texto: 'Desconectar' } };
-  if (h === 'antigo') return { id: 'antigo', rotulo: 'Precisa atualizar', classe: 'antigo', botao: { aj: 'atualizar-hooks', texto: 'Atualizar', pri: true } };
-  if (h === 'desligado') return { id: 'desligado', rotulo: 'Não conectado', classe: '', botao: { aj: 'ligar-claude', texto: 'Conectar', pri: true } };
-  return { id: 'sem-leitura', rotulo: 'Não deu para ler o estado', classe: '', botao: { aj: 'ligar-claude', texto: 'Conectar', pri: true } };
+  if (h === 'ligado') return { id: 'ligado', rotulo: TEXTOS.conectado, classe: 'on', botao: { aj: 'remover-hooks', texto: TEXTOS.desconectar } };
+  if (h === 'antigo') return { id: 'antigo', rotulo: TEXTOS.precisaAtualizar, classe: 'antigo', botao: { aj: 'atualizar-hooks', texto: TEXTOS.atualizar, pri: true } };
+  if (h === 'desligado') return { id: 'desligado', rotulo: TEXTOS.naoConectado, classe: '', botao: { aj: 'ligar-claude', texto: TEXTOS.conectar, pri: true } };
+  return { id: 'sem-leitura', rotulo: TEXTOS.semLeitura, classe: '', botao: { aj: 'ligar-claude', texto: TEXTOS.conectar, pri: true } };
 }
 
 /**
@@ -446,6 +433,25 @@ export const htmlAparencia = (tema) => {
   return `<div class="seg" role="radiogroup" aria-label="${esc(TEXTOS.temaRotulo)}">${radio('tema', 'claro', TEXTOS.temaClaro, t)}${radio('tema', 'escuro', TEXTOS.temaEscuro, t)}${radio('tema', 'sistema', TEXTOS.temaSistema, t)}</div>`;
 };
 
+/**
+ * Ajustes → Idioma (rodada 23): Sistema (o padrão: o idioma do Windows), Português (Brasil) e
+ * English. O nome de cada idioma vem sempre no próprio idioma; embaixo, qual é o idioma do Windows
+ * (com o Sistema escolhido, `efetivo`, o idioma do estado; senão, o `sistema` da página).
+ */
+export const htmlIdioma = (escolha, efetivo = null, sistema = globalThis.navigator?.language) => {
+  const atual = escolha === 'pt-BR' || escolha === 'en' ? escolha : IDIOMA_SISTEMA;
+  // o do Windows: com o Sistema escolhido, o que o núcleo resolveu; com outro, o da página
+  const doWindows = atual === IDIOMA_SISTEMA && efetivo ? efetivo : resolverIdioma(IDIOMA_SISTEMA, sistema);
+  const agora = IDIOMAS.find((i) => i.id === doWindows);
+  // o nome de cada idioma com o `lang` dele (o leitor de tela pronuncia certo)
+  const ops = [
+    radio('idioma', IDIOMA_SISTEMA, TEXTOS.idiomaSistema, atual),
+    ...IDIOMAS.map((i) => radio('idioma', i.id, `<bdi lang="${i.lang}">${esc(i.nome)}</bdi>`, atual)),
+  ];
+  return `<div class="seg" role="radiogroup" aria-label="${esc(TEXTOS.secoes.idioma)}">${ops.join('')}</div>
+<small class="aj-dica">${esc(TEXTOS.idiomaSistemaDica(agora?.nome ?? ''))}</small>`;
+};
+
 /** Ajustes → Painel (rodada 21): mostrar a linha do tempo no Painel (ligado por padrão). */
 export const htmlPainel = (c) => caixa('painel_linha', TEXTOS.mostrarLinhaNoPainel, TEXTOS.mostrarLinhaNoPainelDica, c?.painel_linha !== false);
 
@@ -464,7 +470,7 @@ export function htmlEspacos(snap) {
     const grupos = snap.grupos.filter((g) => (g.espaco_id ?? 1) === e.id);
     const nGrupos = grupos.filter((g) => g.id !== null).length;
     const nTimers = grupos.reduce((s, g) => s + g.timers.length, 0);
-    const uso = `<small>${nGrupos === 1 ? '1 grupo' : `${nGrupos} grupos`} · ${nTimers === 1 ? '1 timer' : `${nTimers} timers`}</small>`;
+    const uso = `<small>${TEXTOS.nGrupos(nGrupos)} · ${TEXTOS.nTimers(nTimers)}</small>`;
     const ultimo = !e.arquivado && ativos.length === 1;
     const desab = (cond, dica) => (cond ? ` disabled title="${esc(dica)}"` : '');
     const ordem = e.arquivado
@@ -477,7 +483,7 @@ export function htmlEspacos(snap) {
     // o mesmo que o núcleo decide (revisão da rodada 20): sem nada à vista e nunca o último
     const ap = podeApagarEspaco(snap, e);
     const apagar = `<button type="button" class="bt mini" data-aj="apagar-espaco" data-id="${e.id}"${desab(!ap.pode, ap.dica)}>${esc(TEXTOS.apagar)}</button>`;
-    return `<li class="aj-at aj-esp${e.arquivado ? ' arq' : ''}"><input type="color" name="esp_cor" data-id="${e.id}" value="${esc(cor(e.cor))}" aria-label="Cor de ${esc(e.nome)}"><input type="text" class="aj-at-nome" name="esp_nome" data-id="${e.id}" value="${esc(e.nome)}" maxlength="${ESPACO_NOME_MAX}" autocomplete="off" aria-label="Nome do espaço"${e.arquivado ? ' disabled' : ''}>${uso}${ordem}${arquivar}${apagar}</li>`;
+    return `<li class="aj-at aj-esp${e.arquivado ? ' arq' : ''}"><input type="color" name="esp_cor" data-id="${e.id}" value="${esc(cor(e.cor))}" aria-label="${esc(TEXTOS.corDe(e.nome))}"><input type="text" class="aj-at-nome" name="esp_nome" data-id="${e.id}" value="${esc(e.nome)}" maxlength="${ESPACO_NOME_MAX}" autocomplete="off" aria-label="${TEXTOS.nomeDoEspaco}"${e.arquivado ? ' disabled' : ''}>${uso}${ordem}${arquivar}${apagar}</li>`;
   };
   return `<h4>${esc(TEXTOS.espacosTitulo)}</h4><p class="aj-dica">${esc(TEXTOS.espacosDica)}</p><ul class="aj-lista" data-lista="espacos">${todos
     .map((e) => item(e, ativos.indexOf(e)))
@@ -490,19 +496,19 @@ function htmlGrupos(snap) {
   const lg = grupos.length
     ? grupos
         .map(
-          (g) => `<li style="--c:${cor(g.cor)}"><i></i><span class="aj-n">${esc(g.nome)}</span><small>${g.timers.length === 1 ? '1 timer' : `${g.timers.length} timers`}</small><button type="button" class="bt mini" data-aj="arquivar-grupo" data-id="${g.id}">Arquivar</button></li>`,
+          (g) => `<li style="--c:${cor(g.cor)}"><i></i><span class="aj-n">${esc(g.nome)}</span><small>${TEXTOS.nTimers(g.timers.length)}</small><button type="button" class="bt mini" data-aj="arquivar-grupo" data-id="${g.id}">${TEXTOS.arquivar}</button></li>`,
         )
         .join('')
-    : '<li class="aj-vazio">Nenhum grupo.</li>';
+    : `<li class="aj-vazio">${TEXTOS.nenhumGrupo}</li>`;
   const lr = dados.regras.length
     ? dados.regras
         .map(
-          (r) => `<li><span class="aj-n mono" title="${esc(r.pasta)}">${esc(r.pasta)}</span><small>→ ${esc(r.timer_nome || 'timer apagado')}</small><button type="button" class="bt mini" data-aj="remover-regra" data-id="${r.id}">Remover</button></li>`,
+          (r) => `<li><span class="aj-n mono" title="${esc(r.pasta)}">${esc(r.pasta)}</span><small>→ ${esc(r.timer_nome || TEXTOS.timerApagado)}</small><button type="button" class="bt mini" data-aj="remover-regra" data-id="${r.id}">${TEXTOS.remover}</button></li>`,
         )
         .join('')
-    : '<li class="aj-vazio">Nenhuma regra ainda. Elas nascem ao ligar uma sessão com “Sempre que for nesta pasta” e no editar timer, em “Pastas deste timer”.</li>';
-  return `${htmlEspacos(snap)}<h4>Grupos</h4><ul class="aj-lista" data-lista="grupos">${lg}</ul>
-<h4>Regras de pasta</h4><p class="aj-dica">Sessões do Claude nestas pastas (e subpastas) entram sozinhas no timer.</p><ul class="aj-lista" data-lista="regras">${lr}</ul>`;
+    : `<li class="aj-vazio">${TEXTOS.nenhumaRegra}</li>`;
+  return `${htmlEspacos(snap)}<h4>${TEXTOS.grupos}</h4><ul class="aj-lista" data-lista="grupos">${lg}</ul>
+<h4>${TEXTOS.regrasDePasta}</h4><p class="aj-dica">${TEXTOS.regrasDica}</p><ul class="aj-lista" data-lista="regras">${lr}</ul>`;
 }
 
 /** O nome de uma atividade vai até isto de letras (o núcleo confere também). */
@@ -519,15 +525,15 @@ export function htmlAtividades(snap) {
   const timers = snap.grupos.flatMap((g) => g.timers);
   const item = (a) => {
     const n = timers.filter((t) => (t.atividade_padrao_id ?? 1) === a.id).length;
-    const uso = n ? `<small>padrão de ${n === 1 ? '1 timer' : `${n} timers`}</small>` : '<small></small>';
+    const uso = n ? `<small>${TEXTOS.padraoDe(n)}</small>` : '<small></small>';
     const ultima = !a.arquivada && ativas.length === 1;
     const bt = a.arquivada
-      ? `<button type="button" class="bt mini" data-aj="desarquivar-atividade" data-id="${a.id}">Desarquivar</button>`
-      : `<button type="button" class="bt mini" data-aj="arquivar-atividade" data-id="${a.id}"${ultima ? ' disabled title="Precisa sobrar pelo menos uma atividade"' : ''}>Arquivar</button>`;
-    return `<li class="aj-at${a.arquivada ? ' arq' : ''}"><input type="color" name="at_cor" data-id="${a.id}" value="${esc(cor(a.cor))}" aria-label="Cor de ${esc(a.nome)}"><input type="text" class="aj-at-nome" name="at_nome" data-id="${a.id}" value="${esc(a.nome)}" maxlength="${ATIVIDADE_NOME_MAX}" autocomplete="off" aria-label="Nome da atividade"${a.arquivada ? ' disabled' : ''}>${uso}${bt}</li>`;
+      ? `<button type="button" class="bt mini" data-aj="desarquivar-atividade" data-id="${a.id}">${TEXTOS.desarquivar}</button>`
+      : `<button type="button" class="bt mini" data-aj="arquivar-atividade" data-id="${a.id}"${ultima ? ` disabled title="${TEXTOS.ultimaAtividade}"` : ''}>${TEXTOS.arquivar}</button>`;
+    return `<li class="aj-at${a.arquivada ? ' arq' : ''}"><input type="color" name="at_cor" data-id="${a.id}" value="${esc(cor(a.cor))}" aria-label="${esc(TEXTOS.corDe(a.nome))}"><input type="text" class="aj-at-nome" name="at_nome" data-id="${a.id}" value="${esc(a.nome)}" maxlength="${ATIVIDADE_NOME_MAX}" autocomplete="off" aria-label="${TEXTOS.nomeDaAtividade}"${a.arquivada ? ' disabled' : ''}>${uso}${bt}</li>`;
   };
   return `<ul class="aj-lista" data-lista="atividades">${[...ativas, ...todas.filter((a) => a.arquivada)].map(item).join('')}</ul>
-<button type="button" class="bt" data-aj="nova-atividade">+ Acrescentar atividade</button>`;
+<button type="button" class="bt" data-aj="nova-atividade">${TEXTOS.acrescentarAtividade}</button>`;
 }
 
 function html(snap) {
@@ -535,39 +541,37 @@ function html(snap) {
   const tempos = TEMPOS.map(
     ([k, rotulo, dica]) => `<label class="campo aj-tempo">
   <span>${rotulo}</span>
-  <div class="aj-un"><input type="text" inputmode="decimal" name="${k}" value="${minutosDeSegundos(c[k])}" autocomplete="off"><em>min</em></div>
+  <div class="aj-un"><input type="text" inputmode="decimal" name="${k}" value="${minutosDeSegundos(c[k])}" autocomplete="off"><em>${TEXTOS.min}</em></div>
   <small>${dica}</small><small class="aj-erro" data-erro="${k}" hidden></small>
 </label>`,
   ).join('');
   const auto = dados.autostart;
   return `<div class="aj">
-<nav class="aj-nav" aria-label="Seções dos ajustes">
-  <button type="button" class="aj-voltar" data-aj="voltar">← Voltar</button>
+<nav class="aj-nav" aria-label="${TEXTOS.secoesRotulo}">
+  <button type="button" class="aj-voltar" data-aj="voltar">${TEXTOS.voltar}</button>
   ${SECOES.map(([id, t]) => `<a href="#aj-${id}" data-aj="ir" data-id="${id}">${t}</a>`).join('')}
 </nav>
 <div class="aj-corpo" data-rolagem="ajustes">
-  <header class="aj-topo"><h2>Ajustes</h2><span class="aj-salvo" role="status">Salvo</span></header>
-  ${secao(
-    'aparencia',
-    'Aparência',
-    htmlAparencia(c.tema),
-  )}
+  <header class="aj-topo"><h2>${TEXTOS.ajustesTitulo}</h2><span class="aj-salvo" role="status">${TEXTOS.salvo}</span></header>
+  ${secao('idioma', TEXTOS.secoes.idioma, htmlIdioma(c.idioma, snap.idioma), TEXTOS.idiomaDica)}
+  ${secao('aparencia', TEXTOS.secoes.aparencia, htmlAparencia(c.tema))}
   ${secao('painel', TEXTOS.painelTitulo, htmlPainel(c))}
   ${secao(
     'dock',
-    'Dock',
+    TEXTOS.secoes.dock,
     `${campoDockModo(c.dock_modo)}
-<div class="seg" role="radiogroup" aria-label="Botões do dock">${radio('dock_botoes', 'um', 'Um botão, em etapas', c.dock_botoes)}${radio('dock_botoes', 'dois', 'Dois botões', c.dock_botoes)}</div>
-${caixa('dock_situacao', 'Mostrar o que cada timer está fazendo no dock', 'Claude trabalhando, você lendo (ou escrevendo na conversa) ou esperando você. Uma sessão que terminou aparece como lembrete, mesmo com o timer parado, pelo tempo de "Esperando você".', c.dock_situacao)}`,
+<div class="seg" role="radiogroup" aria-label="${TEXTOS.botoesDock}">${radio('dock_botoes', 'um', TEXTOS.umBotao, c.dock_botoes)}${radio('dock_botoes', 'dois', TEXTOS.doisBotoes, c.dock_botoes)}</div>
+${caixa('dock_situacao', TEXTOS.dockSituacao, TEXTOS.dockSituacaoDica, c.dock_situacao)}
+${campoDockEspaco(c.dock_espaco)}`,
   )}
-  ${secao('espera', 'Lembretes no dock', campoEspera(c), 'Quanto tempo o "esperando você" fica à vista depois que o Claude termina (ou "segundo plano", com uma tarefa ainda rodando), e quanto tempo o timer pausado fica no dock recolhido, com o ▶ para retomar. Só a tela muda: a contagem do tempo segue igual.')}
+  ${secao('espera', TEXTOS.secoes.espera, campoEspera(c), TEXTOS.esperaSecaoDica)}
   ${secao(
     'sistema',
-    'Sistema',
+    TEXTOS.secoes.sistema,
     caixa(
       'iniciar_com_windows',
-      'Iniciar com o Windows',
-      auto === null ? 'Não deu para ler o estado atual.' : `O ${NOME_APP} abre na bandeja quando você entra no Windows.`,
+      TEXTOS.iniciarComWindows,
+      auto === null ? TEXTOS.naoDeuLerEstadoAtual : TEXTOS.abreNaBandeja(NOME_APP),
       Boolean(auto),
       auto === null ? 'disabled' : '',
     ) +
@@ -576,45 +580,46 @@ ${caixa('dock_situacao', 'Mostrar o que cada timer está fazendo no dock', 'Clau
   )}
   ${secao(
     'claude',
-    'Conexões',
+    TEXTOS.secoes.claude,
     `<div data-bloco="hooks">${htmlConexaoClaude(dados.hooks, dados.encontrado !== false, dados.info?.settings)}</div>
-<label class="campo"><span>Programas do Claude</span><textarea name="programas_claude" rows="4" spellcheck="false">${esc(c.programas_claude.join('\n'))}</textarea><small>Um por linha, o nome do programa sem “.exe”. A leitura só conta com um deles em uso.</small></label>`,
+<label class="campo"><span>${TEXTOS.programasClaude}</span><textarea name="programas_claude" rows="4" spellcheck="false">${esc(c.programas_claude.join('\n'))}</textarea><small>${TEXTOS.programasClaudeDica}</small></label>`,
   )}
-  ${secao('pastas', 'Pastas que nunca contam', campoPastas(c.pastas_ignoradas, ''), 'Para projetos pessoais, por exemplo.')}
+  ${secao('pastas', TEXTOS.secoes.pastas, campoPastas(c.pastas_ignoradas, ''), TEXTOS.pastasSecaoDica)}
   ${secao(
     'dia',
-    'Dia de trabalho',
+    TEXTOS.secoes.dia,
     `<div class="aj-grade">
-<label class="campo aj-tempo"><span>Corte do dia</span><div class="aj-un"><input type="text" name="corte" value="${esc(dados.info?.corte ?? '00:00')}" autocomplete="off" placeholder="HH:MM"><em>HH:MM</em></div><small>O trabalho antes deste horário conta para o dia anterior.</small><small class="aj-erro" data-erro="corte" hidden></small></label>
+<label class="campo aj-tempo"><span>${TEXTOS.corteDoDia}</span><div class="aj-un"><input type="text" name="corte" value="${esc(dados.info?.corte ?? '00:00')}" autocomplete="off" placeholder="HH:MM"><em>HH:MM</em></div><small>${TEXTOS.corteDica}</small><small class="aj-erro" data-erro="corte" hidden></small></label>
 </div>
-${caixa('zerar_na_virada', 'Zerar sozinho na virada do dia', 'No corte do dia, todos os timers voltam a 0:00. Desligado, cada timer só volta a 0:00 pelo ↺ Zerar (ou pelo "Zerar todos", no topo). O total do dia, o relatório e o "Lançar o dia" seguem por dia de qualquer jeito.', c.zerar_na_virada)}`,
+${caixa('zerar_na_virada', TEXTOS.zerarNaVirada, TEXTOS.zerarNaViradaDica, c.zerar_na_virada)}`,
   )}
-  ${secao('tempos', 'Tempos', `<p class="aj-risco" role="note">${AVISO_TEMPOS}</p><div class="aj-grade">${tempos}</div>`, 'Modo desenvolvedor. A inatividade vai de 1 a 30 min; os outros, de 1 min a 24 h.')}
+  ${secao('tempos', TEXTOS.secoes.tempos, `<p class="aj-risco" role="note">${AVISO_TEMPOS}</p><div class="aj-grade">${tempos}</div>`, TEXTOS.temposSecaoDica)}
   ${secao(
     'arredondamento',
-    'Arredondamento',
-    `<div class="seg" role="radiogroup" aria-label="Arredondamento">${[1, 5, 15].map((m) => radio('arredondamento_min', m, `${m} min`, c.arredondamento_min)).join('')}</div>`,
-    'Usado ao lançar o dia.',
+    TEXTOS.secoes.arredondamento,
+    `<div class="seg" role="radiogroup" aria-label="${TEXTOS.arredondamento}">${[1, 5, 15].map((m) => radio('arredondamento_min', m, `${m} ${TEXTOS.min}`, c.arredondamento_min)).join('')}</div>`,
+    TEXTOS.arredondamentoDica,
   )}
   ${secao(
     'atividades',
-    'Atividades',
+    TEXTOS.secoes.atividades,
     `<div data-bloco="atividades">${htmlAtividades(snap)}</div>`,
-    'O tipo de cada hora de um timer. O Claude trabalhando, a leitura e o ▶ usam a atividade padrão do timer (no editar, em "Mais opções"); o botão de reunião, ao lado do ▶, conta como Reunião. Arquivar a Reunião tira esse botão dos timers.',
+    TEXTOS.atividadesSecaoDica,
   )}
-  ${secao('grupos', 'Grupos e regras de pasta', `${campoConversaNova(c.conversa_nova)}<div data-bloco="grupos">${htmlGrupos(snap)}</div>`)}
+  ${secao('grupos', TEXTOS.gruposERegras, `${campoConversaNova(c.conversa_nova)}<div data-bloco="grupos">${htmlGrupos(snap)}</div>`)}
   ${secao(
     'backups',
-    'Backups',
+    TEXTOS.secoes.backups,
     `<div data-bloco="backups">${htmlBackups(dados.backups)}</div>`,
-    'Uma cópia do banco na primeira abertura de cada dia e a cada 6 h com o app aberto. Ficam as 14 mais recentes.',
+    TEXTOS.backupsSecaoDica,
   )}
-  ${secao('ajuda', 'Ajuda', `<div data-bloco="ajuda">${htmlAjuda(c)}${htmlApagarPerfil()}</div>`)}
+  ${secao('ajuda', TEXTOS.secoes.ajuda, `<div data-bloco="ajuda">${htmlAjuda(c)}${htmlApagarPerfil()}</div>`)}
   ${secao(
     'sobre',
-    'Sobre',
+    TEXTOS.secoes.sobre,
     `<div class="aj-sobre"><div class="logo"><b aria-hidden="true"></b>${esc(NOME_APP)}</div>
-<p>Versão <span class="mono">${esc(dados.info?.versao ?? '?')}</span></p>
+<p>${TEXTOS.versao} <span class="mono">${esc(textoDaVersao(dados.info?.versao ?? '?', dados.info?.canal))}</span></p>
+${htmlAtualizacao({ ligada: c.atualizar_auto !== false, ultima: c.atualizacao_ultima ?? null, estado: verificacao.estado, novidade: verificacao.novidade, app: NOME_APP })}
 ${htmlCreditos(dados.info?.assinatura)}
 ${campoModoDev(c.modo_dev)}</div>`,
   )}
@@ -623,6 +628,30 @@ ${campoModoDev(c.modo_dev)}</div>`,
 }
 
 // ---- carregar e redesenhar partes ----
+
+/** O "Verificar atualizações" (rodada 25): o estado da linha e a versão achada. */
+const verificacao = { estado: null, novidade: null };
+
+function desenharVerificacao() {
+  const el = raiz?.querySelector('[data-atu="resultado"]');
+  if (el) el.innerHTML = linhaDaVerificacao(verificacao.estado, verificacao.novidade);
+  const bt = raiz?.querySelector('[data-aj="atu-verificar"]');
+  if (bt) bt.disabled = verificacao.estado === 'procurando';
+}
+
+/** Procura agora: "Procurando…", depois o resultado na linha (o ícone do topo vem pelo evento). */
+async function verificarAtualizacoes() {
+  Object.assign(verificacao, { estado: 'procurando', novidade: null });
+  desenharVerificacao();
+  try {
+    const n = await chamar('atualizacao_procurar');
+    Object.assign(verificacao, { estado: n ? 'disponivel' : 'recente', novidade: n ?? null });
+  } catch (e) {
+    console.error('worktimer: atualizacao_procurar', e);
+    Object.assign(verificacao, { estado: 'erro', novidade: null });
+  }
+  desenharVerificacao();
+}
 
 async function carregar() {
   const [info, conexao, regras, autostart, backups] = await Promise.allSettled([
@@ -707,12 +736,12 @@ async function salvarAtividade(a, mudar) {
     mostrarSalvo();
   } catch (e) {
     const msg = textoDoErro(e);
-    if (nova.arquivada && !a.arquivada && /atividade padrão de/.test(msg)) {
+    if (nova.arquivada && !a.arquivada && TEXTOS.reAtividadePadraoDe.test(msg)) {
       const sobra = (lerSnap()?.atividades ?? []).find((x) => x.id !== a.id && !x.arquivada);
       abrirDialogo({
-        titulo: `Arquivar ${esc(a.nome)}?`,
-        corpo: `<p class="dlg-p">${esc(msg)}. Esses timers passam a usar ${esc(sobra?.nome ?? 'outra atividade')}; as horas já contadas continuam em ${esc(a.nome)}.</p>`,
-        enviar: 'Arquivar',
+        titulo: TEXTOS.arquivarAtividade(esc(a.nome)),
+        corpo: `<p class="dlg-p">${TEXTOS.arquivarAtividadeTexto(esc(msg), esc(sobra?.nome ?? TEXTOS.outraAtividade), esc(a.nome))}</p>`,
+        enviar: TEXTOS.arquivar,
         perigo: true,
         async aoEnviar() {
           await chamar('editar_atividade', { atividade: nova, confirmar: true });
@@ -779,15 +808,15 @@ function novaAtividade() {
   const usadas = (lerSnap()?.atividades ?? []).map((a) => a.cor);
   const livre = PALETA.find((c) => !usadas.includes(c)) ?? PALETA[0];
   abrirDialogo({
-    titulo: 'Nova atividade',
-    corpo: `<label class="campo"><span>Nome</span><input type="text" name="nome" maxlength="${ATIVIDADE_NOME_MAX}" autocomplete="off" autofocus placeholder="Ex.: Suporte"></label>
-<label class="campo"><span>Cor</span><input type="color" name="cor" value="${livre}"></label>`,
-    enviar: 'Acrescentar',
+    titulo: TEXTOS.novaAtividade,
+    corpo: `<label class="campo"><span>${TEXTOS.nome}</span><input type="text" name="nome" maxlength="${ATIVIDADE_NOME_MAX}" autocomplete="off" autofocus placeholder="${esc(TEXTOS.atividadePlaceholder)}"></label>
+<label class="campo"><span>${TEXTOS.cor}</span><input type="color" name="cor" value="${livre}"></label>`,
+    enviar: TEXTOS.acrescentar,
     async aoEnviar(form) {
       const nome = form.elements.nome.value.trim();
       if (!nome) {
         form.elements.nome.focus();
-        throw 'O nome não pode ficar vazio';
+        throw TEXTOS.nomeVazio;
       }
       await chamar('criar_atividade', { nome, cor: form.elements.cor.value });
     },
@@ -813,7 +842,7 @@ async function aoMudar(ev) {
     const v = nome === 'esp_nome' ? el.value.trim() : el.value;
     if (nome === 'esp_nome' && (v === e.nome || !v)) {
       el.value = e.nome;
-      if (!v) faixa('O nome não pode ficar vazio');
+      if (!v) faixa(TEXTOS.nomeVazio);
       return;
     }
     return salvarEspaco(e, nome === 'esp_nome' ? { nome: v } : { cor: v });
@@ -824,13 +853,13 @@ async function aoMudar(ev) {
     const v = nome === 'at_nome' ? el.value.trim() : el.value;
     if (nome === 'at_nome' && (v === a.nome || !v)) {
       el.value = a.nome;
-      if (!v) faixa('O nome não pode ficar vazio');
+      if (!v) faixa(TEXTOS.nomeVazio);
       return;
     }
     return salvarAtividade(a, nome === 'at_nome' ? { nome: v } : { cor: v });
   }
   // os valores são lidos agora, não quando a gravação sair da fila
-  if (nome === 'tema' || nome === 'dock_botoes' || nome === 'ao_fechar' || nome === 'ao_minimizar' || nome === 'conversa_nova') {
+  if (nome === 'tema' || nome === 'idioma' || nome === 'dock_botoes' || nome === 'dock_espaco' || nome === 'ao_fechar' || nome === 'ao_minimizar' || nome === 'conversa_nova') {
     const v = el.value;
     return salvar((c) => (c[nome] = v));
   }
@@ -852,7 +881,7 @@ async function aoMudar(ev) {
     const v = el.checked;
     return chamar('dicas_ligar', { ligadas: v });
   }
-  if (nome === 'dock_situacao' || nome === 'zerar_na_virada' || nome === 'painel_linha') {
+  if (nome === 'dock_situacao' || nome === 'zerar_na_virada' || nome === 'painel_linha' || nome === 'atualizar_auto') {
     const v = el.checked;
     return salvar((c) => (c[nome] = v));
   }
@@ -876,7 +905,7 @@ async function aoMudar(ev) {
   if (tempo) {
     const max = tempo[3];
     const s = segundosDeMinutos(el.value, max);
-    if (s === null) return erroDoCampo(nome, `Use um número de minutos de 1 a ${max}.`);
+    if (s === null) return erroDoCampo(nome, TEXTOS.minutosDe1a(max));
     erroDoCampo(nome, '');
     return salvar((c) => (c[nome] = s));
   }
@@ -914,7 +943,7 @@ function confirmarModoDev(el) {
   abrirDialogo({
     titulo: TITULO_MODO_DEV,
     corpo: corpoModoDev(),
-    enviar: 'Ligar mesmo assim',
+    enviar: TEXTOS.ligarMesmoAssim,
     perigo: true,
     async aoEnviar() {
       // só marca se gravou (o erro fica no diálogo)
@@ -930,9 +959,9 @@ function confirmarRestaurar(nome) {
   const b = dados.backups.find((x) => x.nome === nome);
   if (!b) return;
   abrirDialogo({
-    titulo: `Restaurar o backup de ${esc(b.quando)}?`,
+    titulo: TEXTOS.restaurarBackupTitulo(esc(dataDoBackup(b.quando))),
     corpo: corpoRestaurar(b),
-    enviar: 'Restaurar',
+    enviar: TEXTOS.restaurar,
     perigo: true,
     async aoEnviar() {
       await esperarGravacoes();
@@ -941,7 +970,7 @@ function confirmarRestaurar(nome) {
       desenharBackups();
       gruposDesenhados = '';
       desenharGrupos();
-      faixa(`Backup de ${b.quando} restaurado.`);
+      faixa(TEXTOS.backupRestaurado(dataDoBackup(b.quando)));
     },
   });
 }
@@ -950,9 +979,9 @@ function confirmarArquivar(id) {
   const g = lerSnap()?.grupos.find((x) => x.id === id);
   if (!g) return;
   abrirDialogo({
-    titulo: `Arquivar o grupo ${esc(g.nome)}?`,
-    corpo: '<p class="dlg-p">O grupo e os timers dele saem das listas. O tempo já contado fica guardado.</p>',
-    enviar: 'Arquivar',
+    titulo: esc(TEXTOS.arquivarGrupoTitulo(g.nome)),
+    corpo: `<p class="dlg-p">${TEXTOS.arquivarGrupoTexto2}</p>`,
+    enviar: TEXTOS.arquivar,
     perigo: true,
     async aoEnviar() {
       await chamar('editar_grupo', {
@@ -966,9 +995,9 @@ function confirmarRemoverRegra(id) {
   const r = dados.regras.find((x) => x.id === id);
   if (!r) return;
   abrirDialogo({
-    titulo: 'Remover a regra de pasta?',
-    corpo: `<p class="dlg-p">Sessões novas em <code class="aj-cam">${esc(r.pasta)}</code> deixam de entrar sozinhas em ${esc(r.timer_nome || 'timer apagado')}. As sessões já ligadas continuam.</p>`,
-    enviar: 'Remover',
+    titulo: TEXTOS.removerRegraTitulo,
+    corpo: `<p class="dlg-p">${TEXTOS.removerRegraTexto(`<code class="aj-cam">${esc(r.pasta)}</code>`, esc(r.timer_nome || TEXTOS.timerApagado))}</p>`,
+    enviar: TEXTOS.remover,
     perigo: true,
     async aoEnviar() {
       dados.regras = await chamar('remover_regra_pasta', { id: r.id });
@@ -984,6 +1013,12 @@ async function aoClicar(ev) {
   switch (alvo.dataset.aj) {
     case 'voltar':
       voltarFn();
+      break;
+    case 'atu-verificar':
+      await verificarAtualizacoes();
+      break;
+    case 'atu-instalar':
+      abrirAtualizar(verificacao.novidade);
       break;
     case 'link':
       chamar('abrir_link', { qual: alvo.dataset.link }).catch((e) => console.error('worktimer: abrir_link', e));
@@ -1020,7 +1055,7 @@ async function aoClicar(ev) {
       try {
         dados.backups = await chamar('backup_agora');
         desenharBackups();
-        faixa('Backup feito.');
+        faixa(TEXTOS.backupFeito);
       } catch (e) {
         console.error('worktimer: backup_agora', e);
         faixa(textoDoErro(e));
@@ -1041,16 +1076,16 @@ async function aoClicar(ev) {
       break;
     case 'apagar-perfil-teste':
       abrirDialogo({
-        titulo: 'Apagar o perfil de teste?',
-        corpo: `<p class="dlg-p">O ${NOME_APP} de teste fecha e a pasta dele é apagada: os timers, as horas, a config e o Claude Code simulado. Ao abrir de novo com <code class="aj-cam">--perfil teste</code>, ele começa do zero. O perfil de uso não muda.</p>`,
-        enviar: 'Apagar e fechar',
+        titulo: TEXTOS.apagarPerfilTitulo,
+        corpo: `<p class="dlg-p">${TEXTOS.apagarPerfilTexto(NOME_APP, '<code class="aj-cam">--perfil teste</code>')}</p>`,
+        enviar: TEXTOS.apagarEFechar,
         perigo: true,
         aoEnviar: () => chamar('apagar_perfil_teste'),
       });
       break;
     case 'dicas-de-novo':
       await chamar('dicas_de_novo');
-      faixa('As dicas vão aparecer de novo, cada uma na primeira vez que a coisa acontecer.');
+      faixa(TEXTOS.dicasDeNovoFeito);
       break;
     case 'arquivar-grupo':
       confirmarArquivar(id);
@@ -1094,7 +1129,7 @@ export async function montarAjustes(el, opcoes) {
   raiz = el;
   lerSnap = opcoes.lerSnap;
   voltarFn = opcoes.voltar;
-  el.innerHTML = '<p class="vazio aj-carregando">Carregando…</p>';
+  el.innerHTML = `<p class="vazio aj-carregando">${TEXTOS.carregando}</p>`;
   await carregar();
   const snap = lerSnap();
   if (raiz !== el || !snap || el.hidden) return;
@@ -1136,8 +1171,10 @@ export function atualizarAjustes(snap) {
   if (pendentes > 0) return;
   const c = snap.config;
   for (const [nome, valor] of [
+    ['idioma', c.idioma ?? IDIOMA_SISTEMA],
     ['tema', c.tema],
     ['dock_botoes', c.dock_botoes],
+    ['dock_espaco', c.dock_espaco ?? 'timer'],
     ['ao_fechar', c.ao_fechar],
     ['ao_minimizar', c.ao_minimizar],
     ['dock_modo', c.dock_modo ?? 'sempre'],
@@ -1154,6 +1191,11 @@ export function atualizarAjustes(snap) {
     const cx = raiz.querySelector(`input[name="${nome}"]`);
     if (cx && cx !== document.activeElement) cx.checked = Boolean(c[nome]);
   }
+  // a busca de atualização (rodada 25): ligada por padrão, e a data da última busca
+  const auto = raiz.querySelector('input[name="atualizar_auto"]');
+  if (auto && auto !== document.activeElement) auto.checked = c.atualizar_auto !== false;
+  const ultima = raiz.querySelector('[data-atu="ultima"]');
+  if (ultima) ultima.textContent = textoDaUltima(c.atualizacao_ultima ?? null);
   const dicasLigadas = raiz.querySelector('input[name="dicas_ligadas"]');
   if (dicasLigadas && dicasLigadas !== document.activeElement) dicasLigadas.checked = c.dicas_ligadas !== false;
   mostrarTempos(Boolean(c.modo_dev));

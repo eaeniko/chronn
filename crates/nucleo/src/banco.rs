@@ -46,15 +46,24 @@ ALTER TABLE sessoes ADD COLUMN ligacao TEXT;
 PRAGMA user_version = 4;
 ";
 
-/// Versão 5: as atividades (Trabalho, Reunião, Estudo...). Cada trecho tem uma (os de antes
+/// Versão 5 (`atividades_sql`): as atividades (Trabalho, Reunião, Estudo...). Cada trecho tem uma (os de antes
 /// ficam com Trabalho), cada timer tem a padrão (Trabalho) e cada ajuste à mão soma numa
 /// (Trabalho). Feita em Rust (`migrar_v5`): cada passo confere se já está feito, então rodar de
 /// novo não muda nada. As colunas novas têm o padrão Trabalho, e por isso um app da versão 4 abre
 /// um banco da 5 (o que ele grava cai em Trabalho).
-const ATIVIDADES: &str = "
-CREATE TABLE IF NOT EXISTS atividades (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, cor TEXT NOT NULL, ordem INTEGER NOT NULL DEFAULT 0, arquivada INTEGER NOT NULL DEFAULT 0);
-INSERT OR IGNORE INTO atividades (id, nome, cor, ordem) VALUES (1, 'Trabalho', '#5b8def', 0), (2, 'Reunião', '#e8a23a', 1), (3, 'Estudo', '#3fb68b', 2);
-";
+/// Os nomes nascem no idioma do Windows (rodada 23; o banco novo ainda não tem config) e depois
+/// são dados da pessoa.
+fn atividades_sql() -> String {
+    let i = crate::idioma::da_escolha(crate::idioma::IDIOMA_SISTEMA);
+    let n = |k| crate::idioma::nome_padrao(i, k).replace('\'', "''");
+    format!(
+        "CREATE TABLE IF NOT EXISTS atividades (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, cor TEXT NOT NULL, ordem INTEGER NOT NULL DEFAULT 0, arquivada INTEGER NOT NULL DEFAULT 0);
+INSERT OR IGNORE INTO atividades (id, nome, cor, ordem) VALUES (1, '{}', '#5b8def', 0), (2, '{}', '#e8a23a', 1), (3, '{}', '#3fb68b', 2);",
+        n("padrao.trabalho"),
+        n("padrao.reuniao"),
+        n("padrao.estudo")
+    )
+}
 
 /// Colunas da versão 5: (tabela, coluna). Todas `INTEGER NOT NULL DEFAULT 1` (Trabalho). Sem
 /// `REFERENCES`: com as chaves estrangeiras ligadas, o SQLite não acrescenta coluna com chave
@@ -105,7 +114,9 @@ fn migrar_v9(conn: &Connection) -> Result<()> {
             [],
             |r| r.get(0),
         )?;
-        let nome = if com_dados { "Trabalho" } else { "Geral" };
+        // no idioma do Windows (rodada 23)
+        let i = crate::idioma::da_escolha(crate::idioma::IDIOMA_SISTEMA);
+        let nome = crate::idioma::nome_padrao(i, if com_dados { "padrao.trabalho" } else { "padrao.geral" });
         conn.execute(
             "INSERT INTO espacos (id, nome, cor, ordem) VALUES (?1, ?2, ?3, 0)",
             params![ESPACO_PRIMEIRO, nome, COR_ESPACO_PRIMEIRO],
@@ -182,9 +193,9 @@ fn tem_coluna(conn: &Connection, tabela: &str, coluna: &str) -> Result<bool> {
     Ok(false)
 }
 
-/// A versão 5 (`ATIVIDADES`, `COLUNAS_V5`), sem repetir o que já está feito.
+/// A versão 5 (`atividades_sql`, `COLUNAS_V5`), sem repetir o que já está feito.
 fn migrar_v5(conn: &Connection) -> Result<()> {
-    conn.execute_batch(ATIVIDADES)?;
+    conn.execute_batch(&atividades_sql())?;
     for (tabela, coluna) in COLUNAS_V5 {
         if !tem_coluna(conn, tabela, coluna)? {
             conn.execute_batch(&format!("ALTER TABLE {tabela} ADD COLUMN {coluna} INTEGER NOT NULL DEFAULT 1;"))?;

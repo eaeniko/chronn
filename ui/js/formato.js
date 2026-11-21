@@ -1,5 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
-// Formatação de tempo e posições da linha do tempo (sem DOM; testado com node --test).
+// Formatação de tempo e posições da linha do tempo (sem DOM; testado com node --test). Os textos
+// vêm do `textos.js`, no idioma de agora; as datas e os dias da semana, pelo `Intl` (rodada 23).
+import { TEXTOS, localeAtual } from './textos.js';
 
 const S = 1000;
 const M = 60 * S;
@@ -29,12 +31,15 @@ export function horaMin(ms) {
   return `${p.h}:${dois(p.m)}`;
 }
 
-/** "6h 12min", "2h 01min"; "45min" abaixo de 1 h. Total do dia e totais dos grupos. */
+/** "6h 12min", "2h 01min"; "45min" abaixo de 1 h (em inglês, "2h 01m" e "45m"). Total do dia e totais dos grupos. */
 export function curto(ms) {
   const min = Math.floor(Math.max(0, ms) / M);
   const h = Math.floor(min / 60);
-  return h > 0 ? `${h}h ${dois(min % 60)}min` : `${min}min`;
+  return h > 0 ? TEXTOS.durHMin(h, dois(min % 60)) : TEXTOS.durMin(min);
 }
+
+/** O nome em minúsculas pelo idioma (a atividade no meio da frase: "1h reunião"). */
+export const minusculas = (s) => String(s ?? '').toLocaleLowerCase(localeAtual());
 
 /** Duração da união dos trechos; trecho aberto (fim nulo) vai até `agora`. */
 export function uniaoMs(trechos, agora) {
@@ -190,10 +195,9 @@ export function desdeTexto(zeradoEm, agora, corteMin = 0) {
   };
   const dz = diaDeTrabalho(zeradoEm);
   const hoje = new Date(diaDeTrabalho(agora));
-  if (dz === hoje.getTime()) return `desde hoje ${hora}`;
-  if (dz === new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - 1).getTime()) return `desde ontem ${hora}`;
-  const ano = z.getFullYear() === new Date(agora).getFullYear() ? '' : `/${z.getFullYear()}`;
-  return `desde ${dois(z.getDate())}/${dois(z.getMonth() + 1)}${ano} ${hora}`;
+  if (dz === hoje.getTime()) return TEXTOS.desdeHoje(hora);
+  if (dz === new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - 1).getTime()) return TEXTOS.desdeOntem(hora);
+  return TEXTOS.desdeData(dataCurta(z, z.getFullYear() !== new Date(agora).getFullYear()), hora);
 }
 
 /**
@@ -211,7 +215,7 @@ export function tempoPorAtividade(timer, atividades, agora) {
     .sort((x, y) => ordem(x[0]) - ordem(y[0]) || x[0] - y[0])
     .map(([id, ms]) => {
       const a = (atividades ?? []).find((x) => x.id === id);
-      return { id, nome: a?.nome ?? 'atividade', cor: a?.cor ?? null, ms };
+      return { id, nome: a?.nome ?? TEXTOS.atividadeGenerica, cor: a?.cor ?? null, ms };
     });
 }
 
@@ -223,7 +227,7 @@ export function tempoPorAtividade(timer, atividades, agora) {
 export function itensDoMenuZerar(timer, atividades, agora) {
   const v = tempoPorAtividade(timer, atividades, agora);
   if (v.length < 2) return [];
-  return [{ zerar: 'timer', rotulo: 'O timer todo' }, ...v.map((a) => ({ zerar: 'atividade', id: a.id, rotulo: `Só ${a.nome}` }))];
+  return [{ zerar: 'timer', rotulo: TEXTOS.oTimerTodo }, ...v.map((a) => ({ zerar: 'atividade', id: a.id, rotulo: TEXTOS.soAtividade(a.nome) }))];
 }
 
 /**
@@ -258,7 +262,7 @@ export function linhasDeAtividade(timer, atividades, agora) {
       const a = lista.find((x) => x.id === id);
       return {
         id,
-        nome: a?.nome ?? 'atividade',
+        nome: a?.nome ?? TEXTOS.atividadeGenerica,
         cor: a?.cor ?? null,
         ms: porAtividade.get(id) ?? 0,
         rodando: abertas.has(id),
@@ -275,7 +279,7 @@ export function linhasDeAtividade(timer, atividades, agora) {
 export function divisaoPorAtividade(timer, atividades, agora) {
   const v = tempoPorAtividade(timer, atividades, agora);
   if (v.length < 2) return '';
-  return v.map((a) => `${curto(a.ms)} ${a.nome.toLowerCase()}`).join(' · ');
+  return v.map((a) => `${curto(a.ms)} ${minusculas(a.nome)}`).join(' · ');
 }
 
 /**
@@ -304,12 +308,12 @@ export function totalDeTimers(timers, agora) {
  */
 export function dicaDoTotalDoDia(timers, agora) {
   const contado = uniaoMs(timers.flatMap((t) => t.trechos), agora);
-  const texto = `tempo contado ${curto(contado)}`;
+  const texto = TEXTOS.tempoContado(curto(contado));
   const com = timers.filter((t) => (t.ajustes ?? []).length > 0 || (t.ajuste_ms ?? 0) !== 0);
   if (!com.length) return texto;
   const efeito = totalDeTimers(timers, agora) - contado;
   const nomes = com.slice(0, 3).map((t) => t.nome).join(', ') + (com.length > 3 ? ` +${com.length - 3}` : '');
-  return `${texto} · ajustes ${efeito < 0 ? '−' : '+'}${curto(Math.abs(efeito))} (${nomes})`;
+  return `${texto} · ${TEXTOS.ajustes(`${efeito < 0 ? '−' : '+'}${curto(Math.abs(efeito))}`, nomes)}`;
 }
 
 /**
@@ -328,7 +332,7 @@ export function somaDosTimers(timers, agora) {
  */
 export function totalDoGrupo(timers, agora, realAntesMs = 0) {
   const real = realAntesMs + totalDeTimers(timers.map(hojeDesdeZerar), agora);
-  return { texto: curto(somaDosTimers(timers, agora)), dica: `tempo real: ${curto(real)}` };
+  return { texto: curto(somaDosTimers(timers, agora)), dica: TEXTOS.tempoReal(curto(real)) };
 }
 
 /** "+15 min", "−1h 05min": o ajuste à mão (arredonda para o minuto). */
@@ -336,7 +340,7 @@ export function textoDoAjuste(ms) {
   const min = Math.round(Math.abs(ms) / M);
   const sinal = ms < 0 ? '−' : '+';
   const h = Math.floor(min / 60);
-  return h > 0 ? `${sinal}${h}h ${dois(min % 60)}min` : `${sinal}${min} min`;
+  return h > 0 ? TEXTOS.ajusteHMin(sinal, h, dois(min % 60)) : TEXTOS.ajusteMin(sinal, min);
 }
 
 /** O "Ajustar hoje": `sinal` "+" ou "-" e os minutos (1 a 1440, inteiros) → ms com sinal; nulo se inválido. */
@@ -397,22 +401,20 @@ export function rotuloDeLink(s) {
   }
 }
 
-/** Etiqueta do que o timer está fazendo: curta (dock recolhido) e por extenso (expandido). */
-export const SITUACAO = {
-  trabalhando: { curta: 'trabalhando', longa: 'Claude trabalhando' },
-  lendo: { curta: 'lendo', longa: 'você lendo' },
-  // o foco na caixa de mensagem da conversa lida (app do Claude): conta como leitura
-  escrevendo: { curta: 'escrevendo', longa: 'você escrevendo' },
-  esperando: { curta: 'esperando você', longa: 'esperando você' },
-  // a reunião manual (👥): vem na frente das outras
-  reuniao: { curta: 'reunião', longa: 'reunião' },
-  // a reunião com o Claude trabalhando junto no mesmo timer
-  reuniao_claude: { curta: 'reunião + Claude', longa: 'reunião + Claude' },
-  // o ▶ manual rodando (rodada 13): acima do lembrete, abaixo do Claude e da leitura
-  manual: { curta: 'manual', longa: 'manual' },
-  // a sessão terminou o turno com uma tarefa em segundo plano rodando (rodada 13): não conta tempo
-  segundo_plano: { curta: 'segundo plano', longa: 'segundo plano' },
-};
+/**
+ * Etiqueta do que o timer está fazendo: curta (dock recolhido) e por extenso (expandido), no
+ * idioma de agora (`TEXTOS.situacao`). As chaves: trabalhando, lendo, escrevendo (o foco na caixa
+ * de mensagem da conversa lida: conta como leitura), esperando, reuniao (a reunião manual 👥: vem
+ * na frente das outras), reuniao_claude (com o Claude trabalhando junto), manual (o ▶ manual,
+ * rodada 13) e segundo_plano (o turno terminou com uma tarefa em segundo plano: não conta tempo).
+ */
+export const SITUACAO = new Proxy(
+  {},
+  {
+    get: (_, k) => TEXTOS.situacao[k],
+    has: (_, k) => k in TEXTOS.situacao,
+  },
+);
 
 /** A situação é um lembrete (o timer parado com uma sessão que espera você, ou em segundo plano)? */
 export const ehLembrete = (s) => s === 'esperando' || s === 'segundo_plano';
@@ -429,13 +431,13 @@ export function lembreteVisivel(t, agora, limiteMin) {
 }
 
 /** O estado do Claude como segunda parte da etiqueta do manual ("manual + esperando você"). */
-const SEGUNDA = {
-  trabalhando: 'Claude',
-  lendo: 'lendo',
-  escrevendo: 'escrevendo',
-  esperando: 'esperando você',
-  segundo_plano: 'segundo plano',
-};
+const SEGUNDA = new Proxy(
+  {},
+  {
+    get: (_, k) => TEXTOS.situacaoSegunda[k],
+    has: (_, k) => k in TEXTOS.situacaoSegunda,
+  },
+);
 
 /**
  * A etiqueta do timer (rodada 14). Com o ▶ manual (ou a reunião manual) rodando, as duas partes:
@@ -459,10 +461,11 @@ export function etiquetaComposta(t, agora, limiteMin, forma = 'curta') {
   if (pausado) {
     // pausado, só o lembrete do Claude entra na segunda parte
     const p2 = ehLembrete(claude) ? { k: claude, texto: SEGUNDA[claude] } : null;
-    return { p1: { k: 'pausado', texto: 'pausado' }, p2, texto: p2 ? `pausado + ${p2.texto}` : 'pausado' };
+    const pausado = TEXTOS.pausado;
+    return { p1: { k: 'pausado', texto: pausado }, p2, texto: p2 ? `${pausado} + ${p2.texto}` : pausado };
   }
   if (manual) {
-    const p1 = t.manual_atividade_id === REUNIAO ? { k: 'reuniao', texto: 'reunião' } : { k: 'manual', texto: 'manual' };
+    const p1 = t.manual_atividade_id === REUNIAO ? { k: 'reuniao', texto: TEXTOS.reuniaoMin } : { k: 'manual', texto: TEXTOS.manual };
     const p2 = claude ? { k: claude, texto: SEGUNDA[claude] } : null;
     return { p1, p2, texto: p2 ? `${p1.texto} + ${p2.texto}` : p1.texto };
   }
@@ -531,7 +534,7 @@ export function trechosDoDia(timer, diaInicio, agora, horaIni = 8, horaFim = 19,
       const atividade = t.atividade_id ?? TRABALHO;
       const outra = atividades && atividade !== (timer.atividade_padrao_id ?? TRABALHO);
       const nome = outra ? atividades.find((a) => a.id === atividade)?.nome : null;
-      const titulo = tituloDoTrecho(t, diaInicio, agora) + (nome ? ` · ${nome.toLowerCase()}` : '');
+      const titulo = tituloDoTrecho(t, diaInicio, agora) + (nome ? ` · ${minusculas(nome)}` : '');
       return { left, width, manual: t.origem === 'manual', atividade, titulo };
     });
 }
@@ -552,30 +555,57 @@ export function horaDoDia(ms, diaInicio) {
   return `${dois(Math.floor(min / 60))}:${dois(min % 60)}`;
 }
 
-const ORIGEM = {
-  manual: 'play manual',
-  claude: 'Claude trabalhando',
-  leitura: 'você lendo',
-  janela: 'janela em uso',
-  reuniao: 'reunião',
-};
-
 /** "09:30–11:00 · Claude trabalhando · 1h 30min"; trecho aberto termina em "agora". */
 export function tituloDoTrecho(trecho, diaInicio, agora) {
   const aberto = trecho.fim === null || trecho.fim === undefined;
   const fim = aberto ? agora : trecho.fim;
-  const ate = aberto ? 'agora' : horaDoDia(fim, diaInicio);
-  return `${horaDoDia(trecho.inicio, diaInicio)}–${ate} · ${ORIGEM[trecho.origem] ?? trecho.origem} · ${curto(fim - trecho.inicio)}`;
+  const ate = aberto ? TEXTOS.agora : horaDoDia(fim, diaInicio);
+  return `${horaDoDia(trecho.inicio, diaInicio)}–${ate} · ${TEXTOS.origem(trecho.origem)} · ${curto(fim - trecho.inicio)}`;
 }
 
-const DIAS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
-const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+/** A primeira letra maiúscula ("terça" → "Terça"). */
+const capitular = (s) => (s ? s[0].toLocaleUpperCase(localeAtual()) + s.slice(1) : s);
 
-/** "2026-11-17" → "Terça, 17 nov". */
+/**
+ * "2026-11-17" → "Terça, 17 nov" (em inglês, "Tuesday, Nov 17"): o dia da semana e o mês pelo
+ * `Intl` no idioma de agora (rodada 23). Em português, sem o "-feira" e sem o ponto do mês.
+ */
 export function dataDoDia(dia) {
   const [a, m, d] = dia.split('-').map(Number);
-  const sem = new Date(Date.UTC(a, m - 1, d)).getUTCDay();
-  return `${DIAS[sem]}, ${d} ${MESES[m - 1]}`;
+  const data = new Date(Date.UTC(a, m - 1, d));
+  const loc = localeAtual();
+  const fmt = (o) => new Intl.DateTimeFormat(loc, { timeZone: 'UTC', ...o }).format(data);
+  if (loc.startsWith('pt')) {
+    const sem = capitular(fmt({ weekday: 'long' }).replace(/-feira$/, ''));
+    return `${sem}, ${d} ${fmt({ month: 'short' }).replace('.', '')}`;
+  }
+  return `${fmt({ weekday: 'long' })}, ${fmt({ month: 'short', day: 'numeric' })}`;
+}
+
+/**
+ * A data curta de um instante local, para o "desde …": "15/11" (de outro ano, "15/11/2025"); em
+ * inglês, "Nov 15" ("Nov 15, 2025").
+ */
+function dataCurta(z, comAno) {
+  const loc = localeAtual();
+  if (loc.startsWith('pt')) return `${dois(z.getDate())}/${dois(z.getMonth() + 1)}${comAno ? `/${z.getFullYear()}` : ''}`;
+  return new Intl.DateTimeFormat(loc, { month: 'short', day: 'numeric', ...(comAno ? { year: 'numeric' } : {}) }).format(z);
+}
+
+/**
+ * A data e a hora de um backup, do ISO local que o núcleo manda ("2026-11-05T09:30"): "05/11/2026
+ * 09:30"; em inglês, "Nov 5, 2026 09:30", com o mês por extenso para não confundir dia e mês
+ * (rodada 23, revisão I1). Um texto que não é ISO passa como veio.
+ */
+export function dataDoBackup(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso ?? ''));
+  if (!m) return String(iso ?? '');
+  const [, a, mes, d, h, min] = m;
+  const loc = localeAtual();
+  if (loc.startsWith('pt')) return `${d}/${mes}/${a} ${h}:${min}`;
+  const data = new Date(Date.UTC(Number(a), Number(mes) - 1, Number(d)));
+  const dia = new Intl.DateTimeFormat(loc, { timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' }).format(data);
+  return `${dia} ${h}:${min}`;
 }
 
 /**
@@ -644,17 +674,16 @@ export function textoDosDeFora(snap, comSituacao = false, agora = snap.agora) {
   const pa = fora.filter((t) => t.pausado).length;
   const sp = fora.filter((t) => !t.pausado && t.situacao === 'segundo_plano').length;
   const esp = fora.length - sp - pa;
-  const partes = [pa && `+${pa} pausado`, esp && `+${esp} esperando`, sp && `+${sp} segundo plano`].filter(Boolean);
-  const dicas = [pa && `${pa} pausado`, esp && `${esp} esperando você`, sp && `${sp} em segundo plano`].filter(Boolean);
-  return { texto: partes.join(' · '), dica: `Mais ${dicas.join(' e ')}: veja no dock expandido` };
+  const f = TEXTOS.fora;
+  const partes = [pa && f.pausado(pa), esp && f.esperando(esp), sp && f.segundoPlano(sp)].filter(Boolean);
+  const dicas = [pa && f.dicaPausado(pa), esp && f.dicaEsperando(esp), sp && f.dicaSegundoPlano(sp)].filter(Boolean);
+  return { texto: partes.join(' · '), dica: f.dica(dicas) };
 }
 
 /** A dica do lembrete no dock recolhido: o que ele quer dizer e o que fazer. */
 export function dicaDoLembrete(t) {
-  if (t.pausado) return `${t.nome}: pausado. ▶ para retomar.`;
-  return t.situacao === 'segundo_plano'
-    ? `${t.nome}: uma tarefa em segundo plano ainda roda; o Claude continua quando ela terminar. ■ para encerrar.`
-    : `${t.nome}: uma sessão do Claude espera sua resposta. Responda na conversa, ou ■ para encerrar.`;
+  if (t.pausado) return TEXTOS.dicaLembretePausado(t.nome);
+  return t.situacao === 'segundo_plano' ? TEXTOS.dicaLembreteSegundoPlano(t.nome) : TEXTOS.dicaLembreteEsperando(t.nome);
 }
 
 /** O tempo do lembrete no dock recolhido (Ajustes → "Esperando você"; 30 min sem config). */
@@ -777,12 +806,12 @@ export function faltamCriar(nomes, jaCriados) {
  */
 export const abreviarCaminho = (p) => String(p ?? '').replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+(?=[\\/]|$)/i, '~');
 
-/** Tamanho de arquivo para a tela: "820 B", "48 KB", "1,2 MB". */
+/** Tamanho de arquivo para a tela: "820 B", "48 KB", "1,2 MB" ("1.2 MB" em inglês). */
 export function tamanho(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   const mb = bytes / (1024 * 1024);
-  return `${(mb < 10 ? mb.toFixed(1) : Math.round(mb).toString()).replace('.', ',')} MB`;
+  return `${(mb < 10 ? mb.toFixed(1) : Math.round(mb).toString()).replace('.', TEXTOS.decimal)} MB`;
 }
 
 const escAviso = (s) =>

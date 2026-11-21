@@ -1,6 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 // Rodada 18: o onboarding genérico e local ("N de 6 · …", "Conectar apps") e os projetos
 // recentes deste PC no passo das pastas.
+import { TEXTOS } from './textos.js';
 import { test } from 'node:test'; import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
@@ -35,8 +36,11 @@ test('rodada 18: as boas-vindas dizem o que o app é e que tudo roda neste compu
   );
   assert.equal(TEXTO_GRUPO, 'Um grupo junta timers, como um cliente ou uma área. Cada timer é um projeto ou atividade.');
   const pu = fonte('primeiro-uso.js');
-  assert.match(pu, /placeholder="Ex\.: Cliente A"/);
-  assert.match(pu, /placeholder="Um por linha\. Ex\.:&#10;Projeto X&#10;Reuniões&#10;Estudos"/);
+  // (rodada 23: os textos vêm do textos.js; a quebra de linha do placeholder vira &#10;)
+  assert.equal(TEXTOS.puGrupoPlaceholder, 'Ex.: Cliente A');
+  assert.match(pu, /placeholder="\$\{esc\(TEXTOS\.puGrupoPlaceholder\)\}"/);
+  assert.equal(TEXTOS.puTimersPlaceholder.replace(/\n/g, '&#10;'), 'Um por linha. Ex.:&#10;Projeto X&#10;Reuniões&#10;Estudos');
+  assert.match(pu, /placeholder="\$\{esc\(TEXTOS\.puTimersPlaceholder\)\.replace\(\/\\n\/g, '&#10;'\)\}"/);
 });
 
 test('rodada 18: "Conectar apps" mostra o cartão do Claude Code nos estados', async () => {
@@ -65,7 +69,8 @@ test('rodada 18: "Conectar apps" mostra o cartão do Claude Code nos estados', a
   assert.match(corpoConectarApps({ estado: 'desligado', settings: s }, true), /Perfil de teste: o Claude Code real não é alterado/);
   // o botão do passo: Conectar / Atualizar, ou só Continuar (conectado ou não encontrado)
   const pu = fonte('primeiro-uso.js');
-  assert.match(pu, /enviar: conectar \? \(estado === 'antigo' \? 'Atualizar' : 'Conectar'\) : 'Continuar',\s*cancelar: conectar \? 'Pular' : null,/);
+  assert.match(pu, /enviar: conectar \? \(estado === 'antigo' \? TEXTOS\.atualizar : TEXTOS\.conectar\) : TEXTOS\.continuar,\s*cancelar: conectar \? TEXTOS\.pular : null,/);
+  assert.deepEqual([TEXTOS.atualizar, TEXTOS.conectar, TEXTOS.continuar, TEXTOS.pular], ['Atualizar', 'Conectar', 'Continuar', 'Pular']);
   assert.match(pu, /const conectar = encontrado && estado !== 'ligado';/);
   assert.match(pu, /chamar\('conexao_claude'\)/);
 });
