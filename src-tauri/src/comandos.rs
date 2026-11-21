@@ -402,9 +402,11 @@ pub fn ligar_sessao(
     desde_inicio: bool,
     criar_regra: bool,
     so_hoje: Option<bool>,
+    pasta: Option<String>,
 ) -> Result<Snapshot, String> {
     let so_hoje = so_hoje.unwrap_or(false);
-    agir(&app, &estado, |n, agora| n.ligar_sessao_com(&sessao_id, timer_id, desde_inicio, so_hoje, criar_regra, agora))
+    // `pasta` (rodada 27): onde fica a regra do "sempre nesta pasta" (uma das pastas da sessão)
+    agir(&app, &estado, |n, agora| n.ligar_sessao_com(&sessao_id, timer_id, desde_inicio, so_hoje, criar_regra, pasta.as_deref(), agora))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -414,7 +416,8 @@ pub fn desligar_sessao(app: AppHandle, estado: State<'_, Estado>, sessao_id: Str
 
 // ---- perguntas ----
 
-/// `valor`: "contar" | "retomar" | "pausado" | "nao" | "ligar:{id}" | "ligar:{id}:regra".
+/// `valor`: "contar" | "retomar" | "pausado" | "nao" | "ligar:{id}" | "ligar:{id}:regra" |
+/// "ligar:{id}:pasta:{caminho}" (rodada 27).
 #[tauri::command(rename_all = "snake_case")]
 pub fn responder(app: AppHandle, estado: State<'_, Estado>, pergunta_id: u64, valor: String) -> Result<Snapshot, String> {
     agir(&app, &estado, |n, agora| n.responder(pergunta_id, &valor, agora))
@@ -635,9 +638,16 @@ pub fn minimizar_visto() {
 
 /// "+ Novo timer…" da pergunta de sessão nova (dock): abre a janela principal com o "Novo timer"
 /// já preenchido pela pasta da sessão; ao salvar, a página liga a sessão ao timer criado.
+/// `pasta` e `sempre` (rodada 27): o "Sempre que for na pasta" da pergunta, com a pasta escolhida.
 #[tauri::command(rename_all = "snake_case")]
-pub fn pedir_novo_timer(app: AppHandle, estado: State<'_, Estado>, sessao_id: String) -> Result<(), String> {
-    let pedido = trava(&estado).pedido_novo_timer(&sessao_id)?;
+pub fn pedir_novo_timer(
+    app: AppHandle,
+    estado: State<'_, Estado>,
+    sessao_id: String,
+    pasta: Option<String>,
+    sempre: Option<bool>,
+) -> Result<(), String> {
+    let pedido = trava(&estado).pedido_novo_timer(&sessao_id, pasta.as_deref(), sempre)?;
     janelas::pedir_novo_timer(&app, pedido);
     Ok(())
 }

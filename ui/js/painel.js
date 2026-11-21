@@ -20,6 +20,7 @@ import {
   dicaDoTempo,
   textoDaPergunta,
   opcoesDaPergunta,
+  sempreDoBotao,
   htmlDoMenuZerar,
   esc,
 } from './componentes.js';
@@ -685,13 +686,16 @@ async function aoClicar(ev) {
     case 'responder':
       await agir('responder', { pergunta_id: Number(alvo.dataset.pergunta), valor: alvo.dataset.valor });
       break;
-    case 'outro':
-      await ligarATimer(lerSnap, alvo.dataset.sessao, (sessaoId) => agir('pedir_novo_timer', { sessao_id: sessaoId }));
+    case 'outro': {
+      // a de sessão nova (opção A): o "Sempre que for na pasta" vem desmarcado, como no dock
+      const sempre = sempreDoBotao(alvo.dataset);
+      await ligarATimer(lerSnap, alvo.dataset.sessao, (sessaoId) => agir('pedir_novo_timer', { sessao_id: sessaoId, ...sempre }), {}, sempre);
       break;
+    }
     case 'novo-timer': {
       // o "+ Novo timer…" de uma pergunta de sessão nova: o pedido volta a esta janela (`novo-timer`)
       if (alvo.dataset.sessao !== undefined) {
-        await agir('pedir_novo_timer', { sessao_id: alvo.dataset.sessao });
+        await agir('pedir_novo_timer', { sessao_id: alvo.dataset.sessao, ...sempreDoBotao(alvo.dataset) });
         break;
       }
       // a linha "Grupo vazio · + Timer": o timer novo já nesse grupo
@@ -1268,9 +1272,11 @@ async function verLigarSessao() {
   }
   if (!p) return;
   const reserva = sessaoDeReserva(p.sessao_id, { nome: p.nome, cwd: p.cwd, timer_id: p.timer_id });
-  const aoNovo = p.com_novo ? (sessaoId) => agir('pedir_novo_timer', { sessao_id: sessaoId }) : null;
+  // o "Sempre que for na pasta" da pergunta do dock (rodada 27) vai junto, também ao "+ Novo timer…"
+  const sempre = { sempre: p.sempre ?? null, pasta: p.pasta ?? null };
+  const aoNovo = p.com_novo ? (sessaoId) => agir('pedir_novo_timer', { sessao_id: sessaoId, ...sempre }) : null;
   quandoLivre(async () => {
-    await ligarATimer(lerSnap, p.sessao_id, aoNovo, reserva);
+    await ligarATimer(lerSnap, p.sessao_id, aoNovo, reserva, sempre);
     // o "Ligar a um timer" acabou quando não sobra diálogo (o "+ Novo timer…" de dentro dele é
     // outro pedido, contado à parte)
     quandoSemDialogo(fimDoDialogoDoDock);

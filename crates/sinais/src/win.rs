@@ -8,10 +8,10 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GA_ROOT, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowTextW,
+    FindWindowW, GA_ROOT, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowTextW,
     GetWindowThreadProcessId, WindowFromPoint,
 };
-use windows::core::PWSTR;
+use windows::core::{PWSTR, w};
 
 /// Milissegundos desde a última entrada (teclado/mouse) do usuário.
 pub fn ociosidade_ms() -> i64 {
@@ -48,6 +48,15 @@ pub fn janela_sob_mouse() -> Option<JanelaInfo> {
     }
     let raiz = unsafe { GetAncestor(filha, GA_ROOT) };
     info_da_janela(if raiz.0.is_null() { filha } else { raiz })
+}
+
+/// A janela principal do app do Claude (`Chrome_WidgetWin_1`, título "Claude", do processo
+/// `claude`), em uso ou não: os sinais do Chat a leem a cada ciclo (rodada 27).
+pub fn janela_do_app_do_claude() -> Option<isize> {
+    // SAFETY: só procura a janela pela classe e pelo título.
+    let hwnd = unsafe { FindWindowW(w!("Chrome_WidgetWin_1"), w!("Claude")) }.ok()?;
+    let j = info_da_janela(hwnd)?;
+    crate::conversa::e_app_do_claude(&j).then_some(j.hwnd)
 }
 
 fn info_da_janela(hwnd: HWND) -> Option<JanelaInfo> {

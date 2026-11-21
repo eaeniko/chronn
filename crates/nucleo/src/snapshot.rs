@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::banco::Banco;
 use crate::config::{texto_de_corte, ConfigApp};
 use crate::modelo::{Atividade, EstadoSessao, Grupo, Ligacao, MotivoFim, Origem, Pergunta, Sessao, Timer, Trecho, ATIVIDADE_REUNIAO};
-use crate::motor::{raiz_do_projeto, sugestao_de_pasta, Motor, AVISO_LIGADA_MS};
+use crate::motor::{chave_de_pasta, raiz_do_projeto, sugestao_de_pasta, Motor, AVISO_LIGADA_MS};
 use crate::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
 use crate::idioma::{self, tf, Idioma};
 
@@ -205,6 +205,9 @@ pub struct SessaoDto {
     /// Ligada pela regra de pasta: a regra (a que vale para a pasta dela, do mesmo timer).
     pub regra_id: Option<i64>,
     pub regra_pasta: Option<String>,
+    /// De onde a sessão veio (rodada 27): "claude-desktop", "cli", "claude-vscode", "chat" ou
+    /// outro valor; a tela mostra o rótulo ("app do Claude", "terminal"…). Sem origem: nulo.
+    pub origem: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -220,6 +223,25 @@ pub struct PerguntaDto {
     /// (`pasta_curta`, com reticências se não couber) e o caminho inteiro na dica.
     pub pasta: Option<String>,
     pub pasta_curta: Option<String>,
+    /// A pergunta `sessao_nova` (rodada 27, opção A): o nome da sessão (nulo: "sem nome ainda").
+    pub sessao_nome: Option<String>,
+    /// De onde a sessão veio ("claude-desktop", "cli", "chat"…; a tela mostra o rótulo).
+    pub origem: Option<String>,
+    /// As pastas do "Sempre que for na pasta", da onde a sessão começou até onde ela está agora
+    /// (vazia no Chat, sem pasta).
+    pub pastas: Vec<PastaDaPergunta>,
+}
+
+/// Uma pasta da lista do "Sempre que for na pasta" (rodada 27).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PastaDaPergunta {
+    pub pasta: String,
+    /// Curta, para a lista (o caminho inteiro na dica).
+    pub curta: String,
+    /// A pasta onde a sessão começou.
+    pub comecou: bool,
+    /// A pasta onde a sessão está agora (a escolhida de início).
+    pub agora: bool,
 }
 
 const COR_SEM_GRUPO: &str = "#8a8f98";
@@ -373,26 +395,29 @@ fn duracao(i: Idioma, de: Ms, ate: Ms) -> String {
     idioma::duracao_min(i, ((ate - de).max(0) + MIN / 2) / MIN)
 }
 
-pub fn nome_da_sessao(s: &Sessao) -> String {
+/// O nome da sessão para a tela: o título; sem ele, a pasta (no Chat, que não tem pasta,
+/// "Conversa do Chat", no idioma `i`).
+pub fn nome_da_sessao(i: Idioma, s: &Sessao) -> String {
     match s.nome.as_deref().map(str::trim) {
         Some(n) if !n.is_empty() => n.to_string(),
+        _ if crate::motor::e_sessao_do_chat(&s.id) => idioma::t(i, "sessao.chat_sem_nome").to_string(),
         _ => sugestao_de_pasta(&s.cwd),
     }
 }
 
 /// A sessão para a tela; `regras`: as regras de pasta, para dizer qual ligou a sessão.
-pub fn sessao_dto(s: &Sessao, regras: &[crate::modelo::RegraPasta]) -> SessaoDto {
-    sessao_dto_com(s, s.estado, regras)
+pub fn sessao_dto(i: Idioma, s: &Sessao, regras: &[crate::modelo::RegraPasta]) -> SessaoDto {
+    sessao_dto_com(i, s, s.estado, regras)
 }
 
-fn sessao_dto_com(s: &Sessao, estado: EstadoSessao, regras: &[crate::modelo::RegraPasta]) -> SessaoDto {
+fn sessao_dto_com(i: Idioma, s: &Sessao, estado: EstadoSessao, regras: &[crate::modelo::RegraPasta]) -> SessaoDto {
     let regra = (s.ligacao == Some(Ligacao::Regra))
         .then(|| crate::motor::regra_da_pasta(regras, &s.cwd))
         .flatten()
         .filter(|r| Some(r.timer_id) == s.timer_id);
     SessaoDto {
         id: s.id.clone(),
-        nome: nome_da_sessao(s),
+        nome: nome_da_sessao(i, s),
         cwd: s.cwd.clone(),
         estado: estado.as_str().to_string(),
         timer_id: s.timer_id,
@@ -400,6 +425,7 @@ fn sessao_dto_com(s: &Sessao, estado: EstadoSessao, regras: &[crate::modelo::Reg
         ligacao: s.ligacao.map(|l| l.as_str().to_string()),
         regra_id: regra.map(|r| r.id),
         regra_pasta: regra.map(|r| r.pasta.clone()),
+        origem: s.origem.clone(),
     }
 }
 
@@ -414,7 +440,7 @@ fn avisos(i: Idioma, motor: &Motor, timers: &[Timer], agora: Ms) -> Vec<AvisoDto
             let chave = if l.como == Ligacao::Herdada { "aviso.pela_conversa" } else { "aviso.pela_pasta" };
             Some(AvisoDto {
                 sessao_id: s.id.clone(),
-                sessao_nome: nome_da_sessao(s),
+                sessao_nome: nome_da_sessao(i, s),
                 cwd: s.cwd.clone(),
                 timer_id: t.id,
                 texto: tf(i, chave, &[&t.nome]),
@@ -497,47 +523,70 @@ fn pergunta_dto(
         }
     };
     let (sessao_id, pasta) = match p {
-        Pergunta::SessaoNova { sessao_id, cwd, .. } | Pergunta::ConversaNova { sessao_id, cwd, .. } => {
-            (Some(sessao_id.clone()), Some(raiz_do_projeto(cwd).to_string()))
+        // a sessão nova mostra a pasta onde ela está agora (rodada 27); o Chat não tem pasta
+        Pergunta::SessaoNova { sessao_id, cwd, .. } => {
+            let agora = raiz_do_projeto(motor.pasta_de_agora(sessao_id, cwd));
+            (Some(sessao_id.clone()), (!agora.trim().is_empty()).then(|| agora.to_string()))
         }
+        Pergunta::ConversaNova { sessao_id, cwd, .. } => (Some(sessao_id.clone()), Some(raiz_do_projeto(cwd).to_string())),
         _ => (None, None),
+    };
+    // a sessão nova (rodada 27): o nome, a origem e as pastas do "Sempre que for na pasta"
+    let (sessao_nome, origem, pastas) = match p {
+        Pergunta::SessaoNova { sessao_id, cwd, .. } => {
+            let s = motor.sessoes.get(sessao_id);
+            let nome = s.and_then(|s| s.nome.as_deref()).map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
+            let lista = motor.pastas_da_sessao(sessao_id, cwd);
+            let inicio = chave_de_pasta(raiz_do_projeto(s.map_or(cwd.as_str(), |s| s.cwd.as_str())));
+            let agora = chave_de_pasta(pasta.as_deref().unwrap_or(""));
+            let pastas = lista
+                .into_iter()
+                .map(|x| PastaDaPergunta {
+                    curta: pasta_curta(&x),
+                    comecou: chave_de_pasta(&x) == inicio,
+                    agora: chave_de_pasta(&x) == agora,
+                    pasta: x,
+                })
+                .collect();
+            (nome, s.and_then(|s| s.origem.clone()), pastas)
+        }
+        _ => (None, None, vec![]),
     };
     let curta = pasta.as_deref().map(pasta_curta);
     // o nome do timer no botão (com o espaço, se o nome se repete noutro espaço)
     let rotulo = |t: &Timer| rotulos.get(&t.id).cloned().unwrap_or_else(|| t.nome.clone());
     let (tipo, texto, opcoes) = match p {
-        Pergunta::SessaoNova { cwd, sugestao, pasta_mae, .. } => {
+        Pergunta::SessaoNova { sugestao, .. } => {
             let mut opcoes = vec![];
             let sug = sugestao.trim();
             let sug_min = sug.to_lowercase();
             let sugerido = timers.iter().find(|t| !sug.is_empty() && t.nome.trim().to_lowercase() == sug_min);
             // "outro" abre a lista de timers na página: com sugestão, é outro que não ela
             let escolher = match sugerido {
-                // numa pasta-mãe (vários projetos dentro; rodada 15), o botão liga só esta conversa:
-                // a regra continua possível pelo "Outro timer…" (a caixa vem desmarcada, com o aviso)
-                Some(t) if *pasta_mae => {
-                    opcoes.push((format!("ligar:{}", t.id), rotulo(t)));
-                    t_("pg.outro_timer")
-                }
+                // a opção A (rodada 27): o botão principal liga só esta sessão; a regra fica na
+                // caixa "Sempre que for na pasta", que a página põe na resposta
+                // (`ligar:<t>:pasta:<caminho>`)
                 Some(t) => {
-                    // o botão cria a regra de pasta: o rótulo diz isso
-                    opcoes.push((format!("ligar:{}:regra", t.id), tf(i, "pg.sempre_na_pasta", &[&rotulo(t)])));
+                    opcoes.push((format!("ligar:{}", t.id), tf(i, "pg.contar_em", &[&rotulo(t)])));
                     t_("pg.outro_timer")
                 }
-                None => t_("pg.escolher_timer"),
+                None => t_("pg.escolher_o_timer"),
             };
             opcoes.push(("outro".to_string(), escolher));
             // "novo" abre a janela principal com o "Novo timer" (nome pela pasta) e liga a sessão
             // ao timer criado; também nunca vai ao núcleo como resposta
             opcoes.push((OPCAO_NOVO_TIMER.to_string(), t_("pg.novo_timer")));
             opcoes.push(("nao".to_string(), t_("pg.nao_contar")));
-            // num worktree, a pasta do projeto (é onde a regra fica)
-            let texto = tf(i, "pg.sessao_nova", &[&pasta_curta(raiz_do_projeto(cwd))]);
+            // a pasta de agora (num worktree, a do projeto); o Chat, sem pasta
+            let texto = match &curta {
+                Some(c) => tf(i, "pg.sessao_nova", &[c]),
+                None => t_("pg.sessao_nova_sem_pasta"),
+            };
             ("sessao_nova", texto, opcoes)
         }
         // a conversa nova numa pasta com regra (rodada 15): já conta no timer da regra
         Pergunta::ConversaNova { sessao_id, cwd, timer_id } => {
-            let nome = motor.sessoes.get(sessao_id).map_or_else(|| sugestao_de_pasta(raiz_do_projeto(cwd)), nome_da_sessao);
+            let nome = motor.sessoes.get(sessao_id).map_or_else(|| sugestao_de_pasta(raiz_do_projeto(cwd)), |s| nome_da_sessao(i, s));
             let timer = timers.iter().find(|t| t.id == *timer_id).map_or_else(|| t_("pg.timer_da_regra"), |t| t.nome.clone());
             (
                 "conversa_nova",
@@ -581,7 +630,7 @@ fn pergunta_dto(
             contar_ou_nao(*de, *ate),
         ),
     };
-    PerguntaDto { id, tipo: tipo.to_string(), texto, opcoes, sessao_id, pasta, pasta_curta: curta }
+    PerguntaDto { id, tipo: tipo.to_string(), texto, opcoes, sessao_id, pasta, pasta_curta: curta, sessao_nome, origem, pastas }
 }
 
 /// "ligado" ou "ligados", pelo número de timers.
@@ -716,7 +765,7 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
                     atividade_id: x.atividade_id,
                 })
                 .collect(),
-            sessoes: sessoes.into_iter().map(|(s, estado)| sessao_dto_com(s, estado, &motor.regras_pasta)).collect(),
+            sessoes: sessoes.into_iter().map(|(s, estado)| sessao_dto_com(i, s, estado, &motor.regras_pasta)).collect(),
             ajuste_ms: meus.iter().map(|a| a.delta_ms).sum(),
             ajustes: meus,
             zerado_em: zerados.do_timer(t.id),
@@ -929,6 +978,7 @@ mod testes {
             cwd: "G:\\Projeto A".into(),
             transcript: None,
             notificacao: None,
+            origem: None,
         };
         let mud = m.evento(&ev);
         b.aplicar(&mud).unwrap();
@@ -1056,7 +1106,7 @@ mod testes {
         assert_eq!(s.atividades.iter().map(|a| a.nome.as_str()).collect::<Vec<_>>(), ["Trabalho", "Reunião", "Estudo"]);
         // o Claude trabalhando junto: a reunião segue na frente
         m.regras_pasta = vec![RegraPasta { id: 1, pasta: "G:\\Cliente A".into(), timer_id: t }];
-        let ev = EventoHook { t: h(9, 40), evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None };
+        let ev = EventoHook { t: h(9, 40), evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None, origem: None };
         b.aplicar(&m.evento(&ev)).unwrap();
         let s = montar(&b, &m, h(9, 45)).unwrap();
         let cliente_a = s.grupos.iter().flat_map(|g| &g.timers).find(|x| x.id == t).unwrap();
@@ -1094,12 +1144,12 @@ mod testes {
         assert_eq!(en.perguntas[1].texto, "You were away from the PC for 9h 00m. Count it in A from 00:00 (8h 12m)?");
         assert_eq!(en.perguntas[1].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Leave paused", "Count from 00:00"]);
         assert_eq!(en.perguntas[2].texto, r"New Claude session in the folder Projetos\Site. Which timer should count it?");
-        assert_eq!(en.perguntas[2].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Choose timer…", "+ New timer…", "Don’t count"]);
+        assert_eq!(en.perguntas[2].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Choose the timer…", "+ New timer…", "Don’t count"]);
         let pt = montar_em(&b, &m, h(9, 0), Idioma::Pt).unwrap();
         assert_eq!(pt.idioma, "pt-BR");
         assert_eq!(pt.perguntas[0].texto, format!("O {APP_NOME} ficou fechado 40 min com A e B ligados. Retomar?"));
         assert_eq!(pt.perguntas[1].texto, "Você ficou 9h 00min sem mexer no PC. Contar em A desde 00:00 (8h 12min)?");
-        assert_eq!(pt.perguntas[2].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Escolher timer…", "+ Novo timer…", "Não contar"]);
+        assert_eq!(pt.perguntas[2].opcoes.iter().map(|o| o.1.as_str()).collect::<Vec<_>>(), ["Escolher o timer…", "+ Novo timer…", "Não contar"]);
         // o "Sem grupo" também, e o idioma da config manda no `montar`
         assert_eq!(en.grupos.last().unwrap().nome, "No group");
         let cfg = ConfigApp { idioma: "en".into(), ..b.config_app().unwrap() };
@@ -1161,6 +1211,7 @@ mod testes {
             criada_em: terminou,
             ligacao: None,
             desligada_em: None,
+            origem: None,
         };
         // de anteontem e de hoje cedo
         m.sessoes.insert("velha".into(), sessao("velha", h(0, 0) - 30 * 60 * MIN));
@@ -1187,7 +1238,7 @@ mod testes {
     }
 
     fn ev(t: Ms, evento: &str, sessao: &str) -> EventoHook {
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: "G:\\Projeto A".into(), transcript: None, notificacao: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: "G:\\Projeto A".into(), transcript: None, notificacao: None, origem: None }
     }
     fn situacao_de(s: &Snapshot, id: i64) -> Option<String> {
         s.grupos.iter().flat_map(|g| &g.timers).find(|t| t.id == id).unwrap().situacao.clone()
@@ -1332,7 +1383,8 @@ mod testes {
         assert_eq!(
             p.opcoes,
             vec![
-                (format!("ligar:{t}:regra"), "Projeto A · sempre nesta pasta".to_string()),
+                // a opção A (rodada 27): o principal liga só esta sessão
+                (format!("ligar:{t}"), "Contar em Projeto A".to_string()),
                 ("outro".to_string(), "Outro timer…".to_string()),
                 ("novo".to_string(), "+ Novo timer…".to_string()),
                 ("nao".to_string(), "Não contar".to_string()),
@@ -1356,11 +1408,70 @@ mod testes {
         assert_eq!(
             p.opcoes,
             vec![
-                ("outro".to_string(), "Escolher timer…".to_string()),
+                ("outro".to_string(), "Escolher o timer…".to_string()),
                 ("novo".to_string(), "+ Novo timer…".to_string()),
                 ("nao".to_string(), "Não contar".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_pergunta_de_sessao_nova_traz_o_nome_a_origem_e_as_pastas_ate_a_de_agora() {
+        let b = Banco::abrir_memoria().unwrap();
+        let t = b.criar_timer(None, "Projetos", "#a00").unwrap();
+        let mut m = motor(h(9, 0));
+        let ev = |t: Ms, evento: &str, cwd: &str| EventoHook {
+            t,
+            evento: evento.into(),
+            sessao: "s1".into(),
+            cwd: cwd.into(),
+            transcript: None,
+            notificacao: None,
+            origem: Some("cli".into()),
+        };
+        m.evento(&ev(h(9, 0), "UserPromptSubmit", "D:\\Projetos"));
+        let s = montar(&b, &m, h(9, 0)).unwrap();
+        let p = &s.perguntas[0];
+        assert_eq!((p.sessao_nome.as_deref(), p.origem.as_deref()), (None, Some("cli")), "sem nome ainda");
+        assert_eq!(p.opcoes[0], (format!("ligar:{t}"), "Contar em Projetos".to_string()));
+        fn lista(p: &PerguntaDto) -> Vec<(&str, &str, bool, bool)> {
+            p.pastas.iter().map(|x| (x.pasta.as_str(), x.curta.as_str(), x.comecou, x.agora)).collect()
+        }
+        assert_eq!(lista(p), [("D:\\Projetos", "D:\\Projetos", true, true)]);
+        // a sessão anda para dentro de um projeto e ganha nome: a pasta de agora e os níveis entre as duas
+        m.evento(&ev(h(9, 1), "PostToolUse", "D:\\Projetos\\cliente\\app"));
+        m.sessoes.get_mut("s1").unwrap().nome = Some("  Plano do app ".into());
+        let s = montar(&b, &m, h(9, 1)).unwrap();
+        let p = &s.perguntas[0];
+        assert_eq!(p.sessao_nome.as_deref(), Some("Plano do app"));
+        assert_eq!((p.pasta.as_deref(), p.pasta_curta.as_deref()), (Some("D:\\Projetos\\cliente\\app"), Some("cliente\\app")));
+        assert_eq!(p.texto, "Sessão nova do Claude na pasta cliente\\app. Em qual timer contar?");
+        assert_eq!(
+            lista(p),
+            [
+                ("D:\\Projetos", "D:\\Projetos", true, false),
+                ("D:\\Projetos\\cliente", "Projetos\\cliente", false, false),
+                ("D:\\Projetos\\cliente\\app", "cliente\\app", false, true),
+            ]
+        );
+        assert_eq!(m.sessoes["s1"].cwd, "D:\\Projetos", "o cwd gravado não muda");
+        // o Chat: sem pasta, sem lista, o texto sem pasta
+        let mut m = motor(h(9, 0));
+        m.sinais_do_chat(
+            &crate::motor::SinaisDoChat {
+                aba_do_chat: true,
+                aberta: Some(crate::motor::ChatAberto { id: "0a1b".into(), titulo: "Receita".into(), parando: true }),
+                rodando: vec![],
+                barra: true,
+                repetidos: vec![],
+            },
+            h(9, 0),
+        );
+        let s = montar_em(&b, &m, h(9, 0), Idioma::Pt).unwrap();
+        let p = &s.perguntas[0];
+        assert_eq!((p.pasta.as_deref(), p.pastas.len()), (None, 0));
+        assert_eq!((p.sessao_nome.as_deref(), p.origem.as_deref()), (Some("Receita"), Some("chat")));
+        assert_eq!(p.texto, "Sessão nova do Claude. Em qual timer contar?");
     }
 
     #[test]
@@ -1575,5 +1686,28 @@ mod testes {
         // com a reunião manual
         b.aplicar(&m.play_atividade(t, ATIVIDADE_REUNIAO, h(9, 8))).unwrap();
         assert_eq!(t0(&m, h(9, 9)), (Some("reuniao".into()), Some("segundo_plano".into())));
+    }
+
+    #[test]
+    fn conversa_do_chat_sem_nome_conhecido_mostra_conversa_do_chat() {
+        let s = |id: &str, cwd: &str, nome: Option<&str>| Sessao {
+            id: id.into(),
+            cwd: cwd.into(),
+            nome: nome.map(str::to_string),
+            transcript: None,
+            timer_id: None,
+            estado: EstadoSessao::Parada,
+            ultimo_evento: 0,
+            terminou_em: None,
+            criada_em: 0,
+            ligacao: None,
+            desligada_em: None,
+            origem: None,
+        };
+        // no idioma pedido (o do snapshot), não no global
+        assert_eq!(nome_da_sessao(Idioma::Pt, &s("chat:0a1b", "", None)), "Conversa do Chat");
+        assert_eq!(nome_da_sessao(Idioma::En, &s("chat:0a1b", "", None)), "Chat conversation");
+        assert_eq!(nome_da_sessao(Idioma::En, &s("chat:0a1b", "", Some("Receita"))), "Receita");
+        assert_eq!(nome_da_sessao(Idioma::Pt, &s("s1", "G:\\Projeto A", None)), "Projeto A");
     }
 }

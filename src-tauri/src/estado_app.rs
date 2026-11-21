@@ -15,7 +15,7 @@ use nucleo::config::{
 use nucleo::dados;
 use nucleo::fim_do_transcript::{LeitorDoTranscript, TAREFA_MAX_MS};
 use nucleo::modelo::{Atividade, Espaco, EstadoSessao, Grupo, Ligacao, Mudanca, Pergunta, Resposta, Timer};
-use nucleo::motor::{raiz_do_projeto, sugestao_de_pasta, Motor};
+use nucleo::motor::{chave_de_pasta, raiz_do_projeto, sugestao_de_pasta, Motor};
 use nucleo::snapshot::{self, SessaoDto, Snapshot};
 use nucleo::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
 use serde::Serialize;
@@ -219,6 +219,15 @@ pub struct PedidoNovoTimer {
     /// A regra desta pasta já é de outro timer (o nome dele): a caixa vem desmarcada e diz que
     /// marcar passa a regra para o timer novo.
     pub outro_timer_nome: Option<String>,
+    /// O "Sempre que for na pasta" da pergunta de sessão nova (rodada 27): marcado (com a pasta
+    /// escolhida em `pasta`) ou não. Nulo (o "+ Novo timer…" de outro lugar): como antes, marcado
+    /// a não ser numa pasta-mãe ou com a regra de outro timer.
+    pub sempre: Option<bool>,
+    /// A `pasta` pode ter a regra do "sempre nesta pasta": é uma das pastas da sessão
+    /// (`pastas_da_sessao`) e a conferência não deu erro (a pasta do usuário, a raiz de um drive,
+    /// uma pasta que nunca conta, o Chat). Sem isso, o "Novo timer" não mostra a caixa e só liga a
+    /// sessão (revisão da rodada 27: o timer criado não fica sem a sessão ligada).
+    pub pode_regra: bool,
 }
 
 /// A conferência de uma regra de pasta antes de gravar (rodada 15), com o nome do timer que já
@@ -258,6 +267,9 @@ pub fn texto<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// A resposta de uma pergunta: "contar", "retomar", "pausado", "nao", "certo", "ligar:<timer>"
+/// (só esta sessão), "ligar:<timer>:regra" (a regra na pasta da sessão) ou, desde a rodada 27,
+/// "ligar:<timer>:pasta:<caminho>" (a regra numa das pastas da sessão: `pasta_pedida`).
 fn resposta_de(valor: &str) -> Result<Resposta, String> {
     match valor {
         "contar" => Ok(Resposta::Contar),
@@ -266,16 +278,25 @@ fn resposta_de(valor: &str) -> Result<Resposta, String> {
         "nao" => Ok(Resposta::NaoContar),
         "certo" => Ok(Resposta::Certo),
         _ => {
-            let partes: Vec<&str> = valor.split(':').collect();
-            match partes.as_slice() {
-                ["ligar", id] => Ok(Resposta::LigarA { timer_id: id.parse().map_err(texto)?, criar_regra: false }),
-                ["ligar", id, "regra"] => {
-                    Ok(Resposta::LigarA { timer_id: id.parse().map_err(texto)?, criar_regra: true })
-                }
-                _ => Err(format!("resposta desconhecida: {valor}")),
-            }
+            let desconhecida = || format!("resposta desconhecida: {valor}");
+            let resto = valor.strip_prefix("ligar:").ok_or_else(desconhecida)?;
+            // o caminho tem ":" (`D:\…`): só o primeiro separa o timer do resto
+            let (id, cauda) = resto.split_once(':').unwrap_or((resto, ""));
+            let criar_regra = match cauda {
+                "" => false,
+                "regra" => true,
+                _ if pasta_pedida(valor).is_some() => true,
+                _ => return Err(desconhecida()),
+            };
+            Ok(Resposta::LigarA { timer_id: id.parse().map_err(texto)?, criar_regra })
         }
     }
+}
+
+/// O caminho de "ligar:<timer>:pasta:<caminho>" (rodada 27), se for essa a resposta.
+fn pasta_pedida(valor: &str) -> Option<&str> {
+    let (_, cauda) = valor.strip_prefix("ligar:")?.split_once(':')?;
+    cauda.strip_prefix("pasta:").map(str::trim).filter(|p| !p.is_empty())
 }
 
 /// Grava o arquivo inteiro de uma vez (temporário + rename).
@@ -1197,11 +1218,13 @@ impl Nucleo {
         criar_regra: bool,
         agora: Ms,
     ) -> Result<Vec<Mudanca>, String> {
-        self.ligar_sessao_com(sessao_id, timer_id, desde_inicio, false, criar_regra, agora)
+        self.ligar_sessao_com(sessao_id, timer_id, desde_inicio, false, criar_regra, None, agora)
     }
 
     /// `so_hoje`: o "desde o início" leva só os trechos do dia de trabalho atual (o "Mover" do ✎
-    /// e a conversa nova, rodada 15).
+    /// e a conversa nova, rodada 15). `pasta`: onde fica a regra do "sempre nesta pasta" (rodada
+    /// 27: uma das pastas da sessão, `pastas_da_sessao`); sem ela, a pasta onde a sessão começou.
+    #[allow(clippy::too_many_arguments)]
     pub fn ligar_sessao_com(
         &mut self,
         sessao_id: &str,
@@ -1209,25 +1232,53 @@ impl Nucleo {
         desde_inicio: bool,
         so_hoje: bool,
         criar_regra: bool,
+        pasta: Option<&str>,
         agora: Ms,
     ) -> Result<Vec<Mudanca>, String> {
         self.checar_timer(timer_id)?;
         let cwd = self.motor.sessoes.get(sessao_id).ok_or(ta("erro.sessao_nao_encontrada"))?.cwd.clone();
+        // a pasta pedida é conferida antes de ligar (no Chat, sem pasta, ela é erro, como no
+        // `responder`); sem ela, a pasta onde a sessão começou (no Chat, nenhuma regra)
+        let regra = match (criar_regra, pasta) {
+            (false, _) => None,
+            (true, Some(p)) => Some(self.regra_na_pasta_da_sessao(sessao_id, &cwd, p, timer_id)?),
+            (true, None) => (!cwd.trim().is_empty()).then_some(cwd),
+        };
         let mud = if desde_inicio && so_hoje {
             self.motor.ligar_sessao_hoje(sessao_id, timer_id, agora)
         } else {
             self.motor.ligar_sessao(sessao_id, timer_id, desde_inicio, agora)
         };
         self.aplicar(&mud)?;
-        if criar_regra {
-            self.criar_regra(&cwd, timer_id)?;
+        if let Some(p) = regra {
+            self.criar_regra(&p, timer_id)?;
         }
         Ok(vec![])
     }
 
+    /// A pasta da regra pedida no "Sempre que for na pasta" (rodada 27): tem de ser uma das pastas
+    /// da sessão (da onde ela começou até onde está agora) e poder ter regra (`conferir_regra`).
+    /// Devolve onde a regra fica.
+    fn regra_na_pasta_da_sessao(&self, sessao_id: &str, cwd: &str, pasta: &str, timer_id: i64) -> Result<String, String> {
+        let chave = chave_de_pasta(pasta.trim());
+        // a pasta como a lista escreve (a do evento do hook), não como veio na resposta
+        let pasta = self
+            .motor
+            .pastas_da_sessao(sessao_id, cwd)
+            .into_iter()
+            .find(|p| chave_de_pasta(p) == chave)
+            .ok_or(ta("erro.pasta_fora_da_lista"))?;
+        let c = self.conferir_regra(&pasta, Some(timer_id))?.conferencia;
+        match c.erro {
+            Some(e) => Err(e),
+            None => Ok(c.pasta),
+        }
+    }
+
     /// O "+ Novo timer…" da sessão: nome e pasta pela pasta dela (a da pergunta, se a sessão já
-    /// saiu do motor).
-    pub fn pedido_novo_timer(&self, sessao_id: &str) -> Result<PedidoNovoTimer, String> {
+    /// saiu do motor). `pasta` e `sempre`: o "Sempre que for na pasta" da pergunta de sessão nova
+    /// (rodada 27), com a pasta escolhida na lista (conferida: uma das pastas da sessão).
+    pub fn pedido_novo_timer(&self, sessao_id: &str, pasta: Option<&str>, sempre: Option<bool>) -> Result<PedidoNovoTimer, String> {
         let cwd = match self.motor.sessoes.get(sessao_id) {
             Some(s) => s.cwd.clone(),
             None => self
@@ -1244,14 +1295,33 @@ impl Nucleo {
                 })
                 .ok_or(ta("erro.sessao_nao_encontrada"))?,
         };
-        let raiz = raiz_do_projeto(&cwd);
+        let escolhida = match pasta.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => {
+                let chave = chave_de_pasta(p);
+                Some(
+                    self.motor
+                        .pastas_da_sessao(sessao_id, &cwd)
+                        .into_iter()
+                        .find(|x| chave_de_pasta(x) == chave)
+                        .ok_or(ta("erro.pasta_fora_da_lista"))?,
+                )
+            }
+            None => None,
+        };
+        let raiz = escolhida.as_deref().unwrap_or_else(|| raiz_do_projeto(&cwd));
         let c = self.conferir_regra(raiz, None)?;
+        // a regra só é oferecida onde o "ligar" com a pasta vai passar (`regra_na_pasta_da_sessao`)
+        let chave = chave_de_pasta(raiz);
+        let pode_regra = c.conferencia.erro.is_none()
+            && self.motor.pastas_da_sessao(sessao_id, &cwd).iter().any(|p| chave_de_pasta(p) == chave);
         Ok(PedidoNovoTimer {
             sessao_id: sessao_id.to_string(),
             nome: sugestao_de_pasta(raiz),
             pasta: raiz.to_string(),
             pasta_mae: c.conferencia.pasta_mae,
             outro_timer_nome: c.outro_timer_nome,
+            sempre: if pode_regra { sempre } else { Some(false) },
+            pode_regra,
         })
     }
 
@@ -1280,13 +1350,24 @@ impl Nucleo {
         let mut regra = None;
         if let Resposta::LigarA { timer_id, criar_regra } = r {
             self.checar_timer(timer_id)?;
-            if let (
+            // "ligar:<t>:pasta:<caminho>" (rodada 27): a regra numa das pastas da sessão nova,
+            // conferida antes de ligar
+            if let Some(p) = pasta_pedida(valor) {
+                match &pergunta {
+                    Some(Pergunta::SessaoNova { sessao_id, cwd, .. }) => {
+                        regra = Some((self.regra_na_pasta_da_sessao(sessao_id, cwd, p, timer_id)?, timer_id));
+                    }
+                    Some(_) => return Err(ta("erro.pasta_fora_da_lista").into()),
+                    None => {}
+                }
+            } else if let (
                 true,
                 Some(Pergunta::SessaoNova { cwd, sessao_id, .. } | Pergunta::ConversaNova { cwd, sessao_id, .. }),
             ) = (criar_regra, &pergunta)
             {
                 let cwd = self.motor.sessoes.get(sessao_id).map_or(cwd.clone(), |s| s.cwd.clone());
-                regra = Some((cwd, timer_id));
+                // sem pasta (o Chat), nada de "sempre nesta pasta"
+                regra = (!cwd.trim().is_empty()).then_some((cwd, timer_id));
             }
         }
         let mud = self.motor.responder(pergunta_id, r, agora);
@@ -1385,11 +1466,23 @@ impl Nucleo {
         })
     }
 
-    /// Sessões dos últimos 7 dias, a mais recente primeiro.
+    /// Sessões dos últimos 7 dias, a mais recente primeiro. O título de uma conversa do Chat só
+    /// existe em memória (o banco não guarda): vem do motor.
+    /// Para a lista de ligar (rodada 27): as disponíveis (sem timer) primeiro e as já ligadas por
+    /// último, a mais recente primeiro em cada grupo. Uma conversa do Chat sem nome conhecido e sem
+    /// timer fica de fora (não dá para reconhecer qual é).
     pub fn sessoes_recentes(&self, agora: Ms) -> Result<Vec<SessaoDto>, String> {
         let mut v = self.banco.sessoes_desde(agora - DIAS_RECENTES * DIA_MS).map_err(texto)?;
         v.reverse();
-        Ok(v.iter().map(|s| snapshot::sessao_dto(s, &self.motor.regras_pasta)).collect())
+        for s in v.iter_mut().filter(|s| nucleo::motor::e_sessao_do_chat(&s.id)) {
+            s.nome = self.motor.sessoes.get(&s.id).and_then(|m| m.nome.clone());
+        }
+        v.retain(|s| {
+            !nucleo::motor::e_sessao_do_chat(&s.id) || s.timer_id.is_some() || s.nome.as_deref().is_some_and(|n| !n.trim().is_empty())
+        });
+        // estável: dentro de cada grupo, a ordem do banco ao contrário (a mais recente primeiro)
+        v.sort_by_key(|s| s.timer_id.is_some());
+        Ok(v.iter().map(|s| snapshot::sessao_dto(nucleo::idioma::atual(), s, &self.motor.regras_pasta)).collect())
     }
 
     /// Sessões cujo título precisa ser lido agora; marca a conferência no cache.
@@ -1552,7 +1645,7 @@ mod testes {
         Nucleo::abrir(Banco::abrir_memoria().unwrap(), agora, F, dia()).unwrap()
     }
     pub fn ev(t: Ms, evento: &str, sessao: &str, cwd: &str) -> EventoHook {
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None, origem: None }
     }
 
     #[test]
@@ -1566,6 +1659,15 @@ mod testes {
         assert_eq!(resposta_de("ligar:4:regra"), Ok(Resposta::LigarA { timer_id: 4, criar_regra: true }));
         assert!(resposta_de("outro").is_err());
         assert!(resposta_de("ligar:x").is_err());
+        // a regra numa das pastas da sessão (rodada 27): o caminho tem ":"
+        assert_eq!(resposta_de("ligar:4:pasta:D:\\Projetos\\app"), Ok(Resposta::LigarA { timer_id: 4, criar_regra: true }));
+        assert_eq!(pasta_pedida("ligar:4:pasta:D:\\Projetos\\app"), Some("D:\\Projetos\\app"));
+        assert_eq!(pasta_pedida("ligar:4:regra"), None);
+        assert_eq!(pasta_pedida("ligar:4"), None);
+        assert!(resposta_de("ligar:4:pasta:").is_err());
+        assert!(resposta_de("ligar:4:pasta:  ").is_err());
+        assert!(resposta_de("ligar:4:outra").is_err());
+        assert!(resposta_de("ligar:x:pasta:D:\\a").is_err());
     }
 
     #[test]
@@ -2208,7 +2310,7 @@ mod testes {
         let p = s.perguntas.iter().find(|p| p.tipo == "sessao_nova").unwrap();
         let ligar = p.opcoes.iter().find(|(v, _)| v.starts_with("ligar:")).unwrap();
         assert!(ligar.0.starts_with(&format!("ligar:{estudos}")));
-        assert_eq!(ligar.1, "Estudos · Geral · sempre nesta pasta");
+        assert_eq!(ligar.1, "Contar em Estudos · Geral");
     }
 
     #[test]
@@ -2255,6 +2357,92 @@ mod testes {
     }
 
     #[test]
+    fn lista_de_ligar_tem_as_disponiveis_primeiro_e_tira_o_chat_sem_nome() {
+        use nucleo::motor::{ChatAberto, SinaisDoChat};
+        let mut n = nucleo(h(9, 0));
+        let t = n.banco.criar_timer(None, "A", "#a00").unwrap();
+        let com = |min: u32, sessao: &str, origem: Option<&str>| EventoHook {
+            origem: origem.map(str::to_string),
+            ..ev(h(9, min), "UserPromptSubmit", sessao, "G:\\Projeto A")
+        };
+        for (min, s, o) in [(0, "velha", Some("cli")), (1, "ligada_velha", None), (2, "nova", Some("claude-desktop")), (3, "ligada_nova", Some("claude-vscode"))] {
+            let mud = n.motor.evento(&com(min, s, o));
+            n.aplicar(&mud).unwrap();
+        }
+        for s in ["ligada_velha", "ligada_nova"] {
+            n.ligar_sessao(s, t, false, false, h(9, 4)).unwrap();
+        }
+        // uma conversa do Chat com o título conhecido e outra que, reaberto o app, ficou sem nome
+        let chat = |id: &str, titulo: &str| SinaisDoChat {
+            aba_do_chat: true,
+            aberta: Some(ChatAberto { id: id.into(), titulo: titulo.into(), parando: false }),
+            rodando: vec![],
+            barra: true,
+            repetidos: vec![],
+        };
+        let mud = n.motor.sinais_do_chat(&chat("c1", "Receita"), h(9, 5));
+        n.aplicar(&mud).unwrap();
+        let mud = n.motor.sinais_do_chat(&chat("c2", "Viagem"), h(9, 6));
+        n.aplicar(&mud).unwrap();
+        n.motor.sessoes.get_mut("chat:c2").unwrap().nome = None;
+        let v = n.sessoes_recentes(h(9, 7)).unwrap();
+        let ids: Vec<&str> = v.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["chat:c1", "nova", "velha", "ligada_nova", "ligada_velha"]);
+        let origens: Vec<Option<&str>> = v.iter().map(|s| s.origem.as_deref()).collect();
+        assert_eq!(origens, [Some("chat"), Some("claude-desktop"), Some("cli"), Some("claude-vscode"), None]);
+        // ligada, a do Chat sem nome volta à lista (no fim, com as ligadas)
+        n.ligar_sessao("chat:c2", t, false, false, h(9, 8)).unwrap();
+        let v = n.sessoes_recentes(h(9, 9)).unwrap();
+        assert_eq!(v.last().map(|s| s.id.as_str()), Some("ligada_velha"));
+        assert!(v.iter().skip(2).any(|s| s.id == "chat:c2"));
+    }
+
+    #[test]
+    fn sempre_que_for_na_pasta_escolhe_entre_a_de_inicio_e_a_de_agora() {
+        let mut n = nucleo(h(9, 0));
+        let t = n.banco.criar_timer(None, "Projetos", "#a00").unwrap();
+        for (min, evento, cwd) in [(0, "UserPromptSubmit", "D:\\Projetos"), (1, "PostToolUse", "D:\\Projetos\\cliente\\app")] {
+            let mud = n.motor.evento(&ev(h(9, min), evento, "s1", cwd));
+            n.aplicar(&mud).unwrap();
+        }
+        let p = n.snapshot(h(9, 2)).unwrap().perguntas[0].clone();
+        assert_eq!(
+            p.pastas.iter().map(|x| x.pasta.as_str()).collect::<Vec<_>>(),
+            ["D:\\Projetos", "D:\\Projetos\\cliente", "D:\\Projetos\\cliente\\app"]
+        );
+        // o "+ Novo timer…" com a caixa marcada leva a pasta escolhida (o nome sai dela)
+        let pedido = n.pedido_novo_timer("s1", Some("d:/projetos/cliente"), Some(true)).unwrap();
+        assert_eq!(
+            (pedido.nome.as_str(), pedido.pasta.as_str(), pedido.sempre),
+            ("cliente", "D:\\Projetos\\cliente", Some(true))
+        );
+        assert!(n.pedido_novo_timer("s1", Some("D:\\Outra"), Some(true)).is_err());
+        // sem a caixa: a pasta onde a sessão começou, como antes
+        let pedido = n.pedido_novo_timer("s1", None, Some(false)).unwrap();
+        assert_eq!((pedido.pasta.as_str(), pedido.sempre), ("D:\\Projetos", Some(false)));
+        // a do meio
+        n.responder(p.id, &format!("ligar:{t}:pasta:D:\\Projetos\\cliente"), h(9, 3)).unwrap();
+        assert_eq!(n.banco.regras_pasta().unwrap()[0].pasta, "D:\\Projetos\\cliente");
+        assert_eq!(n.motor.sessoes["s1"].timer_id, Some(t));
+        assert_eq!(n.motor.sessoes["s1"].cwd, "D:\\Projetos", "o cwd gravado segue o de início");
+        // o "Ligar" pela janela principal também escolhe a pasta, conferida
+        let outro = n.banco.criar_timer(None, "Outro", "#0a0").unwrap();
+        assert!(n.ligar_sessao_com("s1", outro, false, false, true, Some("E:\\Fora"), h(9, 4)).is_err());
+        assert_eq!(n.motor.sessoes["s1"].timer_id, Some(t), "a pasta errada não liga nada");
+        n.ligar_sessao_com("s1", outro, false, false, true, Some("D:\\Projetos\\cliente\\app"), h(9, 4)).unwrap();
+        assert_eq!(n.motor.sessoes["s1"].timer_id, Some(outro));
+        assert!(n.banco.regras_pasta().unwrap().iter().any(|r| r.pasta == "D:\\Projetos\\cliente\\app" && r.timer_id == outro));
+        // só esta sessão: sem regra
+        let mud = n.motor.evento(&ev(h(9, 5), "UserPromptSubmit", "s2", "E:\\Novo"));
+        n.aplicar(&mud).unwrap();
+        let p = n.snapshot(h(9, 5)).unwrap().perguntas.into_iter().find(|p| p.sessao_id.as_deref() == Some("s2")).unwrap();
+        let antes = n.banco.regras_pasta().unwrap().len();
+        n.responder(p.id, &format!("ligar:{t}"), h(9, 6)).unwrap();
+        assert_eq!(n.banco.regras_pasta().unwrap().len(), antes);
+        assert_eq!(n.motor.sessoes["s2"].timer_id, Some(t));
+    }
+
+    #[test]
     fn responder_ligar_com_regra_cria_regra_e_liga_desde_o_inicio() {
         let mut n = nucleo(h(9, 0));
         let t = n.banco.criar_timer(None, "Projeto A", "#a00").unwrap();
@@ -2262,8 +2450,15 @@ mod testes {
         n.aplicar(&mud).unwrap();
         let s = n.snapshot(h(9, 1)).unwrap();
         let p = &s.perguntas[0];
-        assert_eq!(p.opcoes[0].0, format!("ligar:{t}:regra"));
-        n.responder(p.id, &p.opcoes[0].0, h(9, 5)).unwrap();
+        // o principal liga só esta sessão (rodada 27); a caixa "Sempre que for na pasta" põe a
+        // pasta escolhida na resposta
+        assert_eq!(p.opcoes[0].0, format!("ligar:{t}"));
+        // uma pasta que não é da sessão: erro, e nada muda
+        assert!(n.responder(p.id, &format!("ligar:{t}:pasta:G:\\Outra"), h(9, 5)).is_err());
+        assert!(n.responder(p.id, &format!("ligar:{t}:pasta:G:\\"), h(9, 5)).is_err());
+        assert_eq!((n.motor.perguntas.len(), n.motor.sessoes["s1"].timer_id), (1, None));
+        assert!(n.banco.regras_pasta().unwrap().is_empty());
+        n.responder(p.id, &format!("ligar:{t}:pasta:g:/projeto a/"), h(9, 5)).unwrap();
         assert!(n.motor.perguntas.is_empty());
         assert_eq!(n.banco.regras_pasta().unwrap()[0].pasta, "G:\\Projeto A");
         assert_eq!(n.motor.regras_pasta.len(), 1);
@@ -2284,6 +2479,48 @@ mod testes {
         assert!(n.motor.perguntas.is_empty());
         assert_eq!(n.motor.sessoes["s2"].timer_id, Some(t));
         assert!(n.responder(1, "ligar:999", h(9, 12)).is_err());
+    }
+
+    #[test]
+    fn conversa_do_chat_pergunta_liga_sem_regra_e_o_titulo_fica_so_em_memoria() {
+        use nucleo::motor::{ChatAberto, SinaisDoChat};
+        let mut n = nucleo(h(9, 0));
+        let t = n.banco.criar_timer(None, "Projeto A", "#a00").unwrap();
+        let sinais = |parando: bool| SinaisDoChat {
+            aba_do_chat: true,
+            aberta: Some(ChatAberto { id: "0a1b".into(), titulo: "Receita de bolo".into(), parando }),
+            rodando: vec![],
+            barra: true,
+            repetidos: vec![],
+        };
+        let mud = n.motor.sinais_do_chat(&sinais(true), h(9, 0));
+        n.aplicar(&mud).unwrap();
+        let s = n.snapshot(h(9, 1)).unwrap();
+        assert_eq!(s.perguntas.len(), 1);
+        assert_eq!(s.perguntas[0].sessao_id.as_deref(), Some("chat:0a1b"));
+        let valores: Vec<&str> = s.perguntas[0].opcoes.iter().map(|o| o.0.as_str()).collect();
+        assert_eq!(valores, ["outro", "novo", "nao"], "sem pasta, sem sugestão");
+        // a pergunta do Chat não tem pastas: pedir uma é erro
+        assert!(s.perguntas[0].pastas.is_empty() && s.perguntas[0].pasta.is_none());
+        assert_eq!(s.perguntas[0].origem.as_deref(), Some("chat"));
+        assert!(n.responder(s.perguntas[0].id, &format!("ligar:{t}:pasta:G:\\Projeto A"), h(9, 2)).is_err());
+        // o "sempre nesta pasta" sem pasta não cria regra: só liga
+        n.responder(s.perguntas[0].id, &format!("ligar:{t}:regra"), h(9, 2)).unwrap();
+        assert_eq!(n.motor.sessoes["chat:0a1b"].timer_id, Some(t));
+        assert!(n.banco.regras_pasta().unwrap().is_empty());
+        n.ligar_sessao("chat:0a1b", t, false, true, h(9, 3)).unwrap();
+        assert!(n.banco.regras_pasta().unwrap().is_empty());
+        // a lista de ligar mostra o título (de memória); o banco não tem
+        assert_eq!(n.sessoes_recentes(h(9, 4)).unwrap()[0].nome, "Receita de bolo");
+        assert_eq!(n.banco.sessoes_desde(0).unwrap()[0].nome, None);
+        // reaberto o app, sem o título até a conversa aparecer de novo
+        let Nucleo { banco, .. } = n;
+        let mut n = Nucleo::abrir(banco, h(9, 5), F, dia()).unwrap();
+        let sem_nome = n.sessoes_recentes(h(9, 5)).unwrap()[0].nome.clone();
+        assert!(["Conversa do Chat", "Chat conversation"].contains(&sem_nome.as_str()), "{sem_nome}");
+        let mud = n.motor.sinais_do_chat(&sinais(false), h(9, 6));
+        n.aplicar(&mud).unwrap();
+        assert_eq!(n.sessoes_recentes(h(9, 6)).unwrap()[0].nome, "Receita de bolo");
     }
 
     #[test]
@@ -2328,7 +2565,7 @@ mod testes {
         let p = &s.perguntas[0];
         assert!(p.opcoes.iter().any(|(v, r)| v == "novo" && r == "+ Novo timer…"));
         assert!(resposta_de("novo").is_err(), "não é resposta: a página trata");
-        let pedido = n.pedido_novo_timer("s1").unwrap();
+        let pedido = n.pedido_novo_timer("s1", None, None).unwrap();
         assert_eq!(
             pedido,
             PedidoNovoTimer {
@@ -2337,9 +2574,11 @@ mod testes {
                 pasta: r"G:\Empresa\app-web".into(),
                 pasta_mae: false,
                 outro_timer_nome: None,
+                sempre: None,
+                pode_regra: true,
             }
         );
-        assert!(n.pedido_novo_timer("nada").is_err());
+        assert!(n.pedido_novo_timer("nada", None, None).is_err());
         // a página cria o timer e responde a pergunta com ele ("sempre nesta pasta" marcado)
         let t = n.banco.criar_timer(None, &pedido.nome, "#a00").unwrap();
         n.responder(p.id, &format!("ligar:{t}:regra"), h(9, 2)).unwrap();
@@ -2347,6 +2586,54 @@ mod testes {
         assert_eq!(n.banco.regras_pasta().unwrap()[0].pasta, pedido.pasta);
         let tr = n.banco.trechos_entre(h(0, 0), h(23, 0)).unwrap();
         assert_eq!((tr[0].timer_id, tr[0].inicio), (Some(t), h(9, 0)), "desde o início");
+    }
+
+    #[test]
+    fn novo_timer_numa_pasta_que_nao_pode_ter_regra_so_liga_a_sessao() {
+        // a sessão começou numa pasta larga (a raiz de um drive; a pasta do usuário, se houver)
+        let mut largas = vec!["G:\\".to_string()];
+        largas.extend(std::env::var("USERPROFILE").ok().filter(|p| !p.trim().is_empty()));
+        for (i, cwd) in largas.iter().enumerate() {
+            let mut n = nucleo(h(9, 0));
+            let id = format!("s{i}");
+            let mud = n.motor.evento(&ev(h(9, 0), "UserPromptSubmit", &id, cwd));
+            n.aplicar(&mud).unwrap();
+            let p = n.snapshot(h(9, 1)).unwrap().perguntas[0].clone();
+            let pedido = n.pedido_novo_timer(&id, None, None).unwrap();
+            assert!(!pedido.pode_regra, "{cwd}");
+            assert_eq!(pedido.sempre, Some(false), "a caixa não vem marcada");
+            // a página cria o timer e responde sem a pasta: liga, sem regra e sem erro
+            let t = n.banco.criar_timer(None, &format!("Novo {i}"), "#a00").unwrap();
+            n.responder(p.id, &format!("ligar:{t}"), h(9, 2)).unwrap();
+            assert_eq!(n.motor.sessoes[&id].timer_id, Some(t));
+            assert!(n.motor.perguntas.is_empty());
+            assert!(n.motor.regras_pasta.is_empty());
+            // com a pasta, o ligar recusaria (é o que a caixa escondida evita)
+            assert!(n.ligar_sessao_com(&id, t, true, false, true, Some(&pedido.pasta), h(9, 3)).is_err());
+        }
+        // a pasta de um projeto pode
+        let mut n = nucleo(h(9, 0));
+        let mud = n.motor.evento(&ev(h(9, 0), "UserPromptSubmit", "s1", "G:\\Projeto A"));
+        n.aplicar(&mud).unwrap();
+        assert!(n.pedido_novo_timer("s1", None, None).unwrap().pode_regra);
+    }
+
+    #[test]
+    fn ligar_a_conversa_do_chat_com_pasta_e_erro() {
+        let mut n = nucleo(h(9, 0));
+        let t = n.banco.criar_timer(None, "Projeto A", "#a00").unwrap();
+        // a conversa do Chat vista (sem responder): a sessão nasce, sem timer
+        use nucleo::motor::{ChatAberto, SinaisDoChat};
+        let aberta = Some(ChatAberto { id: "0a1b".into(), titulo: "Receita".into(), parando: false });
+        let mud = n.motor.sinais_do_chat(&SinaisDoChat { aba_do_chat: true, aberta, barra: true, ..Default::default() }, h(9, 0));
+        n.aplicar(&mud).unwrap();
+        assert!(n.ligar_sessao_com("chat:0a1b", t, true, false, true, Some("G:\\Projeto A"), h(9, 1)).is_err());
+        assert_eq!(n.motor.sessoes["chat:0a1b"].timer_id, None, "não ligou");
+        // sem a pasta, liga (sem regra)
+        n.ligar_sessao_com("chat:0a1b", t, true, false, true, None, h(9, 1)).unwrap();
+        assert_eq!(n.motor.sessoes["chat:0a1b"].timer_id, Some(t));
+        assert!(n.motor.regras_pasta.is_empty());
+        assert!(!n.pedido_novo_timer("chat:0a1b", None, None).unwrap().pode_regra);
     }
 
     #[test]
@@ -2362,11 +2649,11 @@ mod testes {
         let mud = n.motor.evento(&ev(h(9, 0), "UserPromptSubmit", "s1", &cwd));
         n.aplicar(&mud).unwrap();
         let p = n.snapshot(h(9, 1)).unwrap().perguntas[0].clone();
-        // o botão liga só esta conversa, sem "· sempre nesta pasta"
-        assert_eq!(p.opcoes[0], (format!("ligar:{t}"), "Projetos".to_string()));
+        // o botão liga só esta conversa
+        assert_eq!(p.opcoes[0], (format!("ligar:{t}"), "Contar em Projetos".to_string()));
         // conferida quando a pergunta nasceu: o snapshot não lê o disco de novo (revisão)
         assert!(matches!(n.motor.perguntas[0].1, Pergunta::SessaoNova { pasta_mae: true, .. }));
-        let pedido = n.pedido_novo_timer("s1").unwrap();
+        let pedido = n.pedido_novo_timer("s1", None, None).unwrap();
         assert!(pedido.pasta_mae);
         assert_eq!(pedido.outro_timer_nome, None);
         std::fs::remove_dir_all(mae.join("Cliente A")).unwrap();
@@ -2561,8 +2848,10 @@ mod testes {
         let mud = n.motor.evento(&ev(h(9, 0), "UserPromptSubmit", "s1", cwd));
         n.aplicar(&mud).unwrap();
         let p = n.snapshot(h(9, 1)).unwrap().perguntas[0].clone();
-        assert_eq!(p.opcoes[0].0, format!("ligar:{t}:regra"), "sugere o timer pelo nome da raiz");
-        n.responder(p.id, &p.opcoes[0].0, h(9, 2)).unwrap();
+        assert_eq!(p.opcoes[0].0, format!("ligar:{t}"), "sugere o timer pelo nome da raiz");
+        // a lista das pastas já traz o projeto, não o worktree
+        assert_eq!(p.pastas.iter().map(|x| x.pasta.as_str()).collect::<Vec<_>>(), ["G:\\Empresa\\app-web"]);
+        n.responder(p.id, &format!("ligar:{t}:pasta:G:\\Empresa\\app-web"), h(9, 2)).unwrap();
         assert_eq!(n.motor.regras_pasta[0].pasta, "G:\\Empresa\\app-web");
         // sessão nova em outro worktree do projeto já entra no timer (e só pergunta se está certo)
         let mud = n.motor.evento(&ev(h(9, 3), "UserPromptSubmit", "s2", "G:\\Empresa\\app-web\\.claude\\worktrees\\outro"));
@@ -3342,7 +3631,7 @@ mod testes {
             let mud = n.motor.evento(&ev(t, e, "s1", "G:\\Projeto A"));
             n.aplicar(&mud).unwrap();
         }
-        n.ligar_sessao_com("s1", flow, true, true, false, h18(9, 0)).unwrap();
+        n.ligar_sessao_com("s1", flow, true, true, false, None, h18(9, 0)).unwrap();
         let (ontem, hoje) = timers_da_sessao(&n, "s1", h18(0, 0));
         assert!(!ontem.is_empty() && ontem.iter().all(|t| *t == Some(be)), "{ontem:?}");
         assert!(!hoje.is_empty() && hoje.iter().all(|t| *t == Some(flow)), "{hoje:?}");

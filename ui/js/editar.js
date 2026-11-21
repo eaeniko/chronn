@@ -806,14 +806,15 @@ export const avisoPastaMae = (timerNome) => TEXTOS.avisoPastaMae(timerNome);
  * "Sempre que for nesta pasta" (`conf`: a conferência da regra, `{ pasta_mae, outro_timer_nome }`).
  * Vem marcado, a não ser numa pasta-mãe (o aviso diz por quê) ou quando a regra da pasta já é de
  * outro timer (marcar passa a regra para este). Marcar continua possível nos dois casos.
- * `timerNome` já vem escapado (pode ter HTML).
+ * `timerNome` já vem escapado (pode ter HTML). `marcada` (rodada 27): o "Sempre que for na pasta"
+ * da pergunta de sessão nova, que vale no lugar do padrão (nulo: o padrão).
  */
-export function campoRegra(pasta, conf, timerNome) {
+export function campoRegra(pasta, conf, timerNome, marcada = null) {
   const avisos = [];
   if (conf?.pasta_mae) avisos.push(avisoPastaMae(timerNome));
   if (conf?.outro_timer_nome) avisos.push(TEXTOS.regraDeOutroMarcar(esc(conf.outro_timer_nome), timerNome));
   return (
-    caixa('regra', TEXTOS.sempreNestaPasta, esc(pasta), avisos.length === 0) +
+    caixa('regra', TEXTOS.sempreNestaPasta, esc(pasta), typeof marcada === 'boolean' ? marcada : avisos.length === 0) +
     avisos.map((a) => `<p class="dlg-aviso" role="note">${a}</p>`).join('')
   );
 }
@@ -822,10 +823,15 @@ export function campoRegra(pasta, conf, timerNome) {
  * O começo do "Novo timer" aberto pelo "+ Novo timer…" de uma sessão nova (`pedido`: sessão,
  * nome sugerido pela pasta do projeto, a pasta e a conferência da regra): de qual sessão é e o
  * "sempre nesta pasta" já marcado (a regra de pasta, como no "Ligar"), menos numa pasta-mãe.
+ * Vindo da pergunta do dock (rodada 27), a caixa vem como estava lá (`pedido.sempre`), na pasta
+ * escolhida. Sem pasta (o Chat), nada. Numa pasta que não pode ter regra (`pode_regra: false`:
+ * a pasta do usuário, a raiz de um drive), sem a caixa: o timer novo só liga a sessão.
  */
 export const camposDaSessao = (pedido) =>
-  `<p class="dlg-p">${TEXTOS.sessaoNovaNaPasta(`<code class="aj-cam">${esc(pedido.pasta)}</code>`)}</p>` +
-  campoRegra(pedido.pasta, pedido, TEXTOS.oTimerNovo);
+  pedido.pasta
+    ? `<p class="dlg-p">${TEXTOS.sessaoNovaNaPasta(`<code class="aj-cam">${esc(pedido.pasta)}</code>`)}</p>` +
+      (pedido.pode_regra === false ? '' : campoRegra(pedido.pasta, pedido, TEXTOS.oTimerNovo, pedido.sempre ?? null))
+    : '';
 
 const nomeComparavel = (s) => String(s ?? '').trim().toLowerCase();
 
@@ -881,7 +887,7 @@ export function ligarAoExistente(timer, pedido, criarOutro) {
           faixa(TEXTO_PEDIDO_DESCARTADO);
           return;
         }
-        await ligar(pedido.sessao_id, timer.id, true, marcado(form, 'regra'));
+        await ligar(pedido.sessao_id, timer.id, true, marcado(form, 'regra'), false, pedido.pasta || null);
       },
       aoFechar: () => {
         if (!trocou) ok(null);
@@ -946,7 +952,7 @@ export function novoTimer(snap, grupoId = null, pedido = null, { mesmoNome = fal
             await chamar('editar_timer', { timer: timerParaSalvar({ ...t, ...card }) });
           }
         }
-        if (pedido && id !== null) await ligar(pedido.sessao_id, id, true, marcado(form, 'regra'));
+        if (pedido && id !== null) await ligar(pedido.sessao_id, id, true, marcado(form, 'regra'), false, pedido.pasta || null);
         ok(id);
       },
       aoFechar: (enviado) => {
@@ -1454,13 +1460,17 @@ export function perguntarAoMinimizar({ antes = async () => {} } = {}) {
  * responde a pergunta (assim ela some do dock). A resposta "ligar" sempre liga desde o início;
  * para "daqui para frente", liga pelo comando e depois dispensa a pergunta de sessão nova (a da
  * conversa nova sai sozinha ao ligar).
- * Lê o snapshot na hora, para não responder uma pergunta que já saiu.
+ * Lê o snapshot na hora, para não responder uma pergunta que já saiu. `pasta` (rodada 27): onde
+ * fica a regra do "sempre nesta pasta" (uma das pastas da sessão, conferida pelo núcleo); nula: a
+ * pasta onde a sessão começou.
  */
-export async function ligar(sessaoId, timerId, desdeInicio, regra, soHoje = false) {
+export async function ligar(sessaoId, timerId, desdeInicio, regra, soHoje = false, pasta = null) {
   const p = perguntaDaSessao(await chamar('obter_estado'), sessaoId);
   if (p && desdeInicio) {
-    // a resposta da conversa nova já leva só os trechos de hoje (o núcleo)
-    return chamar('responder', { pergunta_id: p.id, valor: `ligar:${timerId}${regra ? ':regra' : ''}` });
+    // a resposta da conversa nova já leva só os trechos de hoje (o núcleo); a pasta escolhida só
+    // vale na de sessão nova
+    const comPasta = regra && pasta && p.tipo === 'sessao_nova';
+    return chamar('responder', { pergunta_id: p.id, valor: `ligar:${timerId}${comPasta ? `:pasta:${pasta}` : regra ? ':regra' : ''}` });
   }
   const s = await chamar('ligar_sessao', {
     sessao_id: sessaoId,
@@ -1468,6 +1478,7 @@ export async function ligar(sessaoId, timerId, desdeInicio, regra, soHoje = fals
     desde_inicio: desdeInicio,
     criar_regra: regra,
     so_hoje: soHoje,
+    pasta: regra ? pasta : null,
   });
   return p?.tipo === 'sessao_nova' ? chamar('responder', { pergunta_id: p.id, valor: 'nao' }) : s;
 }
@@ -1619,7 +1630,8 @@ export const textoDesdeInicio = (timerNome, soHoje) =>
 
 async function passoOpcoes(sessao, timer, voltar) {
   const inicio = desdeInicioPadrao(sessao, Date.now());
-  const conferencia = await conferirRegra(sessao.cwd, timer.id);
+  // a pasta escolhida no "Sempre que for na pasta" da pergunta do dock (rodada 27), ou a da sessão
+  const conferencia = await conferirRegra(sessao.pasta_regra ?? sessao.cwd, timer.id);
   // não chamar de `marcado`: esse nome é o leitor do formulário (linha ~552), usado no aoEnviar
   const atributoMarcado = (sim) => (sim ? ' checked autofocus' : '');
   abrirDialogo({
@@ -1629,11 +1641,11 @@ async function passoOpcoes(sessao, timer, voltar) {
   <label class="esc"><input type="radio" name="desde" value="inicio"${atributoMarcado(inicio)}><span><b>${TEXTOS.desdeOInicio}</b><small>${textoDesdeInicio(esc(timer.nome), Boolean(sessao.so_hoje))}</small></span></label>
   <label class="esc"><input type="radio" name="desde" value="agora"${atributoMarcado(!inicio)}><span><b>${TEXTOS.daquiParaFrente}</b><small>${TEXTOS.daquiParaFrenteDica}</small></span></label>
 </div>
-${conferencia.erro ? '' : campoRegra(conferencia.pasta, conferencia, esc(timer.nome))}`,
+${conferencia.erro || !sessao.cwd ? '' : campoRegra(conferencia.pasta, conferencia, esc(timer.nome), sessao.regra_marcada ?? null)}`,
     enviar: TEXTOS.ligar,
     voltar,
     async aoEnviar(form) {
-      await ligar(sessao.id, timer.id, ler(form, 'desde') === 'inicio', marcado(form, 'regra'), Boolean(sessao.so_hoje));
+      await ligar(sessao.id, timer.id, ler(form, 'desde') === 'inicio', marcado(form, 'regra'), Boolean(sessao.so_hoje), sessao.pasta_regra ?? null);
     },
   });
 }
@@ -1647,6 +1659,26 @@ async function buscarSessoes() {
   }
 }
 
+/**
+ * A linha de baixo de uma sessão na lista de ligar (rodada 27): de onde ela veio ("app do Claude",
+ * "Chat do app do Claude"…) e a pasta, com o caminho inteiro na dica. O núcleo já manda a lista
+ * com as disponíveis primeiro e as ligadas por último.
+ */
+export function linhaDaSessao(s) {
+  const partes = [TEXTOS.origemDaSessao(s.origem), s.cwd || null].filter(Boolean);
+  return partes.length ? `<small class="it-p"${s.cwd ? ` title="${esc(s.cwd)}"` : ''}>${esc(partes.join(' · '))}</small>` : '';
+}
+
+/**
+ * A ordem da lista de ligar ao timer `timerId` (teste da 0.5.0): as livres primeiro, depois as de
+ * outro timer e, por último, as já ligadas a este. Estável: dentro de cada grupo fica a ordem do
+ * núcleo (a mais recente primeiro). Devolve os índices em `sessoes`.
+ */
+export function ordemDeLigar(sessoes, timerId) {
+  const grupo = (s) => (s.timer_id === null || s.timer_id === undefined ? 0 : s.timer_id === timerId ? 2 : 1);
+  return sessoes.map((s, i) => [grupo(s), i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, i]) => i);
+}
+
 /** "+ Ligar uma sessão" de um timer: escolhe a sessão, depois desde quando. */
 export async function ligarSessao(lerSnap, timerId) {
   const snap = lerSnap();
@@ -1656,13 +1688,15 @@ export async function ligarSessao(lerSnap, timerId) {
   const estadoClaude = await estadoDoClaude();
   const nomeTimer = new Map(todosTimers(snap).map((t) => [t.id, t.nome]));
   const passo1 = () => {
-    const itens = (sessoes ?? [])
-      .map((s, i) => {
+    const lista = sessoes ?? [];
+    const itens = ordemDeLigar(lista, timer.id)
+      .map((i) => {
+        const s = lista[i];
         const mesma = s.timer_id === timer.id;
         const onde = mesma ? TEXTOS.jaLigada : s.timer_id !== null ? TEXTOS.emTimer(esc(nomeTimer.get(s.timer_id) ?? TEXTOS.outroTimer)) : '';
         return `<button type="button" class="it" data-i="${i}"${mesma ? ' disabled' : ''}>
   <span class="it-n">${esc(s.nome)}</span><span class="it-e">${esc(estadoDaSessao(s.estado))}</span>
-  <small class="it-p">${esc(s.cwd)}</small>${onde ? `<small class="it-t">${onde}</small>` : ''}
+  ${linhaDaSessao(s)}${onde ? `<small class="it-t">${onde}</small>` : ''}
 </button>`;
       })
       .join('');
@@ -1768,7 +1802,14 @@ export async function ligarATimer(lerSnap, sessaoId, aoNovoTimer = null, reserva
   // a conversa nova que pergunta "Certo?" vai desde o início, e o "desde o início" dela e o do
   // "Mover" do ✎ (`opcoes.soHoje`) levam só os trechos de hoje (rodada 15)
   const conversaNova = perguntaDaSessao(lerSnap(), sessaoId)?.tipo === 'conversa_nova';
-  const sessao = { ...achada, conversa_nova: conversaNova, so_hoje: conversaNova || Boolean(opcoes.soHoje) };
+  // o "Sempre que for na pasta" da pergunta do dock (rodada 27): `opcoes.sempre` e `opcoes.pasta`
+  const sessao = {
+    ...achada,
+    conversa_nova: conversaNova,
+    so_hoje: conversaNova || Boolean(opcoes.soHoje),
+    regra_marcada: typeof opcoes.sempre === 'boolean' ? opcoes.sempre : null,
+    pasta_regra: opcoes.sempre && opcoes.pasta ? opcoes.pasta : null,
+  };
   const estadoClaude = await estadoDoClaude();
   const passo1 = () => {
     const d = abrirDialogo({

@@ -94,6 +94,51 @@ fn raiz_com_perfil<'a>(cwd: &'a str, perfil: Option<&str>) -> &'a str {
     }
 }
 
+/// As pastas que o "Sempre que for na pasta" da pergunta de sessao nova oferece (rodada 27): da
+/// pasta onde a sessao comecou (`inicio`) ate a pasta onde ela esta agora (`agora`), cada nivel
+/// entre as duas, de cima para baixo. Cada uma passa por `raiz_do_projeto` (um worktree vira o
+/// projeto). Se a de agora nao esta dentro da de inicio, so as duas. Sem pasta (o Chat), nenhuma.
+/// Ficam de fora as que nao podem ter regra: a raiz de um drive, a pasta do usuario (`perfil`),
+/// as que nunca contam (`ignoradas`) e as que estao dentro de uma pasta `.claude` (um worktree
+/// dentro da pasta do usuario, que fica como esta: `…\.claude` e `…\.claude\worktrees` nao sao
+/// pastas de projeto).
+pub fn pastas_entre(inicio: &str, agora: &str, perfil: Option<&str>, ignoradas: &[String]) -> Vec<String> {
+    let limpa = |p: &str| raiz_com_perfil(p.trim(), perfil).trim_end_matches(['\\', '/']).to_string();
+    let ini = limpa(inicio);
+    if ini.is_empty() {
+        return vec![];
+    }
+    let fim = match limpa(agora) {
+        f if f.is_empty() => ini.clone(),
+        f => f,
+    };
+    let mut v = vec![ini.clone()];
+    if crate::pastas::ancestral(&ini, &fim) {
+        // cada nivel abaixo da de inicio, pelo proprio texto da de agora (as barras e as
+        // maiusculas dela)
+        let partes = |p: &str| p.split(['\\', '/']).filter(|x| !x.is_empty()).count();
+        let n = partes(&ini);
+        for (i, c) in fim.char_indices() {
+            if (c == '\\' || c == '/') && i > 0 && partes(&fim[..i]) > n {
+                v.push(fim[..i].to_string());
+            }
+        }
+        v.push(fim);
+    } else if chave_de_pasta(&ini) != chave_de_pasta(&fim) {
+        v.push(fim);
+    }
+    let mut vistas = std::collections::BTreeSet::new();
+    v.retain(|p| {
+        !pasta_larga(p, perfil) && !pasta_ignorada(p, ignoradas) && !dentro_de_claude(p) && vistas.insert(chave_de_pasta(p))
+    });
+    v
+}
+
+/// A pasta tem um nivel `.claude` (sem diferenciar maiusculas): a propria `.claude` ou algo dentro.
+fn dentro_de_claude(pasta: &str) -> bool {
+    pasta.split(['\\', '/']).any(|x| x.eq_ignore_ascii_case(".claude"))
+}
+
 /// Nome comparavel da sessao: sem diferenciar maiusculas, sem os espacos das pontas (vazio = sem nome).
 fn chave_de_nome(nome: Option<&str>) -> Option<String> {
     let n = nome?.trim().to_lowercase();
@@ -155,6 +200,7 @@ impl Motor {
                     criada_em: t,
                     ligacao: timer_id.map(|_| Ligacao::Regra),
                     desligada_em: None,
+                    origem: ev.origem.clone().filter(|o| !o.trim().is_empty()),
                 },
             );
         } else if t < self.sessoes[&ev.sessao].ultimo_evento {
@@ -171,6 +217,15 @@ impl Motor {
         s.ultimo_evento = t;
         if ev.transcript.is_some() {
             s.transcript = ev.transcript.clone();
+        }
+        // a primeira origem não vazia fica (rodada 27)
+        if s.origem.is_none() {
+            s.origem = ev.origem.clone().filter(|o| !o.trim().is_empty());
+        }
+        // a pasta de agora (o `cwd` vem a cada evento), só em memória: o `Sessao.cwd` gravado segue
+        // sendo onde a sessão começou
+        if !ev.cwd.trim().is_empty() {
+            self.pasta_agora.insert(ev.sessao.clone(), ev.cwd.clone());
         }
         let trabalhando = s.estado == EstadoSessao::Trabalhando;
         match ev.evento.as_str() {
@@ -221,8 +276,9 @@ impl Motor {
                 // perguntar na próxima atividade (rodada 15); o "Não contar" já está em `perguntadas`.
                 (None, None | Some(Ligacao::Mao)) => {
                     let raiz = raiz_do_projeto(&ev.cwd);
-                    // a pasta-mae e conferida aqui, uma vez (o disco so nas subpastas diretas)
-                    let pasta_mae = crate::pastas::pasta_mae(raiz, &self.regras_pasta);
+                    // a pasta-mae e conferida aqui, uma vez (o disco so nas subpastas diretas); sem
+                    // pasta (o Chat), nada
+                    let pasta_mae = !raiz.trim().is_empty() && crate::pastas::pasta_mae(raiz, &self.regras_pasta);
                     out.push(self.nova_pergunta(Pergunta::SessaoNova {
                         sessao_id: ev.sessao.clone(),
                         cwd: ev.cwd.clone(),
@@ -406,6 +462,10 @@ impl Motor {
         }
         let nome = chave_de_nome(s.nome.as_deref())?;
         let pasta = chave_de_pasta(&s.cwd);
+        // sem pasta (o Chat): cada conversa e uma so, sem heranca
+        if pasta.is_empty() {
+            return None;
+        }
         self.sessoes
             .values()
             .filter(|o| {
@@ -482,6 +542,24 @@ impl Motor {
         out
     }
 
+    /// A pasta onde a sessao esta agora (o `cwd` do ultimo evento; sem evento com pasta, onde ela
+    /// comecou). `cwd`: a pasta de inicio, se a sessao ja saiu do motor (a da pergunta).
+    pub fn pasta_de_agora<'a>(&'a self, sessao_id: &str, cwd: &'a str) -> &'a str {
+        let inicio = self.sessoes.get(sessao_id).map_or(cwd, |s| s.cwd.as_str());
+        self.pasta_agora.get(sessao_id).map_or(inicio, String::as_str)
+    }
+
+    /// As pastas do "Sempre que for na pasta" da sessao (`pastas_entre`), da de inicio a de agora.
+    /// `cwd`: a pasta de inicio, se a sessao ja saiu do motor (a da pergunta). O Chat: nenhuma.
+    pub fn pastas_da_sessao(&self, sessao_id: &str, cwd: &str) -> Vec<String> {
+        if super::e_sessao_do_chat(sessao_id) {
+            return vec![];
+        }
+        let inicio = self.sessoes.get(sessao_id).map_or(cwd, |s| s.cwd.as_str());
+        let perfil = std::env::var("USERPROFILE").ok();
+        pastas_entre(inicio, self.pasta_de_agora(sessao_id, cwd), perfil.as_deref(), &self.cfg.pastas_ignoradas)
+    }
+
     /// Avisos de ligada sozinha que valem em `agora`: a sessao segue no timer do aviso, com a
     /// mesma origem (movida a mao, o aviso sai).
     pub fn avisos_de_ligacao(&self, agora: Ms) -> Vec<(&Sessao, &LigadaSozinha)> {
@@ -518,7 +596,7 @@ mod testes {
         ]
     }
     fn ev(evento: &str, sessao: &str, cwd: &str, t: Ms) -> EventoHook {
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None, origem: None }
     }
     fn trechos(v: &[Mudanca]) -> Vec<Mudanca> {
         v.iter().filter(|m| matches!(m, Mudanca::Abriu { .. } | Mudanca::Fechou { .. })).cloned().collect()
@@ -538,6 +616,74 @@ mod testes {
         let s = &m.sessoes["s1"];
         assert_eq!(s.estado, EstadoSessao::EsperandoVoce);
         assert_eq!(s.terminou_em, Some(h(9, 8)));
+    }
+    #[test] fn a_sessao_guarda_a_primeira_origem_e_a_pasta_de_agora_so_em_memoria() {
+        let mut m = motor();
+        let com = |evento: &str, cwd: &str, t: Ms, origem: Option<&str>| EventoHook { origem: origem.map(str::to_string), ..ev(evento, "s1", cwd, t) };
+        m.evento(&com("SessionStart", "G:\\Empresa\\app", h(9, 0), None));
+        assert_eq!(m.sessoes["s1"].origem, None);
+        m.evento(&com("UserPromptSubmit", "G:\\Empresa\\app", h(9, 1), Some("")));
+        assert_eq!(m.sessoes["s1"].origem, None, "vazia não conta");
+        m.evento(&com("PostToolUse", "G:\\Empresa\\app\\web", h(9, 2), Some("claude-desktop")));
+        m.evento(&com("Stop", "G:\\Empresa\\app\\web\\src", h(9, 3), Some("cli")));
+        let s = &m.sessoes["s1"];
+        assert_eq!(s.origem.as_deref(), Some("claude-desktop"), "a primeira não vazia fica");
+        assert_eq!(s.cwd, "G:\\Empresa\\app", "o cwd gravado é onde ela começou");
+        assert_eq!(m.pasta_agora["s1"], "G:\\Empresa\\app\\web\\src");
+        // o evento do Chat traz a origem "chat"
+        m.sinais_do_chat(
+            &super::super::SinaisDoChat {
+                aba_do_chat: true,
+                aberta: Some(super::super::ChatAberto { id: "0a1b".into(), titulo: "Receita".into(), parando: true }),
+                rodando: vec![],
+                barra: true,
+                repetidos: vec![],
+            },
+            h(9, 4),
+        );
+        assert_eq!(m.sessoes["chat:0a1b"].origem.as_deref(), Some("chat"));
+        assert!(!m.pasta_agora.contains_key("chat:0a1b"), "o Chat não tem pasta");
+    }
+    #[test] fn pastas_entre_vao_da_de_inicio_ate_a_de_agora() {
+        let p = |ini: &str, agora: &str| pastas_entre(ini, agora, Some("C:\\Users\\voce"), &["G:\\pessoal".into()]);
+        assert_eq!(
+            p("D:\\Projetos", "D:\\Projetos\\cliente\\app"),
+            ["D:\\Projetos", "D:\\Projetos\\cliente", "D:\\Projetos\\cliente\\app"]
+        );
+        // a mesma pasta (com outra escrita): uma só
+        assert_eq!(p("D:\\Projetos\\app", "d:/projetos/app/"), ["D:\\Projetos\\app"]);
+        assert_eq!(p("D:\\Projetos\\app", ""), ["D:\\Projetos\\app"]);
+        // fora da de início: só as duas
+        assert_eq!(p("D:\\Projetos\\app", "E:\\Outra\\coisa"), ["D:\\Projetos\\app", "E:\\Outra\\coisa"]);
+        assert_eq!(p("D:\\Projetos\\app\\web", "D:\\Projetos\\app"), ["D:\\Projetos\\app\\web", "D:\\Projetos\\app"]);
+        // um worktree vira o projeto
+        assert_eq!(p("D:\\Projetos", "D:\\Projetos\\app\\.claude\\worktrees\\feat-1"), ["D:\\Projetos", "D:\\Projetos\\app"]);
+        assert_eq!(p("D:\\Projetos\\app", "D:\\Projetos\\app\\.claude\\worktrees\\feat-1"), ["D:\\Projetos\\app"]);
+        // as barras de quem veio
+        assert_eq!(p("D:/Projetos", "D:/Projetos/app"), ["D:/Projetos", "D:/Projetos/app"]);
+        // sem regra possível: o drive, a pasta do usuário e a que nunca conta ficam de fora
+        assert_eq!(p("D:\\", "D:\\Projetos\\app"), ["D:\\Projetos", "D:\\Projetos\\app"]);
+        assert_eq!(p("C:\\Users\\voce", "C:\\Users\\voce\\app"), ["C:\\Users\\voce\\app"]);
+        assert_eq!(p("G:\\", "G:\\pessoal\\notas"), Vec::<String>::new());
+        // revisão M7: um worktree dentro da pasta do usuário fica como está (a raiz é larga), e
+        // os níveis da `.claude` não entram
+        assert_eq!(p("C:\\Users\\voce", "C:\\Users\\voce\\.claude\\worktrees\\x"), Vec::<String>::new());
+        assert_eq!(p("C:\\Users\\voce\\app", "C:\\Users\\voce\\app\\.Claude\\outra"), ["C:\\Users\\voce\\app"]);
+        assert_eq!(p("D:\\Projetos\\.claude", "D:\\Projetos\\.claude"), Vec::<String>::new());
+        // sem pasta (o Chat): nenhuma
+        assert!(p("", "").is_empty());
+        assert!(p("  ", "D:\\x").is_empty());
+    }
+    #[test] fn pastas_da_sessao_usam_o_ultimo_cwd_e_o_chat_nao_tem() {
+        let mut m = motor();
+        m.evento(&ev("UserPromptSubmit", "s1", "G:\\Empresa", h(9, 0)));
+        assert_eq!(m.pastas_da_sessao("s1", ""), ["G:\\Empresa"]);
+        m.evento(&ev("PostToolUse", "s1", "G:\\Empresa\\Clientes\\Cliente D", h(9, 1)));
+        assert_eq!(m.pasta_de_agora("s1", ""), "G:\\Empresa\\Clientes\\Cliente D");
+        assert_eq!(m.pastas_da_sessao("s1", ""), ["G:\\Empresa", "G:\\Empresa\\Clientes", "G:\\Empresa\\Clientes\\Cliente D"]);
+        // a sessão que saiu do motor: pela pasta da pergunta
+        assert_eq!(m.pastas_da_sessao("sumiu", "G:\\Empresa\\x"), ["G:\\Empresa\\x"]);
+        assert!(m.pastas_da_sessao("chat:0a1b", "").is_empty());
     }
     #[test] fn raiz_do_projeto_tira_o_worktree() {
         assert_eq!(

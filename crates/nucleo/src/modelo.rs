@@ -301,6 +301,11 @@ pub struct Sessao {
     /// início" move só o que veio depois (o tempo de antes fica onde estava).
     #[serde(default)]
     pub desligada_em: Option<Ms>,
+    /// De onde a sessão veio (rodada 27, versão 10 do banco): o `CLAUDE_CODE_ENTRYPOINT` do hook
+    /// (`claude-desktop`, `cli`, `claude-vscode`…) ou `chat` (o Chat do app do Claude). A primeira
+    /// não vazia fica.
+    #[serde(default)]
+    pub origem: Option<String>,
 }
 
 /// Ajuste à mão do tempo de um timer num dia de trabalho (`dia` = AAAA-MM-DD): soma ao total do

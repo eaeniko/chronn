@@ -3,7 +3,8 @@
 **English** · [Português](README.pt-BR.md)
 
 Timers for your working time, on Windows. Press play yourself, or let Chronn count on its own
-while a connected app works in a folder linked to the timer (today: Claude Code).
+while a connected app works in a folder linked to the timer (today: Claude Code and Chat in the
+Claude app).
 
 > **Alpha.** Chronn is in early development: expect rough edges, and back up your data before
 > updating. Feedback is welcome in [Issues](../../issues).
@@ -21,7 +22,10 @@ while a connected app works in a folder linked to the timer (today: Claude Code)
 - A small dock, always in view, showing what is running.
 - Pauses by itself when you are away from the computer.
 - With Claude Code connected (hooks), each conversation counts in its folder's timer; a new
-  conversation asks which timer to use.
+  conversation asks which timer to use, showing its name, where it comes from and its folder.
+- Chat conversations in the Claude app count too, once linked to a timer: Chronn sees the open
+  conversation (reading and writing) and when Claude is answering. It keeps only the
+  conversation's code, never its title or messages.
 - Reset without deleting: the day's history stays.
 - A 1-minute tour, per-screen help and first-time tips.
 - English and Portuguese (Brazil), following Windows or chosen in Settings.

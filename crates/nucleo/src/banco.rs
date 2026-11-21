@@ -75,7 +75,7 @@ const COLUNAS_V5: [(&str, &str); 3] =
 pub const CHAVE_ENCERRADOS: &str = "encerrados";
 
 /// Versão do esquema que este código conhece.
-pub const VERSAO_ESQUEMA: i64 = 9;
+pub const VERSAO_ESQUEMA: i64 = 10;
 
 /// A marca do app no banco (rodada 18): o `PRAGMA application_id` com "CHRN", gravado na
 /// criação e na abertura de um banco sem marca (0). Um banco com outra marca fica como está. Não
@@ -90,6 +90,16 @@ fn marcar_application_id(conn: &Connection) -> Result<()> {
 
 /// Cor do primeiro espaço (o "Trabalho" da migração, o "Geral" do banco novo).
 pub const COR_ESPACO_PRIMEIRO: &str = "#5b8def";
+
+/// A versão 10 (rodada 27): `sessoes.origem`, de onde a sessão veio (o `CLAUDE_CODE_ENTRYPOINT`
+/// do hook, ou `chat`). Nula nas sessões de antes. Rodar de novo não muda nada; um app da versão 9
+/// abre o banco (a coluna fica de fora do que ele grava).
+fn migrar_v10(conn: &Connection) -> Result<()> {
+    if !tem_coluna(conn, "sessoes", "origem")? {
+        conn.execute_batch("ALTER TABLE sessoes ADD COLUMN origem TEXT;")?;
+    }
+    conn.execute_batch("PRAGMA user_version = 10;")
+}
 
 /// A versão 9 (rodada 20): os espaços, um nível acima dos grupos.
 /// - a tabela `espacos` (id, nome, cor, ordem, arquivado);
@@ -300,6 +310,7 @@ impl Banco {
             migrar_v7(&tx)?;
             migrar_v8(&tx)?;
             migrar_v9(&tx)?;
+            migrar_v10(&tx)?;
             tx.commit()?;
         }
         marcar_application_id(&conn)?;
@@ -1119,7 +1130,7 @@ impl Banco {
 
     pub fn sessoes_desde(&self, t: Ms) -> Result<Vec<Sessao>> {
         let mut st = self.conn.prepare(
-            "SELECT id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em
+            "SELECT id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em, origem
              FROM sessoes WHERE ultimo_evento >= ?1 ORDER BY ultimo_evento, id",
         )?;
         let v = st.query_map(params![t], |r| {
@@ -1138,6 +1149,7 @@ impl Banco {
                 criada_em: r.get(8)?,
                 ligacao: ligacao.as_deref().and_then(Ligacao::de_str),
                 desligada_em: r.get(10)?,
+                origem: r.get(11)?,
             })
         })?;
         v.collect()
@@ -1255,17 +1267,20 @@ fn movida_a_mao(conn: &Connection, sessao_id: &str, pela_regra: Option<i64>) -> 
     Ok(ao_desligar || em_dois)
 }
 
+/// Grava a sessão. Privacidade (rodada 27): o título de uma conversa do Chat fica só em memória
+/// (o `Sessao.nome` do motor); no banco, o nome dela é NULL.
 fn salvar_sessao_em(conn: &Connection, s: &Sessao) -> Result<()> {
+    let nome = if crate::motor::e_sessao_do_chat(&s.id) { None } else { s.nome.as_deref() };
     conn.execute(
-        "INSERT INTO sessoes (id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        "INSERT INTO sessoes (id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em, origem)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(id) DO UPDATE SET cwd=excluded.cwd, nome=excluded.nome, transcript=excluded.transcript,
             timer_id=excluded.timer_id, estado=excluded.estado, ultimo_evento=excluded.ultimo_evento,
             terminou_em=excluded.terminou_em, criada_em=excluded.criada_em, ligacao=excluded.ligacao,
-            desligada_em=excluded.desligada_em",
+            desligada_em=excluded.desligada_em, origem=excluded.origem",
         params![
-            s.id, s.cwd, s.nome, s.transcript, s.timer_id, s.estado.as_str(),
-            s.ultimo_evento, s.terminou_em, s.criada_em, s.ligacao.map(|l| l.as_str()), s.desligada_em
+            s.id, s.cwd, nome, s.transcript, s.timer_id, s.estado.as_str(),
+            s.ultimo_evento, s.terminou_em, s.criada_em, s.ligacao.map(|l| l.as_str()), s.desligada_em, s.origem
         ],
     )?;
     Ok(())
@@ -1282,7 +1297,7 @@ mod testes {
 
     fn sessao(id: &str, timer: Option<i64>) -> Sessao {
         Sessao { id: id.into(), cwd: "C:\\x".into(), nome: None, transcript: None, timer_id: timer,
-            estado: EstadoSessao::Trabalhando, ultimo_evento: h(9, 0), terminou_em: None, criada_em: h(9, 0), ligacao: None, desligada_em: None }
+            estado: EstadoSessao::Trabalhando, ultimo_evento: h(9, 0), terminou_em: None, criada_em: h(9, 0), ligacao: None, desligada_em: None, origem: None }
     }
 
     fn application_id(conn: &Connection) -> i32 {
@@ -1382,6 +1397,21 @@ mod testes {
         assert!(v.iter().all(|t| t.timer_id == Some(3)));
         let s = b.sessoes_desde(0).unwrap();
         assert_eq!(s[0].timer_id, Some(3));
+    }
+
+    #[test] fn o_banco_nao_grava_o_titulo_das_conversas_do_chat() {
+        let b = Banco::abrir_memoria().unwrap();
+        let chat = Sessao { cwd: String::new(), nome: Some("Receita de bolo".into()), ..sessao("chat:0a1b", None) };
+        let code = Sessao { nome: Some("Plano do app".into()), ..sessao("s1", None) };
+        b.aplicar(&[Mudanca::Sessao(chat.clone()), Mudanca::Sessao(code)]).unwrap();
+        b.salvar_sessao(&chat).unwrap();
+        let v = b.sessoes_desde(0).unwrap();
+        let nome = |id: &str| v.iter().find(|s| s.id == id).unwrap().nome.clone();
+        assert_eq!(nome("chat:0a1b"), None, "o título do Chat fica só em memória");
+        assert_eq!(nome("s1").as_deref(), Some("Plano do app"));
+        let gravados: i64 =
+            b.conn.query_row("SELECT COUNT(*) FROM sessoes WHERE nome LIKE '%Receita%'", [], |r| r.get(0)).unwrap();
+        assert_eq!(gravados, 0);
     }
 
     #[test] fn descartar_e_restaurar() {
@@ -1623,11 +1653,39 @@ mod testes {
         b.salvar_sessao(&s).unwrap();
         assert_eq!(b.sessoes_desde(0).unwrap().iter().find(|x| x.id == "s1").unwrap().desligada_em, Some(h(10, 0)));
     }
+    #[test] fn versao_10_grava_a_origem_da_sessao() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("w.db");
+        {
+            // um banco da versão 9, sem a coluna
+            let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
+            b.conn.execute_batch("ALTER TABLE sessoes DROP COLUMN origem; PRAGMA user_version = 9;").unwrap();
+            b.conn.execute_batch("INSERT INTO sessoes (id, cwd, nome, estado, ultimo_evento, criada_em) VALUES ('velha', 'C:\\x', 'Plano', 'parada', 100, 100);").unwrap();
+        }
+        let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
+        let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, VERSAO_ESQUEMA);
+        let velha = b.sessoes_desde(0).unwrap().into_iter().find(|x| x.id == "velha").unwrap();
+        assert_eq!((velha.origem, velha.nome.as_deref()), (None, Some("Plano")), "a de antes: sem origem, nada se perde");
+        let mut s = sessao("s1", None);
+        s.origem = Some("claude-desktop".into());
+        b.salvar_sessao(&s).unwrap();
+        let chat = Sessao { cwd: String::new(), origem: Some("chat".into()), ..sessao("chat:0a1b", None) };
+        b.salvar_sessao(&chat).unwrap();
+        let lidas = b.sessoes_desde(0).unwrap();
+        let origem = |id: &str| lidas.iter().find(|x| x.id == id).unwrap().origem.clone();
+        assert_eq!(origem("s1").as_deref(), Some("claude-desktop"));
+        assert_eq!(origem("chat:0a1b").as_deref(), Some("chat"));
+        // abrir de novo não muda nada
+        drop(b);
+        let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
+        assert_eq!(b.sessoes_desde(0).unwrap().iter().find(|x| x.id == "s1").unwrap().origem.as_deref(), Some("claude-desktop"));
+    }
     #[test] fn banco_novo_tem_versao_9_com_as_tres_atividades_e_o_espaco_geral() {
         let b = Banco::abrir_memoria().unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, VERSAO_ESQUEMA);
-        assert_eq!(v, 9);
+        assert_eq!(v, 10);
         let a = b.atividades().unwrap();
         assert_eq!(
             a.iter().map(|x| (x.id, x.nome.as_str(), x.arquivada)).collect::<Vec<_>>(),
@@ -1732,7 +1790,7 @@ mod testes {
         assert!(antes.len() > 25);
         let b = Banco::abrir_em(&p, ms_local(2026, 11, 18, 14, 0, F), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 9);
+        assert_eq!(v, 10);
         // todos os timers (o arquivado também) zerados no início de hoje: os números são os de hoje
         assert_eq!(b.zerados().unwrap().into_iter().collect::<Vec<_>>(), (1..=4).map(|t| (t, ms_local(2026, 11, 18, 0, 0, F))).collect::<Vec<_>>());
         assert_eq!(linhas_antigas(&b.conn), antes, "nenhuma linha antiga muda");
@@ -1780,7 +1838,7 @@ mod testes {
             }
             let b = Banco::abrir_em(&p, h(15, 30), F).unwrap();
             let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 9, "da versão {versao}");
+            assert_eq!(v, 10, "da versão {versao}");
             assert_eq!(b.zerados().unwrap()[&1], h(0, 0), "da versão {versao}: zerado no início de hoje");
             assert_eq!(b.atividades().unwrap().len(), 3);
             assert_eq!(b.trechos_entre(0, 10).unwrap().iter().map(|t| t.atividade_id).collect::<Vec<_>>(), [1, 1]);
@@ -1964,7 +2022,7 @@ mod testes {
         assert_eq!(copia, dir.join("antes-migracao-v8-20261120-0930.db"));
         let b = Banco::abrir_em(&p, ms_local(2026, 11, 20, 9, 30, F), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 9);
+        assert_eq!(v, 10);
         // um espaço, "Trabalho", com todos os grupos e timers (os arquivados também)
         assert_eq!(b.espacos().unwrap().iter().map(|e| (e.id, e.nome.as_str(), e.arquivado)).collect::<Vec<_>>(), [(1, "Trabalho", false)]);
         assert!(b.espacos_dos_grupos().unwrap().values().all(|e| *e == 1));
@@ -2102,7 +2160,7 @@ mod testes {
         assert_eq!(copia, dir.join("antes-migracao-v7-20261120-0930.db"));
         let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 9);
+        assert_eq!(v, 10);
         assert!(b.zerados_atividade().unwrap().is_empty(), "os números ficam os mesmos");
         assert_eq!(b.zerados().unwrap()[&t], h(8, 0));
         // rodar de novo não muda nada
@@ -2118,7 +2176,7 @@ mod testes {
         }
         let b = Banco::abrir_em(&p1, h(9, 0), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 9);
+        assert_eq!(v, 10);
         assert!(b.zerados_atividade().unwrap().is_empty());
     }
 

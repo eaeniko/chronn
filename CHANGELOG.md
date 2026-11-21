@@ -3,6 +3,26 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.5.0] - 2026-11-21
+
+### Added
+- Chat conversations in the Claude app now count, like Claude Code sessions: Chronn sees which
+  conversation is open, shows "reading" and "writing", and notices when Claude is answering (by
+  the "Stop response" button and the "Running" mark in the sidebar). Link a conversation to a
+  timer like any session. Chronn keeps only the conversation's code, never its title: after
+  Chronn restarts, a linked conversation shows as "Chat conversation" until you open it again.
+- The "Which timer should count it?" question is bigger and clearer: the session name, where it
+  comes from (Claude app, terminal, VS Code or Chat) and its folder, each with a label.
+
+### Changed
+- The main button links only this session. To make every new session in a folder count on its
+  own, tick "Always for this folder" and pick the folder, from where the session started to
+  where it is now.
+- "writing" shows only after you type something (the send button is active), not as soon as a
+  conversation opens.
+- The list of sessions to link shows the free ones first and the linked ones last, with where
+  each one comes from.
+
 ## [0.4.1] - 2026-11-20
 
 ### Changed

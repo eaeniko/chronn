@@ -477,6 +477,12 @@ pub struct PedidoLigar {
     pub cwd: Option<String>,
     pub timer_id: Option<i64>,
     pub com_novo: bool,
+    /// O "Sempre que for na pasta" da pergunta de sessão nova (rodada 27): marcado ou não, e a
+    /// pasta escolhida na lista. Nulos (o "Trocar", a página antiga): como antes.
+    #[serde(default)]
+    pub sempre: Option<bool>,
+    #[serde(default)]
+    pub pasta: Option<String>,
 }
 
 static LIGAR: Mutex<Option<PedidoLigar>> = Mutex::new(None);

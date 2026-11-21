@@ -3,7 +3,8 @@
 [English](README.md) · **Português**
 
 Timers para o seu tempo de trabalho, no Windows. Você dá play à mão, ou o Chronn conta sozinho
-enquanto um app conectado trabalha numa pasta ligada ao timer (hoje: Claude Code).
+enquanto um app conectado trabalha numa pasta ligada ao timer (hoje: Claude Code e o Chat do app
+do Claude).
 
 > **Alpha.** O Chronn está no começo: espere arestas e faça backup dos dados antes de atualizar.
 > Sugestões e problemas são bem-vindos em [Issues](../../issues).
@@ -20,7 +21,10 @@ enquanto um app conectado trabalha numa pasta ligada ao timer (hoje: Claude Code
 - Um dock pequeno, sempre à vista, com o que está rodando.
 - Pausa sozinho quando você fica longe do computador.
 - Com o Claude Code conectado (hooks), a conversa conta no timer da pasta dela; conversa nova
-  pergunta em qual timer contar.
+  pergunta em qual timer contar, com o nome, de onde veio e a pasta.
+- As conversas do Chat no app do Claude também contam, depois de ligadas a um timer: o Chronn vê a
+  conversa aberta (lendo e escrevendo) e quando o Claude está respondendo. Ele guarda só o código
+  da conversa, nunca o título nem as mensagens.
 - Zerar sem apagar: o histórico do dia fica.
 - Tour de 1 minuto, ajuda por tela e dicas na primeira vez.
 - Português (Brasil) e inglês, seguindo o Windows ou escolhido nos Ajustes.

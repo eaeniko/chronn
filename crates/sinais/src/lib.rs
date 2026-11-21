@@ -3,6 +3,8 @@
 //! app do Claude. Privacidade: títulos só são devolvidos ao chamador; nunca são logados.
 
 pub mod conversa;
+#[cfg(test)]
+mod sonda;
 #[cfg(windows)]
 pub mod uia;
 #[cfg(windows)]

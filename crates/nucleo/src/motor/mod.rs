@@ -15,11 +15,13 @@ use crate::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
 /// App reaberto em menos que isto (reinicio, atualizacao): os manuais seguem sem perguntar.
 pub const RETOMADA_MS: Ms = 2 * MIN;
 
+mod chat;
 mod claude;
 mod leitura;
 mod manual;
 
-pub use claude::{chave_de_pasta, pasta_larga, raiz_do_projeto, regra_da_pasta, regra_para, sugestao_de_pasta, LigadaSozinha, AVISO_LIGADA_MS, HERANCA_MS};
+pub use chat::{e_sessao_do_chat, sessao_do_chat, ChatAberto, SinaisDoChat, ORIGEM_CHAT, PREFIXO_CHAT};
+pub use claude::{chave_de_pasta, pasta_larga, pastas_entre, raiz_do_projeto, regra_da_pasta, regra_para, sugestao_de_pasta, LigadaSozinha, AVISO_LIGADA_MS, HERANCA_MS};
 pub use leitura::{
     Aberta, Conversa, JanelaEmUso, Troca, ESPERA_RECENTE_MS, NEUTRA_MAX_MS, NOME_MIN_NO_TITULO, SAIDAS_PARA_LIBERAR,
     TROCA_SUAVE_MS,
@@ -88,6 +90,15 @@ pub struct Motor {
     /// pausado". O tempo do pausado no dock recolhido conta dele. Sai no play, no ■ e na virada.
     /// Só em memória: ao reabrir o app, vale o fim do trecho (`snapshot::pausado_em`).
     pub pausado_desde: BTreeMap<i64, Ms>,
+    /// As sessões do Chat com o Claude trabalhando pela última amostra conclusiva dos sinais do
+    /// Chat (rodada 27): a próxima amostra compara com elas para gerar os eventos sintéticos. De
+    /// cada uma, a hora do último sinal conclusivo em que ela trabalhava e se veio uma amostra sem
+    /// sinal dela depois (o `Stop` de uma resposta que acabou fora da vista sai naquela hora).
+    pub chat_trabalhando: BTreeMap<String, chat::ChatVisto>,
+    /// A pasta de agora de cada sessão do Code (rodada 27): o `cwd` do último evento do hook. Só
+    /// em memória; o `Sessao.cwd` gravado segue sendo onde ela começou. A pergunta de sessão nova
+    /// oferece as pastas entre as duas para o "Sempre que for na pasta".
+    pub pasta_agora: BTreeMap<String, String>,
 }
 
 impl Motor {
@@ -119,6 +130,8 @@ impl Motor {
             ligadas_sozinhas: BTreeMap::new(),
             segundo_plano: BTreeMap::new(),
             pausado_desde: BTreeMap::new(),
+            chat_trabalhando: BTreeMap::new(),
+            pasta_agora: BTreeMap::new(),
         }
     }
 

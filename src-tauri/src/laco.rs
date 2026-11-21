@@ -1,14 +1,14 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 //! Laço de 5 s: fila dos hooks → motor, nomes das sessões, amostra do Windows (com a conversa
-//! aberta no app do Claude), tique.
+//! aberta no app do Claude e os sinais do Chat), tique.
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::time::Duration;
 
 use nucleo::claude_registros::titulo_da_sessao;
-use nucleo::motor::{Amostra, Conversa};
+use nucleo::motor::{Amostra, ChatAberto, Conversa, SinaisDoChat};
 use nucleo::tempo::Ms;
-use sinais::conversa::{e_app_do_claude, ConversaLida, LeitorConversa, LIMITE_CONSULTA};
+use sinais::conversa::{e_app_do_claude, ConversaLida, LeitorConversa, SinaisChat, LIMITE_CONSULTA};
 use sinais::JanelaInfo;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -39,7 +39,12 @@ pub fn amostra_de(
         // o elemento com foco só é consultado com a janela do Claude em foco
         let lida = ler_conversa(j.hwnd, j.em_foco);
         let escrevendo = lida.as_ref().is_some_and(|c| c.escrevendo);
-        (Conversa::App(lida.map(|c| c.titulo)), escrevendo)
+        let conversa = match lida {
+            // a conversa do Chat: o id do endereço e o título (rodada 27)
+            Some(ConversaLida { titulo, chat: Some(id), .. }) => Conversa::Chat { id, titulo },
+            lida => Conversa::App(lida.map(|c| c.titulo)),
+        };
+        (conversa, escrevendo)
     } else {
         (Conversa::PeloTitulo, false)
     };
@@ -53,6 +58,18 @@ pub fn amostra_de(
         neutra,
         em_foco: j.em_foco,
         reuniao_ativa: false,
+        chat: None,
+    }
+}
+
+/// Os sinais do Chat lidos na janela do app do Claude, para o motor (os títulos ficam em memória).
+pub fn sinais_para_o_motor(s: SinaisChat) -> SinaisDoChat {
+    SinaisDoChat {
+        aba_do_chat: s.aba_do_chat,
+        aberta: s.aberta.map(|a| ChatAberto { id: a.id, titulo: a.titulo, parando: a.parando }),
+        rodando: s.rodando,
+        barra: s.barra,
+        repetidos: s.repetidos,
     }
 }
 
@@ -151,6 +168,9 @@ pub fn iniciar(app: AppHandle) {
         let mut amostrador = sinais::Amostrador::novo();
         // a UI Automation roda numa thread própria e espera no máximo 300 ms por amostra
         let mut conversa = LeitorConversa::novo();
+        // os sinais do Chat (rodada 27): outra thread, o mesmo teto, a cada ciclo, com a janela do
+        // app do Claude em uso ou não
+        let mut chat = LeitorConversa::do_chat();
         let fila = fila::caminhos::fila();
         let backups = fila::caminhos::backups();
         let mut hook_conferido = std::time::Instant::now();
@@ -168,9 +188,16 @@ pub fn iniciar(app: AppHandle) {
                 let agora = agora_ms();
                 let (ocioso, janela) = amostrador.amostrar(agora);
                 let atrasadas = conversa.atrasadas;
-                let a = amostra_de(agora, ocioso, janela, |hwnd, em_foco| conversa.ler(hwnd, em_foco, LIMITE_CONSULTA));
+                let mut a = amostra_de(agora, ocioso, janela, |hwnd, em_foco| conversa.ler(hwnd, em_foco, LIMITE_CONSULTA));
                 if conversa.atrasadas != atrasadas {
                     log_debug!("worktimer: a consulta da conversa passou de 300 ms ({} vezes até agora)", conversa.atrasadas);
+                }
+                let atrasadas = chat.atrasadas;
+                a.chat = sinais::win::janela_do_app_do_claude()
+                    .and_then(|hwnd| chat.ler(hwnd, false, LIMITE_CONSULTA))
+                    .map(sinais_para_o_motor);
+                if chat.atrasadas != atrasadas {
+                    log_debug!("worktimer: os sinais do Chat passaram de 300 ms ({} vezes até agora)", chat.atrasadas);
                 }
                 let r = ciclo(&estado, &fila, a);
                 // backup a cada 6 h com o app aberto
@@ -320,17 +347,21 @@ mod testes {
         let outro_pid = std::process::id() + 1;
         let lida = |hwnd: isize, em_foco: bool| {
             assert!(em_foco, "a janela em foco vai junto");
-            Some(ConversaLida { titulo: format!("conversa da janela {hwnd}"), escrevendo: false })
+            Some(ConversaLida { titulo: format!("conversa da janela {hwnd}"), escrevendo: false, chat: None })
         };
         let a = amostra_de(h(9, 0), 1_000, janela("claude", "Chrome_WidgetWin_1", outro_pid), lida);
         assert_eq!(a.conversa, Conversa::App(Some("conversa da janela 42".into())));
         assert!(!a.neutra && a.em_foco && !a.escrevendo);
         // o foco na caixa de mensagem da conversa: a mesma consulta diz "escrevendo"
-        let escrevendo = |_: isize, _: bool| Some(ConversaLida { titulo: "x".into(), escrevendo: true });
+        let escrevendo = |_: isize, _: bool| Some(ConversaLida { titulo: "x".into(), escrevendo: true, chat: None });
         let a = amostra_de(h(9, 0), 1_000, janela("claude", "Chrome_WidgetWin_1", outro_pid), escrevendo);
         assert!(a.escrevendo);
         let a = amostra_de(h(9, 0), 1_000, janela("claude", "Chrome_WidgetWin_1", outro_pid), |_, _| None);
         assert_eq!((a.conversa, a.escrevendo), (Conversa::App(None), false));
+        // a conversa do Chat: o id e o título
+        let chat = |_: isize, _: bool| Some(ConversaLida { titulo: "Receita".into(), escrevendo: true, chat: Some("0a1b".into()) });
+        let a = amostra_de(h(9, 0), 1_000, janela("claude", "Chrome_WidgetWin_1", outro_pid), chat);
+        assert_eq!((a.conversa, a.escrevendo), (Conversa::Chat { id: "0a1b".into(), titulo: "Receita".into() }, true));
         // terminal e VS Code: pelo título, sem UI Automation
         let nunca = |_: isize, _: bool| -> Option<ConversaLida> { panic!("não devia consultar") };
         let a = amostra_de(h(9, 0), 1_000, janela("windowsterminal", "CASCADIA_HOSTING_WINDOW_CLASS", outro_pid), nunca);
@@ -389,5 +420,39 @@ mod testes {
         assert!(s.escrevendo);
         assert_eq!(s.grupos[0].timers[0].situacao.as_deref(), Some("escrevendo"));
         assert_eq!(n.banco.trechos_entre(h(0, 0), h(23, 0)).unwrap().iter().filter(|x| x.origem == Origem::Leitura).count(), 1);
+    }
+
+    #[test]
+    fn ciclo_conta_o_chat_pelos_sinais_sem_gravar_o_titulo() {
+        use sinais::conversa::ChatAberto as Lido;
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("eventos.jsonl");
+        let e = estado(h(9, 0));
+        let sinais = |parando: bool, rodando: &[&str]| {
+            Some(sinais_para_o_motor(SinaisChat {
+                aba_do_chat: true,
+                aberta: Some(Lido { id: "0a1b".into(), titulo: "Receita de bolo".into(), parando }),
+                rodando: rodando.iter().map(|t| t.to_string()).collect(),
+                barra: true,
+                repetidos: vec![],
+            }))
+        };
+        // o Claude responde no Chat, com a janela fora de uso: a sessão nasce e pergunta
+        assert!(ciclo(&e, &f, Amostra { chat: sinais(true, &["Receita de bolo"]), ..am(h(9, 0), 0) }).unwrap());
+        {
+            let n = trava(&e);
+            let s = &n.motor.sessoes["chat:0a1b"];
+            assert_eq!((s.estado, s.nome.as_deref()), (nucleo::modelo::EstadoSessao::Trabalhando, Some("Receita de bolo")));
+            assert_eq!(n.motor.perguntas.len(), 1);
+            assert_eq!(n.banco.sessoes_desde(0).unwrap()[0].nome, None, "o título fica só em memória");
+            assert_eq!(n.banco.abertos().unwrap().len(), 1, "o trecho do Claude");
+        }
+        // sem sinal (sem a janela): nada muda
+        assert!(!ciclo(&e, &f, am(h(9, 1), 0)).unwrap());
+        // a resposta acabou
+        assert!(ciclo(&e, &f, Amostra { chat: sinais(false, &[]), ..am(h(9, 2), 0) }).unwrap());
+        let n = trava(&e);
+        assert!(n.banco.abertos().unwrap().is_empty());
+        assert_eq!(n.motor.sessoes["chat:0a1b"].estado, nucleo::modelo::EstadoSessao::EsperandoVoce);
     }
 }

@@ -477,7 +477,9 @@ export function controles(timer, agora = Date.now()) {
 /**
  * Botões de uma pergunta do núcleo. O primeiro é o destacado. "outro" ("Outro timer…" /
  * "Escolher timer…") abre a lista de timers e "novo" ("+ Novo timer…") abre o "Novo timer" na
- * janela principal: os dois ficam na página, nunca vão ao núcleo como resposta.
+ * janela principal: os dois ficam na página, nunca vão ao núcleo como resposta. Na de sessão
+ * nova (a faixa da janela principal, opção A), os dois levam o "Sempre que for na pasta"
+ * desmarcado (`data-sempre="0"`), como o dock.
  * Os botões ficam numa grade de duas colunas iguais. Com dois, um ao lado do outro; com mais, o
  * destacado ocupa a linha dele, os outros vão aos pares e o que sobrar sozinho ocupa a linha toda
  * (`largo`). O rótulo que não couber corta com reticências e fica inteiro na dica.
@@ -491,7 +493,8 @@ export function opcoesDaPergunta(p, classe = '') {
       const attrs = `${c ? ` class="${c}"` : ''} title="${esc(rotulo)}"`;
       if (valor === 'outro' || valor === 'novo') {
         const acao = valor === 'outro' ? 'outro' : 'novo-timer';
-        return `<button${attrs} data-acao="${acao}" data-sessao="${esc(p.sessao_id ?? '')}" data-pergunta="${p.id}">${esc(rotulo)}</button>`;
+        const sempre = p.tipo === 'sessao_nova' ? ' data-sempre="0"' : '';
+        return `<button${attrs} data-acao="${acao}" data-sessao="${esc(p.sessao_id ?? '')}" data-pergunta="${p.id}"${sempre}>${esc(rotulo)}</button>`;
       }
       return `<button${attrs} data-acao="responder" data-pergunta="${p.id}" data-valor="${esc(valor)}">${esc(rotulo)}</button>`;
     })
@@ -513,19 +516,146 @@ export function pedidoDeLigar(d, aviso = null) {
     cwd: aviso?.cwd ?? null,
     timer_id: aviso?.timer_id ?? null,
     com_novo: pergunta !== null,
+    // o "Sempre que for na pasta" da pergunta de sessão nova (rodada 27)
+    ...sempreDoBotao(d),
   };
 }
 
 /**
- * Texto de uma pergunta do núcleo. A de sessão nova mostra a pasta numa linha dela, cortada com
- * reticências se não couber, e o caminho inteiro na dica.
+ * O "Sempre que for na pasta" que um botão da pergunta de sessão nova leva (`data-sempre` e
+ * `data-pasta`): `{ sempre, pasta }`; fora dela, os dois nulos (como antes).
+ */
+export function sempreDoBotao(d) {
+  if (d?.sempre !== '1' && d?.sempre !== '0') return { sempre: null, pasta: null };
+  const sempre = d.sempre === '1';
+  return { sempre, pasta: sempre && d.pasta ? d.pasta : null };
+}
+
+/**
+ * Texto de uma pergunta do núcleo (a faixa da janela principal). A de sessão nova mostra a pasta
+ * numa linha dela, cortada com reticências se não couber, e o caminho inteiro na dica (o Chat não
+ * tem pasta).
  */
 export function textoDaPergunta(p) {
-  if (p.tipo === 'sessao_nova' && p.pasta) {
-    return `<div class="ask-t">${esc(TEXTOS.sessaoNovaPergunta)}</div><div class="ask-pasta" title="${esc(p.pasta)}">${esc(p.pasta_curta || p.pasta)}</div>`;
+  if (p.tipo === 'sessao_nova') {
+    const pasta = p.pasta ? `<div class="ask-pasta" title="${esc(p.pasta)}">${esc(p.pasta_curta || p.pasta)}</div>` : '';
+    return `<div class="ask-t">${esc(TEXTOS.sessaoNovaPergunta)}</div>${pasta}`;
   }
   return `<div class="ask-t">${esc(p.texto)}</div>`;
 }
+
+// ---- a pergunta de sessão nova no dock (rodada 27, opção A) ----
+
+/**
+ * O "Sempre que for na pasta" de cada pergunta (pelo id): `{ sempre, pasta }`. Fica na página,
+ * porque o dock se redesenha a cada estado; a caixa começa desmarcada e a pasta, na de agora.
+ */
+const escolhas = new Map();
+
+/**
+ * A escolha de agora da pergunta: `{ sempre, pasta }` (`pasta`: o item da lista escolhido, ou
+ * nulo sem lista). Uma pasta que saiu da lista volta para a de agora.
+ */
+export function escolhaDaPergunta(p) {
+  const e = escolhas.get(p.id) ?? { sempre: false, pasta: null };
+  const pastas = p.pastas ?? [];
+  const pasta = pastas.find((x) => x.pasta === e.pasta) ?? pastas.find((x) => x.agora) ?? pastas[pastas.length - 1] ?? null;
+  return { sempre: Boolean(e.sempre && pasta), pasta };
+}
+
+/**
+ * Trata a mudança da caixa (`data-pg-sempre`) ou da pasta (`data-pg-pasta`) de uma pergunta:
+ * guarda a escolha e devolve se era dela (quem chama redesenha). Ao marcar a caixa, a pasta que
+ * estava escolhida (`data-pasta` da caixa) fica fixa: ela não pula com a pasta de agora, que
+ * muda a cada evento do hook.
+ */
+export function mudarEscolha(alvo) {
+  const id = Number(alvo?.dataset?.pergunta);
+  if (!Number.isFinite(id) || (alvo.dataset.pgSempre === undefined && alvo.dataset.pgPasta === undefined)) return false;
+  const e = { sempre: false, pasta: null, ...escolhas.get(id) };
+  if (alvo.dataset.pgSempre !== undefined) {
+    e.sempre = Boolean(alvo.checked);
+    if (e.sempre && !e.pasta && alvo.dataset.pasta) e.pasta = alvo.dataset.pasta;
+  } else if (alvo.checked) e.pasta = alvo.value;
+  escolhas.set(id, e);
+  return true;
+}
+
+/** Esquece as escolhas das perguntas que já saíram (`ids`: as de agora). */
+export function esquecerEscolhas(ids) {
+  for (const id of escolhas.keys()) if (!ids.includes(id)) escolhas.delete(id);
+}
+
+/** "onde começou · onde está agora": as marcas de uma pasta da lista. */
+const marcasDaPasta = (x) =>
+  [x.comecou ? TEXTOS.ondeComecou : null, x.agora ? TEXTOS.ondeEstaAgora : null].filter(Boolean).join(' · ');
+
+/**
+ * A pergunta "Em qual timer contar?" de uma sessão nova (opção A, aprovada em 21/11): em cima,
+ * pequeno, "Sessão nova do Claude"; embaixo, maior, a pergunta; um bloco com as linhas Sessão (o
+ * nome em destaque), Vem de (a origem) e Pasta (a de agora, curta, com o caminho inteiro na
+ * dica; o Chat não tem). Os botões: o principal ("Contar em X" com "só esta sessão", ou
+ * "Escolher o timer…" sem sugestão), "Outro timer…" (só com sugestão), "+ Novo timer…" e o "Não
+ * contar" discreto. Embaixo, separado por uma linha (o Chat não tem): a caixa "Sempre que for na
+ * pasta", desmarcada, e, marcada, a lista das pastas da sessão (da onde começou até a de agora).
+ * Com a caixa marcada, o principal responde `ligar:<t>:pasta:<caminho>` e os outros levam a pasta.
+ */
+export function perguntaSessaoNova(p) {
+  const { sempre, pasta } = escolhaDaPergunta(p);
+  const pastas = p.pastas ?? [];
+  const nome = p.sessao_nome ? esc(p.sessao_nome) : `<i>${esc(TEXTOS.semNomeAinda)}</i>`;
+  const origem = TEXTOS.origemDaSessao(p.origem);
+  const linhas = [
+    `<div class="sn-l"><dt>${esc(TEXTOS.rotuloSessao)}</dt><dd class="sn-nome">${nome}</dd></div>`,
+    origem ? `<div class="sn-l"><dt>${esc(TEXTOS.rotuloVemDe)}</dt><dd>${esc(origem)}</dd></div>` : '',
+    p.pasta
+      ? `<div class="sn-l"><dt>${esc(TEXTOS.rotuloPasta)}</dt><dd class="sn-pasta mono" title="${esc(p.pasta)}">${esc(p.pasta_curta || p.pasta)}</dd></div>`
+      : '',
+  ].join('');
+  // o que os botões levam do "Sempre que for na pasta" (só com a lista)
+  const leva = pastas.length ? ` data-sempre="${sempre ? 1 : 0}"${sempre ? ` data-pasta="${esc(pasta.pasta)}"` : ''}` : '';
+  const sessao = esc(p.sessao_id ?? '');
+  const botao = (valor, rotulo, classe = '', sub = '') => {
+    const c = classe ? ` class="${classe}"` : '';
+    const corpo = sub ? `<span class="sn-bt">${esc(rotulo)}</span><small>${esc(sub)}</small>` : esc(rotulo);
+    const dica = ` title="${esc(sub ? `${rotulo} · ${sub}` : rotulo)}"`;
+    if (valor === 'outro' || valor === 'novo') {
+      const acao = valor === 'outro' ? 'outro' : 'novo-timer';
+      return `<button${c}${dica} data-acao="${acao}" data-sessao="${sessao}" data-pergunta="${p.id}"${leva}>${corpo}</button>`;
+    }
+    const v = sempre && valor.startsWith('ligar:') ? `${valor}:pasta:${pasta.pasta}` : valor;
+    return `<button${c}${dica} data-acao="responder" data-pergunta="${p.id}" data-valor="${esc(v)}">${corpo}</button>`;
+  };
+  const [principal, ...resto] = p.opcoes;
+  const ligar = principal?.[0]?.startsWith('ligar:');
+  const meio = resto.filter(([v]) => v !== 'nao');
+  const nao = resto.find(([v]) => v === 'nao');
+  const botoes =
+    (principal ? botao(principal[0], principal[1], 'y largo sn-principal', ligar ? (sempre ? TEXTOS.estaEProximas : TEXTOS.soEstaSessao) : '') : '') +
+    meio.map(([v, r], i) => botao(v, r, meio.length === 1 || (meio.length % 2 === 1 && i === meio.length - 1) ? 'largo' : '')).join('') +
+    (nao ? botao(nao[0], nao[1], 'largo sn-nao') : '');
+  const lista = sempre
+    ? `<div class="sn-pastas" role="radiogroup" aria-label="${esc(TEXTOS.pastasDaRegra)}">${pastas
+        .map(
+          (x) =>
+            `<label class="sn-pi"><input type="radio" name="sn-pasta-${p.id}" value="${esc(x.pasta)}" data-pg-pasta data-pergunta="${p.id}"${x.pasta === pasta.pasta ? ' checked' : ''}><span class="mono" title="${esc(x.pasta)}">${esc(x.curta || x.pasta)}</span>${marcasDaPasta(x) ? `<small>${esc(marcasDaPasta(x))}</small>` : ''}</label>`,
+        )
+        .join('')}</div>`
+    : '';
+  const deCima = sempre && pastas.length > 1 && pasta.pasta === pastas[0].pasta;
+  const rodape = pastas.length
+    ? `<div class="sn-sempre" data-tauri-drag-region="false">
+<label class="sn-caixa"><input type="checkbox" data-pg-sempre data-pergunta="${p.id}" data-pasta="${esc(pasta.pasta)}"${sempre ? ' checked' : ''}><span>${esc(TEXTOS.sempreQueForNaPasta)}</span></label>${lista}
+<small class="sn-ajuda">${esc(TEXTOS.ajudaSempreNaPasta)}${deCima ? ` <b>${esc(TEXTOS.ajudaPastaDeCima)}</b>` : ''}</small></div>`
+    : '';
+  return `<div class="sn-sobre">${esc(TEXTOS.sessaoNovaSobre)}</div><div class="sn-titulo">${esc(TEXTOS.emQualTimer)}</div><dl class="sn-info">${linhas}</dl><div class="o sn-o">${botoes}</div>${rodape}`;
+}
+
+/**
+ * Uma pergunta inteira no dock: a de sessão nova pelo desenho novo (rodada 27); as outras, o
+ * texto e os botões de sempre.
+ */
+export const htmlDaPergunta = (p) => (p.tipo === 'sessao_nova' ? perguntaSessaoNova(p) : `${textoDaPergunta(p)}${opcoesDaPergunta(p)}`);
 
 /** O estado de uma sessão na tela ("trabalhando", "esperando você", "parada"). */
 export const estadoDaSessao = (estado) => TEXTOS.estadoSessao(estado);

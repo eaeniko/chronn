@@ -1,4 +1,5 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
+use super::chat::SinaisDoChat;
 use super::leitura::Conversa;
 use super::Motor;
 use crate::modelo::{EstadoSessao, MotivoFim, Mudanca, Origem, Pergunta, TrechoAberto};
@@ -35,6 +36,9 @@ pub struct Amostra {
     pub em_foco: bool,
     /// So sera ligado no Plano 2.
     pub reuniao_ativa: bool,
+    /// Os sinais do Chat da janela do app do Claude, em uso ou nao (rodada 27); `None`: nao sei
+    /// (sem a janela, sem resposta no teto ou com falha).
+    pub chat: Option<SinaisDoChat>,
 }
 
 impl Motor {
@@ -308,7 +312,20 @@ impl Motor {
     }
 
     pub fn amostra(&mut self, a: &Amostra) -> Vec<Mudanca> {
-        let mut out = vec![];
+        // O Chat (rodada 27): os eventos sinteticos dos sinais vem antes, como os dos hooks (lidos
+        // da fila antes da amostra); a conversa do Chat aberta passa a ser conhecida antes da leitura.
+        // sem os sinais ("não sei": a janela fechada, a consulta atrasada), nada muda, mas a
+        // lacuna fica anotada
+        let mut out = match &a.chat {
+            Some(s) => self.sinais_do_chat(s, a.t),
+            None => {
+                self.sem_sinais_do_chat();
+                vec![]
+            }
+        };
+        if let Conversa::Chat { id, titulo } = &a.conversa {
+            out.extend(self.conhecer_chat(id, titulo, a.t));
+        }
         let onde = self.onde_da_amostra(a);
         let anterior = self.ultima_amostra;
         self.ultima_amostra = Some(a.t);
@@ -537,7 +554,7 @@ mod testes {
     #[test] fn pausar_bloqueia_sessoes_do_timer() {
         use crate::modelo::{EstadoSessao, Sessao};
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
-        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "x".into(), nome: None, transcript: None, timer_id: Some(1), estado: EstadoSessao::Trabalhando, ultimo_evento: h(8, 0), terminou_em: None, criada_em: h(8, 0), ligacao: None, desligada_em: None });
+        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "x".into(), nome: None, transcript: None, timer_id: Some(1), estado: EstadoSessao::Trabalhando, ultimo_evento: h(8, 0), terminou_em: None, criada_em: h(8, 0), ligacao: None, desligada_em: None, origem: None });
         m.pausar(1, h(9, 0));
         assert!(m.bloqueadas.contains_key("s1"));
     }
@@ -590,10 +607,10 @@ mod testes {
         m.abertos.iter().filter(|t| t.origem == Origem::Manual && t.timer_id == Some(id)).map(|t| t.atividade_id).collect()
     }
     fn com_sessao(m: &mut Motor, timer: i64) {
-        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "G:\\Cliente A".into(), nome: None, transcript: None, timer_id: Some(timer), estado: EstadoSessao::EsperandoVoce, ultimo_evento: h(8, 0), terminou_em: Some(h(8, 0)), criada_em: h(8, 0), ligacao: None, desligada_em: None });
+        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "G:\\Cliente A".into(), nome: None, transcript: None, timer_id: Some(timer), estado: EstadoSessao::EsperandoVoce, ultimo_evento: h(8, 0), terminou_em: Some(h(8, 0)), criada_em: h(8, 0), ligacao: None, desligada_em: None, origem: None });
     }
     fn prompt(m: &mut Motor, t: Ms) -> Vec<Mudanca> {
-        m.evento(&EventoHook { t, evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None })
+        m.evento(&EventoHook { t, evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None, origem: None })
     }
 
     #[test] fn play_usa_a_atividade_padrao_do_timer() {

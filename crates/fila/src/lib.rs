@@ -15,6 +15,20 @@ pub struct EventoHook {
     pub transcript: Option<String>,
     #[serde(default)]
     pub notificacao: Option<String>,
+    /// De onde a sessão veio (rodada 27): o `CLAUDE_CODE_ENTRYPOINT` que o hook herda do Claude
+    /// Code (`claude-desktop`, `cli`, `claude-vscode`…), ou `chat` nos eventos do Chat.
+    #[serde(default)]
+    pub origem: Option<String>,
+}
+
+/// A origem que vai no evento: até 32 caracteres de `[a-z0-9_-]` (outro valor, ou vazio, fica de
+/// fora).
+pub fn origem_valida(v: Option<&str>) -> Option<String> {
+    let v = v?.trim();
+    let ok = !v.is_empty()
+        && v.len() <= 32
+        && v.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    ok.then(|| v.to_string())
 }
 
 fn normaliza(s: &str) -> String {
@@ -30,10 +44,13 @@ pub fn pasta_ignorada(cwd: &str, ignoradas: &[String]) -> bool {
     })
 }
 
+/// A linha da fila do evento do hook. `origem`: o `CLAUDE_CODE_ENTRYPOINT` do processo do hook
+/// (conferido por `origem_valida`).
 pub fn linha_do_evento(
     entrada: &serde_json::Value,
     agora: i64,
     ignoradas: &[String],
+    origem: Option<&str>,
 ) -> Option<String> {
     let texto = |k: &str| entrada.get(k).and_then(|v| v.as_str()).map(str::to_string);
     let evento = texto("hook_event_name").filter(|s| !s.is_empty())?;
@@ -49,6 +66,7 @@ pub fn linha_do_evento(
         cwd,
         transcript: texto("transcript_path"),
         notificacao: texto("notification_type"),
+        origem: origem_valida(origem),
     };
     let mut l = serde_json::to_string(&ev).ok()?;
     l.push('\n');
@@ -127,16 +145,37 @@ mod testes {
     #[test]
     fn linha_tem_campos_e_nao_tem_prompt() {
         let e = serde_json::json!({"hook_event_name":"UserPromptSubmit","session_id":"s1","cwd":"G:\\Empresa\\Projeto","transcript_path":"C:\\x.jsonl","prompt":"segredo do cliente"});
-        let l = linha_do_evento(&e, 1000, &[]).unwrap();
+        let l = linha_do_evento(&e, 1000, &[], None).unwrap();
         assert!(!l.contains("segredo"));
         let ev: EventoHook = serde_json::from_str(l.trim()).unwrap();
         assert_eq!((ev.t, ev.evento.as_str(), ev.sessao.as_str()), (1000, "UserPromptSubmit", "s1"));
+        assert_eq!(ev.origem, None);
+    }
+
+    #[test]
+    fn a_origem_vai_no_evento_so_se_for_curta_e_simples() {
+        let e = serde_json::json!({"hook_event_name":"Stop","session_id":"s1","cwd":"G:\\Projeto"});
+        let origem = |o: Option<&str>| -> Option<String> {
+            let l = linha_do_evento(&e, 1, &[], o).unwrap();
+            serde_json::from_str::<EventoHook>(l.trim()).unwrap().origem
+        };
+        assert_eq!(origem(Some("claude-desktop")).as_deref(), Some("claude-desktop"));
+        assert_eq!(origem(Some("cli")).as_deref(), Some("cli"));
+        assert_eq!(origem(Some("sdk_ts-2")).as_deref(), Some("sdk_ts-2"));
+        assert_eq!(origem(Some(&"a".repeat(32))).map(|o| o.len()), Some(32));
+        for ruim in ["", "  ", "CLI", "claude desktop", "c:\\x", &"a".repeat(33), "café"] {
+            assert_eq!(origem(Some(ruim)), None, "{ruim:?}");
+        }
+        assert_eq!(origem(None), None);
+        // uma linha antiga, sem a origem, ainda é lida
+        let velha: EventoHook = serde_json::from_str(linha(1).trim()).unwrap();
+        assert_eq!(velha.origem, None);
     }
 
     #[test]
     fn pasta_ignorada_descarta() {
         let e = serde_json::json!({"hook_event_name":"Stop","session_id":"s9","cwd":"G:\\pessoal\\notas"});
-        assert_eq!(linha_do_evento(&e, 1, &["g:/pessoal".into()]), None);
+        assert_eq!(linha_do_evento(&e, 1, &["g:/pessoal".into()], Some("cli")), None);
     }
 
     #[test]

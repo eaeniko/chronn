@@ -3,6 +3,7 @@
 //! sessao aberta, enquanto ela nao trabalha. A conversa aberta e reconhecida pelo titulo: no app
 //! do Claude, pelo `Document` da UI Automation; nos outros programas, pelo titulo da janela.
 //! Privacidade: titulos so ficam em memoria, para comparar.
+use super::chat::{e_sessao_do_chat, sessao_do_chat};
 use super::manual::Amostra;
 use super::Motor;
 use crate::modelo::{EstadoSessao, MotivoFim, Mudanca, Origem, Sessao, TrechoAberto};
@@ -27,6 +28,9 @@ pub enum Conversa {
     /// App do Claude: o titulo da conversa aberta, lido pela UI Automation. `None` e "nao sei":
     /// a consulta falhou, passou do limite ou nao achou conversa.
     App(Option<String>),
+    /// App do Claude, uma conversa do Chat (rodada 27): o id (do endereco) e o titulo. A sessao e
+    /// achada pelo id (`chat:<id>`), nao pelo nome.
+    Chat { id: String, titulo: String },
 }
 
 /// O que a leitura usa da janela em uso.
@@ -135,14 +139,24 @@ impl Motor {
     /// Conversa aberta numa janela do Claude. No app, o titulo lido e igual ao nome da sessao (sem
     /// diferenciar maiusculas, sem espacos nas pontas); nos outros programas, o titulo da janela
     /// contem o nome (de pelo menos `NOME_MIN_NO_TITULO` letras), o mais longo vencendo. Nome de
-    /// sessoes de timers diferentes e ambiguo: "nao sei" (melhor faltar do que sobrar).
+    /// sessoes de timers diferentes e ambiguo: "nao sei" (melhor faltar do que sobrar). A conversa
+    /// do Chat e achada pelo id; as sessoes do Chat nao entram na busca pelo nome.
     pub fn sessao_aberta(&self, j: &JanelaEmUso) -> Aberta {
+        let do_code = |s: &&Sessao| !e_sessao_do_chat(&s.id);
         match &j.conversa {
             Conversa::App(None) => Aberta::NaoSei,
+            Conversa::Chat { id, .. } => {
+                let id = sessao_do_chat(id);
+                if self.sessoes.contains_key(&id) { Aberta::Sessao(id) } else { Aberta::Desconhecida }
+            }
             Conversa::App(Some(titulo)) => {
                 let t = titulo.trim().to_lowercase();
-                let iguais: Vec<&Sessao> =
-                    self.sessoes.values().filter(|s| nome_de(s).is_some_and(|n| n.to_lowercase() == t)).collect();
+                let iguais: Vec<&Sessao> = self
+                    .sessoes
+                    .values()
+                    .filter(do_code)
+                    .filter(|s| nome_de(s).is_some_and(|n| n.to_lowercase() == t))
+                    .collect();
                 if iguais.is_empty() { Aberta::Desconhecida } else { uma_so(&iguais) }
             }
             Conversa::PeloTitulo => {
@@ -150,6 +164,7 @@ impl Motor {
                 let contidas: Vec<(usize, &Sessao)> = self
                     .sessoes
                     .values()
+                    .filter(do_code)
                     .filter_map(|s| {
                         let n = nome_de(s)?;
                         let letras = n.chars().count();
@@ -448,7 +463,7 @@ impl Motor {
     /// janelas do app nao mudam nada.
     fn etiqueta_na_amostra(&mut self, a: &Amostra, nova: Option<&Option<String>>) {
         if let Some(nova) = nova {
-            let escreve = a.escrevendo && matches!(a.conversa, Conversa::App(_)) && nova.is_some();
+            let escreve = a.escrevendo && matches!(a.conversa, Conversa::App(_) | Conversa::Chat { .. }) && nova.is_some();
             if escreve == self.escrevendo {
                 self.escrevendo_desde = None;
             } else if self.escrevendo_desde.is_none() {
@@ -504,7 +519,7 @@ mod testes {
     }
     fn ev(evento: &str, sessao: &str, t: Ms) -> EventoHook {
         let cwd = format!("G:\\{sessao}");
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd, transcript: None, notificacao: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd, transcript: None, notificacao: None, origem: None }
     }
     /// Nome das sessoes de teste (o custom-title do transcript).
     fn nome(s: &str) -> String { format!("Conversa {s}") }

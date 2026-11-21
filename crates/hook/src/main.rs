@@ -18,7 +18,10 @@ fn executar() -> Option<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_millis() as i64;
-    let linha = fila::linha_do_evento(&entrada, agora, &ignoradas)?;
+    // de onde a sessão veio (o app do Claude, o terminal, o VS Code…): o hook herda a variável do
+    // Claude Code (rodada 27)
+    let origem = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+    let linha = fila::linha_do_evento(&entrada, agora, &ignoradas, origem.as_deref())?;
     let caminho = fila::caminhos::fila();
     std::fs::create_dir_all(caminho.parent()?).ok()?;
     let mut f = std::fs::OpenOptions::new()

@@ -1,7 +1,10 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 //! Conversa aberta no app do Claude. A UI Automation da janela do app tem um `Document` por
 //! conversa à vista, com o Name `"<título da sessão> - Claude Code"`; o título é o mesmo nome
-//! que o app guarda por sessão. Privacidade: os títulos só vão para o chamador comparar.
+//! que o app guarda por sessão. No Chat (rodada 27), o Name é `"<título> - Claude"` e o endereço
+//! (o `Value` do `Document`) é `https://claude.ai/chat/<id>`. Privacidade: os títulos só vão para
+//! o chamador comparar, em memória; o `Value` só é pedido de um `Document` (num campo, seria o
+//! texto).
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -11,6 +14,17 @@ use crate::JanelaInfo;
 
 /// Final do Name do `Document` de uma conversa do Claude Code no app do Claude.
 pub const SUFIXO: &str = " - Claude Code";
+/// Final do Name do `Document` de uma página do Chat do app do Claude (rodada 27).
+pub const SUFIXO_CHAT: &str = " - Claude";
+/// Começo do endereço de uma conversa do Chat (host exato).
+pub const ENDERECO_CHAT: &str = "https://claude.ai/chat/";
+/// Começo do endereço de qualquer página do app do Claude (host exato): sem ele, um `Document`
+/// "… - Claude" não é a aba do Chat (uma prévia no painel do Code, por exemplo).
+pub const ENDERECO_CLAUDE: &str = "https://claude.ai/";
+/// Final exato do nome do item da barra lateral do Chat com o Claude respondendo nele.
+pub const RODANDO: &str = " Running";
+/// Começo da classe do item da barra lateral (um `Button`) de uma conversa (medido na rodada 27).
+pub const CLASSE_DO_ITEM: &str = "w-full shrink-0 border-none";
 
 /// Consulta que demora mais que isto conta como "conversa não reconhecida" naquela amostra.
 pub const LIMITE_CONSULTA: Duration = Duration::from_millis(300);
@@ -21,6 +35,8 @@ pub const LIMITE_TRAVADA: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Documento {
     pub nome: String,
+    /// O endereço da página (o `Value` do `Document`), só lido nas páginas do Chat.
+    pub endereco: String,
     pub tem_foco: bool,
     /// O foco do teclado está num campo de texto (`Edit`) dentro deste documento: no app do
     /// Claude, é a caixa de mensagem da conversa.
@@ -28,11 +44,14 @@ pub struct Documento {
 }
 
 /// A conversa aberta lida na janela: o título e se você está escrevendo nela (o foco do teclado
-/// na caixa de mensagem dessa conversa). O texto da caixa nunca é lido.
+/// na caixa de mensagem dessa conversa, com o botão de enviar ativo: `escrevendo`). O texto da
+/// caixa nunca é lido.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversaLida {
     pub titulo: String,
     pub escrevendo: bool,
+    /// O id da conversa do Chat (minúsculo); `None` numa conversa do Code.
+    pub chat: Option<String>,
 }
 
 /// `ControlType` da UI Automation de um campo de texto (`UIA_EditControlTypeId`). A caixa de
@@ -42,6 +61,28 @@ pub const TIPO_CAMPO: i32 = 50004;
 /// O elemento com foco é um campo de texto?
 pub fn e_campo_de_texto(tipo: i32) -> bool {
     tipo == TIPO_CAMPO
+}
+
+/// Nome do botão de enviar da caixa de mensagem: "Send" no Code, "Send message" no Chat (medido na
+/// rodada 26); os mesmos em português e em outros idiomas, se o app for traduzido.
+const ENVIAR: &[&str] = &[
+    "send", "send message", "enviar", "enviar mensagem", "envoyer", "envoyer le message", "senden",
+    "nachricht senden", "invia", "invia messaggio",
+];
+
+/// O botão é o de enviar da caixa ("Send", "Send message"), pelo nome inteiro: nem o "Stop" que
+/// fica no lugar dele com o Claude trabalhando, nem outro que só começa igual ("Send feedback").
+pub fn e_botao_de_enviar(nome: &str) -> bool {
+    ENVIAR.contains(&nome.trim().to_lowercase().as_str())
+}
+
+/// "escrevendo" (regra A, rodada 26): o foco do teclado na caixa de mensagem **e** o botão de
+/// enviar dela ativo. Ao abrir uma conversa, o app já põe o foco na caixa vazia; o botão só se
+/// ativa com algo escrito (no Code ele nem existe com a caixa vazia; no Chat fica inativo). Com o
+/// Claude trabalhando, o "Stop" fica no lugar dele. `enviar_ativo`: `None` se o botão não foi
+/// achado. Sem ler o texto da caixa: só o `IsEnabled` do botão.
+pub fn escrevendo_na_caixa(campo_com_foco: bool, enviar_ativo: Option<bool>) -> bool {
+    campo_com_foco && enviar_ativo == Some(true)
 }
 
 /// A janela é a do app do Claude (Electron), e não um terminal rodando o `claude.exe`.
@@ -56,13 +97,208 @@ pub fn titulo_da_conversa(nome_documento: &str) -> Option<&str> {
     (!t.is_empty()).then_some(t)
 }
 
+/// A página é do Chat (qualquer uma: conversa, tela inicial, Projetos): o Name termina em
+/// `" - Claude"`, e não em `" - Claude Code"`.
+pub fn e_pagina_do_chat(nome_documento: &str) -> bool {
+    let n = nome_documento.trim_end();
+    n.ends_with(SUFIXO_CHAT) && !n.ends_with(SUFIXO)
+}
+
+/// O id da conversa do Chat pelo endereço: `https://claude.ai/chat/<id>` (host exato, sem
+/// diferenciar maiúsculas no começo, ignorando a consulta e o fragmento), em minúsculas. A tela
+/// inicial (`/new`), os Projetos e as outras páginas: `None`.
+pub fn id_do_chat(endereco: &str) -> Option<String> {
+    let u = endereco.trim();
+    let u = &u[..u.find(['?', '#']).unwrap_or(u.len())];
+    let comeco = u.get(..ENDERECO_CHAT.len())?;
+    if !comeco.eq_ignore_ascii_case(ENDERECO_CHAT) {
+        return None;
+    }
+    let id = u[ENDERECO_CHAT.len()..].trim_end_matches('/');
+    let valido = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    valido.then(|| id.to_ascii_lowercase())
+}
+
+/// A conversa do Chat de uma página: `(id, título)`. O Name termina em `" - Claude"` (e não em
+/// `" - Claude Code"`), o título não é vazio e o endereço é o de uma conversa (`id_do_chat`).
+pub fn chat_da_pagina<'a>(nome: &'a str, endereco: &str) -> Option<(String, &'a str)> {
+    if !e_pagina_do_chat(nome) {
+        return None;
+    }
+    let t = nome.trim_end().strip_suffix(SUFIXO_CHAT)?.trim();
+    if t.is_empty() {
+        return None;
+    }
+    Some((id_do_chat(endereco)?, t))
+}
+
+/// A conversa de uma página: do Code (`(None, título)`) ou do Chat (`(Some(id), título)`).
+pub fn conversa_da_pagina<'a>(nome: &'a str, endereco: &str) -> Option<(Option<String>, &'a str)> {
+    if let Some(t) = titulo_da_conversa(nome) {
+        return Some((None, t));
+    }
+    chat_da_pagina(nome, endereco).map(|(id, t)| (Some(id), t))
+}
+
+/// O `Button` é um item (uma conversa) da barra lateral, pela classe.
+pub fn e_item_da_barra(classe: &str) -> bool {
+    classe.starts_with(CLASSE_DO_ITEM)
+}
+
+/// O título de um item da barra lateral com o Claude respondendo: só com o fim exato
+/// `" Running"`, sem os espaços das pontas e não vazio.
+pub fn titulo_rodando(nome: &str) -> Option<&str> {
+    let t = nome.strip_suffix(RODANDO)?.trim();
+    (!t.is_empty()).then_some(t)
+}
+
+/// Nome do botão que fica no lugar do de enviar com o Claude respondendo no Chat (medido na
+/// rodada 27), e os equivalentes nos idiomas de `ENVIAR`.
+const PARAR_RESPOSTA: &[&str] = &[
+    "stop response", "parar resposta", "interromper resposta", "arrêter la réponse", "antwort stoppen",
+    "interrompi risposta",
+];
+
+/// O botão é o "Stop response" da conversa do Chat, pelo nome inteiro: nunca "Stop", "Stop this
+/// task" ou "Stop 1 nested session" (do Code).
+pub fn e_parar_resposta(nome: &str) -> bool {
+    PARAR_RESPOSTA.contains(&nome.trim().to_lowercase().as_str())
+}
+
+/// Os nomes do "Stop response" (`e_parar_resposta`), para a busca pedir só esses botões pelo nome
+/// exato (sem diferenciar maiúsculas), sem ler o nome dos outros.
+pub fn nomes_de_parar_resposta() -> &'static [&'static str] {
+    PARAR_RESPOSTA
+}
+
+/// O endereço é de uma página do app do Claude (`https://claude.ai/…`, host exato, sem
+/// diferenciar maiúsculas no começo).
+pub fn e_endereco_do_claude(endereco: &str) -> bool {
+    endereco.trim().get(..ENDERECO_CLAUDE.len()).is_some_and(|c| c.eq_ignore_ascii_case(ENDERECO_CLAUDE))
+}
+
+/// A aba do Chat está à vista: há um `Document` à vista que é uma página do Chat
+/// (`e_pagina_do_chat`) com o endereço do app do Claude. É a 1ª fase dos sinais (só os
+/// `Document`s): sem ela, nenhum botão da janela é pedido (na aba do Code, os nomes dos botões
+/// da transcrição vêm das respostas).
+pub fn aba_do_chat(pecas: &[PecaDoChat]) -> bool {
+    pecas.iter().any(|p| {
+        matches!(p, PecaDoChat::Pagina { nome, endereco, fora: false } if e_pagina_do_chat(nome) && e_endereco_do_claude(endereco))
+    })
+}
+
+/// No máximo tantas classes de item da barra lateral entram na busca dos botões (2ª fase).
+pub const MAX_CLASSES_DO_ITEM: usize = 8;
+
+/// As classes inteiras (sem repetir) dos itens da barra lateral (`e_item_da_barra`) entre as
+/// classes dos `Button`s da janela, no máximo `MAX_CLASSES_DO_ITEM`. A 2ª fase dos sinais pede o
+/// nome só dos botões com uma destas classes (uma condição de classe exata: a UI Automation não
+/// compara pelo começo).
+pub fn classes_dos_itens<'a>(classes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut v: Vec<String> = vec![];
+    for c in classes {
+        if v.len() >= MAX_CLASSES_DO_ITEM {
+            break;
+        }
+        if e_item_da_barra(c) && !v.iter().any(|x| x == c) {
+            v.push(c.to_string());
+        }
+    }
+    v
+}
+
+/// Os sinais do Chat numa amostra (rodada 27): se a aba do Chat está à vista, a conversa aberta
+/// (e se o Claude responde nela) e os títulos dos itens da barra lateral com o Claude respondendo.
+/// Os títulos ficam só em memória.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SinaisChat {
+    /// Há um `Document` à vista que é uma página do Chat (`e_pagina_do_chat`) com o endereço do
+    /// app do Claude (`aba_do_chat`).
+    pub aba_do_chat: bool,
+    /// A conversa do Chat à vista (só uma).
+    pub aberta: Option<ChatAberto>,
+    /// Os títulos (`titulo_rodando`) dos itens da barra lateral; só com `aba_do_chat`.
+    pub rodando: Vec<String>,
+    /// Algum item da barra lateral foi achado. Sem nenhum (a barra fechada), `rodando` não diz
+    /// nada das conversas que não estão abertas.
+    pub barra: bool,
+    /// Os títulos (sem o `" Running"`) que aparecem em dois ou mais itens da barra lateral, em
+    /// minúsculas: o " Running" de um deles não diz qual conversa responde.
+    pub repetidos: Vec<String>,
+}
+
+/// A conversa do Chat à vista.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChatAberto {
+    pub id: String,
+    pub titulo: String,
+    /// Há na janela o botão "Stop response" (`e_parar_resposta`): o Claude responde nela.
+    pub parando: bool,
+}
+
+/// Um elemento da janela que importa para os sinais do Chat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PecaDoChat {
+    /// Um `Document`: o nome, o endereço (só o de uma página do Chat) e se está fora de vista.
+    Pagina { nome: String, endereco: String, fora: bool },
+    /// Um `Button`: o nome e a classe.
+    Botao { nome: String, classe: String },
+}
+
+/// Os sinais do Chat a partir dos `Document`s e dos `Button`s da janela. Sem página do Chat à
+/// vista (a aba do Code; `aba_do_chat`), só `aba_do_chat: false`. A conversa aberta é a única
+/// conversa do Chat à vista (com a aba do Chat, a janela só tem o `Document` do Chat, e o "Stop
+/// response" é dela); com duas ou mais, nenhuma.
+pub fn sinais_do_chat(pecas: &[PecaDoChat]) -> SinaisChat {
+    if !aba_do_chat(pecas) {
+        return SinaisChat::default();
+    }
+    let mut conversas: Vec<(String, String)> = vec![];
+    let (mut parando, mut barra, mut rodando) = (false, false, vec![]);
+    let mut titulos: Vec<String> = vec![];
+    for p in pecas {
+        match p {
+            PecaDoChat::Pagina { nome, endereco, fora: false } if e_pagina_do_chat(nome) => {
+                if let Some((id, t)) = chat_da_pagina(nome, endereco) {
+                    if !conversas.iter().any(|(i, _)| *i == id) {
+                        conversas.push((id, t.to_string()));
+                    }
+                }
+            }
+            PecaDoChat::Pagina { .. } => {}
+            PecaDoChat::Botao { nome, classe } => {
+                parando |= e_parar_resposta(nome);
+                if e_item_da_barra(classe) {
+                    barra = true;
+                    let r = titulo_rodando(nome);
+                    if let Some(t) = r {
+                        rodando.push(t.to_string());
+                    }
+                    let t = r.unwrap_or(nome).trim().to_lowercase();
+                    if !t.is_empty() {
+                        titulos.push(t);
+                    }
+                }
+            }
+        }
+    }
+    let aberta = match conversas.as_slice() {
+        [(id, titulo)] => Some(ChatAberto { id: id.clone(), titulo: titulo.clone(), parando }),
+        _ => None,
+    };
+    titulos.sort();
+    let mut repetidos: Vec<String> = titulos.windows(2).filter(|w| w[0] == w[1]).map(|w| w[0].clone()).collect();
+    repetidos.dedup();
+    SinaisChat { aba_do_chat: true, aberta, rodando, barra, repetidos }
+}
+
 /// Índice (em `docs`) da conversa aberta: a única conversa à vista; com várias (vista dividida),
 /// a que contém o elemento com foco; sem foco dentro de nenhuma, nenhuma.
 fn indice_da_conversa(docs: &[Documento]) -> Option<usize> {
     let conversas: Vec<(usize, bool)> = docs
         .iter()
         .enumerate()
-        .filter(|(_, d)| titulo_da_conversa(&d.nome).is_some())
+        .filter(|(_, d)| conversa_da_pagina(&d.nome, &d.endereco).is_some())
         .map(|(i, d)| (i, d.tem_foco))
         .collect();
     match conversas.as_slice() {
@@ -74,22 +310,28 @@ fn indice_da_conversa(docs: &[Documento]) -> Option<usize> {
 
 /// Título da conversa aberta (`indice_da_conversa`).
 pub fn conversa_aberta(docs: &[Documento]) -> Option<String> {
-    indice_da_conversa(docs).and_then(|i| titulo_da_conversa(&docs[i].nome)).map(str::to_string)
+    let i = indice_da_conversa(docs)?;
+    conversa_da_pagina(&docs[i].nome, &docs[i].endereco).map(|(_, t)| t.to_string())
 }
 
 /// A conversa aberta e se o foco do teclado está num campo de texto dela ("escrevendo"). O campo
 /// de outro documento (outra conversa, um painel lateral) não conta.
 pub fn ler_conversa(docs: &[Documento]) -> Option<ConversaLida> {
     let i = indice_da_conversa(docs)?;
-    Some(ConversaLida { titulo: titulo_da_conversa(&docs[i].nome)?.to_string(), escrevendo: docs[i].campo_com_foco })
+    let (chat, titulo) = conversa_da_pagina(&docs[i].nome, &docs[i].endereco)?;
+    Some(ConversaLida { titulo: titulo.to_string(), escrevendo: docs[i].campo_com_foco, chat })
 }
 
-/// Subindo do foco (`acima`: do mais perto ao mais longe, `(é Document, nome)`), o título do
-/// primeiro `Document` que é uma conversa. Um `Document` interno da conversa (prévia, diff) fica
-/// no caminho e não conta: o foco nele conta para a conversa que o contém (spec 5.5; até a
-/// rodada 5, com duas conversas à vista, dava "não sei").
-pub fn conversa_acima(acima: &[(bool, String)]) -> Option<&str> {
-    acima.iter().find_map(|(doc, nome)| if *doc { titulo_da_conversa(nome) } else { None })
+/// Um elemento no caminho do foco para cima: `(é Document, nome, endereço)`. O endereço só é lido
+/// num `Document` que é página do Chat.
+pub type Acima = (bool, String, String);
+
+/// Subindo do foco (`acima`: do mais perto ao mais longe), o primeiro `Document` que é uma
+/// conversa, do Code ou do Chat: `(id do Chat, título)`. Um `Document` interno da conversa
+/// (prévia, diff) fica no caminho e não conta: o foco nele conta para a conversa que o contém
+/// (spec 5.5; até a rodada 5, com duas conversas à vista, dava "não sei").
+pub fn conversa_acima(acima: &[Acima]) -> Option<(Option<String>, &str)> {
+    acima.iter().find_map(|(doc, nome, endereco)| if *doc { conversa_da_pagina(nome, endereco) } else { None })
 }
 
 /// Por onde a consulta acha a conversa aberta.
@@ -251,21 +493,33 @@ impl LeitorConversa<ConversaLida> {
     }
 }
 
+#[cfg(windows)]
+impl LeitorConversa<SinaisChat> {
+    /// Leitor dos sinais do Chat (rodada 27), com a UI Automation numa thread própria: consultado
+    /// a cada ciclo com a janela do app do Claude, mesmo fora de uso.
+    pub fn do_chat() -> LeitorConversa<SinaisChat> {
+        LeitorConversa::com(|| {
+            let uia = crate::uia::Uia::novo();
+            move |hwnd: isize, _: bool| uia.as_ref().and_then(|u| u.sinais_do_chat(hwnd))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn doc(nome: &str, tem_foco: bool) -> Documento {
-        Documento { nome: nome.into(), tem_foco, campo_com_foco: false }
+        Documento { nome: nome.into(), tem_foco, ..Default::default() }
     }
 
     fn escrevendo(nome: &str) -> Documento {
-        Documento { nome: nome.into(), tem_foco: true, campo_com_foco: true }
+        Documento { nome: nome.into(), tem_foco: true, campo_com_foco: true, ..Default::default() }
     }
 
     #[test]
     fn escrevendo_so_com_o_foco_no_campo_da_conversa_aberta() {
-        let lida = |t: &str, e: bool| Some(ConversaLida { titulo: t.into(), escrevendo: e });
+        let lida = |t: &str, e: bool| Some(ConversaLida { titulo: t.into(), escrevendo: e, chat: None });
         // uma conversa à vista, foco na caixa de mensagem dela
         let docs = [doc("", false), escrevendo("Flow: nomes - Claude Code")];
         assert_eq!(ler_conversa(&docs), lida("Flow: nomes", true));
@@ -281,6 +535,31 @@ mod tests {
         assert_eq!(ler_conversa(&[]), None);
         assert!(e_campo_de_texto(TIPO_CAMPO));
         assert!(!e_campo_de_texto(50030), "Document não é campo");
+    }
+
+    #[test]
+    fn escrevendo_so_com_o_botao_de_enviar_ativo() {
+        // regra A: o foco na caixa e o botão de enviar ativo
+        assert!(escrevendo_na_caixa(true, Some(true)), "uma letra na caixa");
+        assert!(!escrevendo_na_caixa(true, Some(false)), "caixa vazia no Chat: o botão fica inativo");
+        assert!(!escrevendo_na_caixa(true, None), "caixa vazia no Code (sem botão) ou o Claude trabalhando (Stop)");
+        assert!(!escrevendo_na_caixa(false, Some(true)), "rascunho na caixa, mas o foco fora dela");
+    }
+
+    #[test]
+    fn reconhece_o_botao_de_enviar_pelo_nome() {
+        assert!(e_botao_de_enviar("Send"));
+        assert!(e_botao_de_enviar("Send message"));
+        assert!(e_botao_de_enviar(" Enviar mensagem "));
+        assert!(e_botao_de_enviar("ENVIAR"));
+        // o botão de parar fica no lugar dele com o Claude trabalhando
+        assert!(!e_botao_de_enviar("Stop"));
+        assert!(!e_botao_de_enviar("Stop response"));
+        assert!(!e_botao_de_enviar("Sender"));
+        assert!(!e_botao_de_enviar("Resend"));
+        assert!(!e_botao_de_enviar("Send feedback"));
+        assert!(!e_botao_de_enviar("Enviar arquivo"));
+        assert!(!e_botao_de_enviar(""));
     }
 
     #[test]
@@ -345,15 +624,187 @@ mod tests {
 
     #[test]
     fn foco_num_documento_interno_sobe_ate_a_conversa() {
-        let a = |doc: bool, nome: &str| (doc, nome.to_string());
+        let a = |doc: bool, nome: &str| (doc, nome.to_string(), String::new());
         // do foco para cima: um grupo, um Document interno (prévia), outro grupo, a conversa B, a raiz
         let acima = [a(false, ""), a(true, "Prévia do diff"), a(false, ""), a(true, "B - Claude Code"), a(true, "")];
-        assert_eq!(conversa_acima(&acima), Some("B"), "a prévia fica no caminho");
+        assert_eq!(conversa_acima(&acima), Some((None, "B")), "a prévia fica no caminho");
         // o próprio foco é o Document da conversa
-        assert_eq!(conversa_acima(&[a(true, "A - Claude Code")]), Some("A"));
+        assert_eq!(conversa_acima(&[a(true, "A - Claude Code")]), Some((None, "A")));
         // um elemento que não é Document, com o nome de uma conversa, não conta
         assert_eq!(conversa_acima(&[a(false, "A - Claude Code"), a(true, "")]), None);
         assert_eq!(conversa_acima(&[]), None, "foco fora da janela");
+    }
+
+    const URL: &str = "https://claude.ai/chat/0A1B2C3D-4e5f-6789-abcd-ef0123456789";
+    const ID: &str = "0a1b2c3d-4e5f-6789-abcd-ef0123456789";
+
+    #[test]
+    fn reconhece_a_conversa_do_chat_pelo_nome_e_pelo_endereco() {
+        assert_eq!(chat_da_pagina("Receita de bolo - Claude", URL), Some((ID.to_string(), "Receita de bolo")));
+        assert_eq!(chat_da_pagina("  Receita  - Claude ", &format!("{URL}?x=1#fim")), Some((ID.to_string(), "Receita")));
+        assert_eq!(chat_da_pagina("Receita - Claude", &format!("{URL}/")), Some((ID.to_string(), "Receita")));
+        // a tela inicial, os Projetos e outras páginas não são conversa
+        assert_eq!(chat_da_pagina("Nova conversa - Claude", "https://claude.ai/new"), None);
+        assert_eq!(chat_da_pagina("Projetos - Claude", "https://claude.ai/projects"), None);
+        assert_eq!(chat_da_pagina("Receita - Claude", "https://claude.ai/chat/"), None);
+        assert_eq!(chat_da_pagina("Receita - Claude", "https://claude.ai/chat/a/b"), None);
+        // host exato
+        assert_eq!(chat_da_pagina("Receita - Claude", &URL.replace("claude.ai", "claude.ai.exemplo.com")), None);
+        assert_eq!(chat_da_pagina("Receita - Claude", &URL.replace("claude.ai", "x.claude.ai")), None);
+        assert_eq!(chat_da_pagina("Receita - Claude", &URL.replace("https", "http")), None);
+        // o Code e o título vazio não são do Chat
+        assert_eq!(chat_da_pagina("Sessão - Claude Code", URL), None);
+        assert_eq!(chat_da_pagina(" - Claude", URL), None);
+        assert_eq!(chat_da_pagina("Receita - Claude", ""), None);
+        assert!(e_pagina_do_chat("Nova conversa - Claude"));
+        assert!(!e_pagina_do_chat("Sessão - Claude Code"));
+        assert!(!e_pagina_do_chat("Claude"));
+        // a conversa da página: do Code (sem id) ou do Chat
+        assert_eq!(conversa_da_pagina("A - Claude Code", URL), Some((None, "A")));
+        assert_eq!(conversa_da_pagina("A - Claude", URL), Some((Some(ID.into()), "A")));
+        let a = |doc: bool, nome: &str, url: &str| (doc, nome.to_string(), url.to_string());
+        let acima = [a(false, "", ""), a(true, "Inicial - Claude", "https://claude.ai/new"), a(true, "A - Claude", URL)];
+        assert_eq!(conversa_acima(&acima), Some((Some(ID.into()), "A")));
+        assert_eq!(conversa_acima(&[a(false, "A - Claude", URL)]), None, "só um Document");
+    }
+
+    #[test]
+    fn ler_conversa_aceita_a_do_chat() {
+        let chat = Documento { nome: "Receita - Claude".into(), endereco: URL.into(), tem_foco: true, campo_com_foco: true };
+        assert_eq!(ler_conversa(&[chat]), Some(ConversaLida { titulo: "Receita".into(), escrevendo: true, chat: Some(ID.into()) }));
+        let inicial = Documento { nome: "Nova - Claude".into(), endereco: "https://claude.ai/new".into(), ..Default::default() };
+        assert_eq!(ler_conversa(&[inicial]), None, "a tela inicial não é conversa");
+    }
+
+    #[test]
+    fn running_e_stop_response_so_pelo_nome_exato() {
+        assert_eq!(titulo_rodando("Receita de bolo Running"), Some("Receita de bolo"));
+        assert_eq!(titulo_rodando(" Receita  Running"), Some("Receita"));
+        assert_eq!(titulo_rodando("Receita"), None);
+        assert_eq!(titulo_rodando("Receita Running "), None, "só o fim exato");
+        assert_eq!(titulo_rodando("Receita running"), None);
+        assert_eq!(titulo_rodando(" Running"), None);
+        assert_eq!(titulo_rodando("1 background task running"), None);
+        assert!(e_item_da_barra("w-full shrink-0 border-none flex"));
+        assert!(!e_item_da_barra("cds-reset -ms-1 inline-flex"));
+        assert!(e_parar_resposta("Stop response"));
+        assert!(e_parar_resposta(" stop RESPONSE "));
+        assert!(e_parar_resposta("Parar resposta"));
+        for nao in ["Stop", "Stop this task", "Stop 1 nested session", "Send message", "Stop responses", ""] {
+            assert!(!e_parar_resposta(nao), "{nao}");
+        }
+    }
+
+    fn pagina(nome: &str, endereco: &str) -> PecaDoChat {
+        PecaDoChat::Pagina { nome: nome.into(), endereco: endereco.into(), fora: false }
+    }
+    fn botao(nome: &str, classe: &str) -> PecaDoChat {
+        PecaDoChat::Botao { nome: nome.into(), classe: classe.into() }
+    }
+    const ITEM: &str = "w-full shrink-0 border-none text-left";
+
+    #[test]
+    fn sinais_do_chat_pela_barra_e_pelo_stop_response() {
+        let s = sinais_do_chat(&[
+            pagina("Receita - Claude", URL),
+            botao("Receita Running", ITEM),
+            botao("Outra conversa Running", ITEM),
+            botao("Parada", ITEM),
+            botao("Stop response", "x"),
+            // o chip e um botão "Running" sem a classe do item não contam
+            botao("Fora da barra Running", "cds-reset"),
+        ]);
+        assert_eq!(
+            s,
+            SinaisChat {
+                aba_do_chat: true,
+                aberta: Some(ChatAberto { id: ID.into(), titulo: "Receita".into(), parando: true }),
+                rodando: vec!["Receita".into(), "Outra conversa".into()],
+                barra: true,
+                repetidos: vec![],
+            }
+        );
+        // a tela inicial: a aba do Chat, sem conversa aberta
+        let s = sinais_do_chat(&[pagina("Nova - Claude", "https://claude.ai/new"), botao("Outra Running", ITEM)]);
+        assert_eq!((s.aba_do_chat, s.aberta, s.rodando, s.barra), (true, None, vec!["Outra".to_string()], true));
+        // sem o Stop response, a aberta não responde; sem itens, a barra está fechada
+        let s = sinais_do_chat(&[pagina("Receita - Claude", URL), botao("Stop", "x")]);
+        assert_eq!(s.aberta.map(|a| a.parando), Some(false));
+        assert!(!s.barra);
+    }
+
+    #[test]
+    fn sinais_do_chat_com_a_aba_do_code_nao_dizem_nada() {
+        let s = sinais_do_chat(&[
+            pagina("Sessão - Claude Code", "https://claude.ai/abcdefg/123"),
+            botao("Sessão Running", ITEM),
+            botao("Stop response", "x"),
+        ]);
+        assert_eq!(s, SinaisChat::default());
+        // a página do Chat fora de vista não é a aba do Chat
+        let s = sinais_do_chat(&[PecaDoChat::Pagina { nome: "Receita - Claude".into(), endereco: URL.into(), fora: true }]);
+        assert!(!s.aba_do_chat);
+        // duas conversas do Chat à vista: nenhuma é a aberta
+        let outra = URL.replace("0A1B", "9999");
+        let s = sinais_do_chat(&[pagina("A - Claude", URL), pagina("B - Claude", &outra)]);
+        assert!(s.aba_do_chat && s.aberta.is_none());
+    }
+
+    #[test]
+    fn titulos_repetidos_na_barra_rodando_ou_nao() {
+        let s = sinais_do_chat(&[
+            pagina("Nova - Claude", "https://claude.ai/new"),
+            botao("Receita Running", ITEM),
+            botao("receita", ITEM),
+            botao("Plano", ITEM),
+            botao("Viagem Running", ITEM),
+            botao("Plano", ITEM),
+            botao("Plano", ITEM),
+            // fora da barra não conta
+            botao("Viagem", "cds-reset"),
+        ]);
+        assert_eq!(s.repetidos, ["plano", "receita"]);
+        assert_eq!(s.rodando, ["Receita", "Viagem"]);
+    }
+
+    #[test]
+    fn sem_a_aba_do_chat_nenhum_botao_e_pedido() {
+        // a 1ª fase (só os `Document`s) decide se a 2ª (os botões) roda: na aba do Code, não
+        let code = [pagina("Sessão - Claude Code", "https://claude.ai/abcdefg/123")];
+        assert!(!aba_do_chat(&code));
+        assert!(!aba_do_chat(&[]), "sem Document nenhum");
+        assert!(!aba_do_chat(&[PecaDoChat::Pagina { nome: "Receita - Claude".into(), endereco: URL.into(), fora: true }]));
+        assert!(aba_do_chat(&[pagina("Nova - Claude", "https://claude.ai/new")]), "a tela inicial é a aba do Chat");
+        assert!(aba_do_chat(&[pagina("Receita - Claude", URL)]));
+        // os botões não entram na decisão
+        assert!(!aba_do_chat(&[botao("Receita - Claude", ITEM), botao("Stop response", "x")]));
+    }
+
+    #[test]
+    fn a_aba_do_chat_pede_o_endereco_do_claude() {
+        assert!(e_endereco_do_claude("https://claude.ai/new"));
+        assert!(e_endereco_do_claude(" HTTPS://Claude.ai/chat/x"));
+        for nao in ["", "https://claude.ai", "http://claude.ai/new", "https://claude.ai.exemplo.com/", "https://exemplo.com/claude.ai/"] {
+            assert!(!e_endereco_do_claude(nao), "{nao}");
+        }
+        // uma página "… - Claude" de outro endereço (uma prévia no painel do Code): não é a aba
+        // do Chat, e nada muda (nem os itens da barra, nem o "Stop response")
+        let s = sinais_do_chat(&[pagina("Prévia - Claude", "https://exemplo.com/"), botao("Stop response", "x"), botao("A", ITEM)]);
+        assert_eq!(s, SinaisChat::default());
+        let s = sinais_do_chat(&[pagina("Prévia - Claude", ""), botao("A", ITEM)]);
+        assert_eq!(s, SinaisChat::default(), "sem endereço também não");
+    }
+
+    #[test]
+    fn classes_dos_itens_sem_repetir_e_com_teto() {
+        let classes = ["cds-reset", "w-full shrink-0 border-none a", "x", "w-full shrink-0 border-none a", "w-full shrink-0 border-none b"];
+        assert_eq!(classes_dos_itens(classes), ["w-full shrink-0 border-none a", "w-full shrink-0 border-none b"]);
+        assert!(classes_dos_itens(["cds-reset", ""]).is_empty());
+        let muitas: Vec<String> = (0..20).map(|i| format!("{CLASSE_DO_ITEM} {i}")).collect();
+        assert_eq!(classes_dos_itens(muitas.iter().map(String::as_str)).len(), MAX_CLASSES_DO_ITEM);
+        // os nomes do "Stop response" pedidos pela busca são os que `e_parar_resposta` aceita
+        assert!(nomes_de_parar_resposta().iter().all(|n| e_parar_resposta(n)));
+        assert!(nomes_de_parar_resposta().contains(&"stop response"));
     }
 
     #[test]

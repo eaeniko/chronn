@@ -11,13 +11,13 @@ test('rodada 16: o dock não abre diálogos; pede o "Ligar a um timer" à janela
   assert.doesNotMatch(dock, /abrirDialogo|ligarATimer/, 'nenhum diálogo na página do dock');
   assert.match(dock, /agir\('pedir_ligar_sessao', \{ pedido \}\)/);
   assert.match(dock, /case 'outro':\s*await escolherTimer\(pedidoDeLigar\(d\)\);/);
-  assert.match(dock, /case 'novo-timer':[\s\S]*?await novoTimerDaSessao\(d\.sessao\)/);
-  assert.match(dock, /const novoTimerDaSessao = \(sessaoId\) => agir\('pedir_novo_timer'/);
+  assert.match(dock, /case 'novo-timer':[\s\S]*?await novoTimerDaSessao\(d\.sessao, d\)/);
+  assert.match(dock, /const novoTimerDaSessao = \(sessaoId, d = \{\}\) => agir\('pedir_novo_timer'/);
   // a janela principal atende o pedido e devolve a janela ao estado de antes
   const painel = fonte('painel.js');
   assert.match(painel, /listen\('ligar-sessao', verLigarSessao\)/);
   // revisão: cada pedido avisa o núcleo uma vez, quando o diálogo dele acaba (sem prazo)
-  assert.match(painel, /ligarATimer\(lerSnap, p\.sessao_id, aoNovo, reserva\);[\s\S]*?quandoSemDialogo\(fimDoDialogoDoDock\);/);
+  assert.match(painel, /ligarATimer\(lerSnap, p\.sessao_id, aoNovo, reserva, sempre\);[\s\S]*?quandoSemDialogo\(fimDoDialogoDoDock\);/);
   assert.match(painel, /const fimDoDialogoDoDock = \(\) =>\s*chamar\('dialogo_do_dock_fechou'\)/);
   assert.match(painel, /if \(pedido\) abrirNovoTimerDaSessao\(pedido, fimDoDialogoDoDock\);/);
   assert.match(painel, /if \(pedidosAbertos\.has\(pedido\.sessao_id\)\) return depois\?\.\(\);/, 'o repetido também avisa');
@@ -27,12 +27,12 @@ test('rodada 16: o dock não abre diálogos; pede o "Ligar a um timer" à janela
 test('rodada 16: o pedido leva a sessão, a pergunta e o que mostrar fora das recentes', () => {
   // o "Outro timer…" da pergunta: com o "+ Novo timer…"
   assert.deepEqual(pedidoDeLigar({ sessao: 's1', pergunta: '7' }), {
-    sessao_id: 's1', pergunta_id: 7, nome: null, cwd: null, timer_id: null, com_novo: true,
+    sessao_id: 's1', pergunta_id: 7, nome: null, cwd: null, timer_id: null, com_novo: true, sempre: null, pasta: null,
   });
   // o "Trocar" do aviso de ligada sozinha: a sessão já tem timer, sem "+ Novo timer…"
   const aviso = { sessao_id: 's2', sessao_nome: 'Flow: spec', cwd: 'G:/Flow', timer_id: 4 };
   assert.deepEqual(pedidoDeLigar({ sessao: 's2' }, aviso), {
-    sessao_id: 's2', pergunta_id: null, nome: 'Flow: spec', cwd: 'G:/Flow', timer_id: 4, com_novo: false,
+    sessao_id: 's2', pergunta_id: null, nome: 'Flow: spec', cwd: 'G:/Flow', timer_id: 4, com_novo: false, sempre: null, pasta: null,
   });
 });
 

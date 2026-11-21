@@ -34,8 +34,10 @@ import {
   andarAtividades,
   dicaDoTempo,
   tituloDoTempo,
-  opcoesDaPergunta as opcoes,
-  textoDaPergunta,
+  htmlDaPergunta,
+  mudarEscolha,
+  esquecerEscolhas,
+  sempreDoBotao,
   pedidoDeLigar,
 } from './componentes.js';
 import { faixa, faixaEncerrado, usarFaixa } from './editar.js';
@@ -161,7 +163,8 @@ function recolhido(agora) {
     ? `<button class="dbt" data-acao="abrir" title="${TEXTOS.abrirOApp}" aria-label="${TEXTOS.abrirOApp}">⧉</button>`
     : '';
   const p = snap.perguntas[0];
-  const ask = p ? `<div class="ask">${textoDaPergunta(p)}${opcoes(p)}</div>` : '';
+  // a pergunta de sessão nova tem o cartão mais largo (rodada 27, opção A: 400 px)
+  const ask = p ? `<div class="ask${p.tipo === 'sessao_nova' ? ' sn' : ''}">${htmlDaPergunta(p)}</div>` : '';
   const total = `<div class="dtot" title="${dicaDoTotal(agora)}">${TEXTOS.hojeMin} <b class="mono" data-total-dia>${totalDoDia(agora)}</b></div>`;
   return `<div class="pilula">${marcaDeTeste()}${timers}${total}<button class="dbt" data-acao="expandir" title="${TEXTOS.expandir}" aria-label="${TEXTOS.expandirODock}">${ICONE_EXPANDIR}</button>${dois}</div>${ask}${avisoDeLigacao('dav')}`;
 }
@@ -238,7 +241,7 @@ function expandidoHtml(agora) {
   const mais = resto.length
     ? `<small class="dx-mais">${TEXTOS.perguntasDepois(resto.length)}</small>`
     : '';
-  const pergunta = p ? `<div class="dx-ask">${textoDaPergunta(p)}${opcoes(p)}${mais}</div>` : '';
+  const pergunta = p ? `<div class="dx-ask${p.tipo === 'sessao_nova' ? ' sn' : ''}">${htmlDaPergunta(p)}${mais}</div>` : '';
   // o aviso de ligada sozinha vem antes da pergunta: dura só ~15 s e não pode ficar rolado para fora
   const asks = avisoDeLigacao('dx-aviso') + pergunta + lendoAgora();
   // com algo rodando, o "Pausar tudo" toma o lugar da contagem (as linhas acesas já mostram quais)
@@ -460,8 +463,11 @@ async function mudarEtapa(exp) {
 
 // ---- cliques ----
 
-/** "+ Novo timer…" (da pergunta ou do "Ligar a um timer"): o diálogo abre na janela principal. */
-const novoTimerDaSessao = (sessaoId) => agir('pedir_novo_timer', { sessao_id: sessaoId });
+/**
+ * "+ Novo timer…" (da pergunta ou do "Ligar a um timer"): o diálogo abre na janela principal. `d`:
+ * o `dataset` do botão, com o "Sempre que for na pasta" da pergunta de sessão nova (rodada 27).
+ */
+const novoTimerDaSessao = (sessaoId, d = {}) => agir('pedir_novo_timer', { sessao_id: sessaoId, ...sempreDoBotao(d) });
 
 /** "Ligar a um timer" da sessão; no recolhido, o dock expande enquanto o diálogo está aberto. */
 /**
@@ -517,7 +523,7 @@ async function aoClicar(ev) {
       break;
     case 'novo-timer':
       // a janela principal abre com o "Novo timer" já preenchido; a pergunta fica até salvar
-      await novoTimerDaSessao(d.sessao);
+      await novoTimerDaSessao(d.sessao, d);
       break;
     case 'outro':
       await escolherTimer(pedidoDeLigar(d));
@@ -544,7 +550,7 @@ function aoApertar(ev) {
 // Duplo clique fora dos botões abre o app. Vale o `dblclick`, não o segundo `mousedown`:
 // o primeiro clique começa o arrastar da janela e o Windows engole o segundo apertar.
 function aoClicarDuas(ev) {
-  if (ev.target.closest('button, .dlg-fundo, .faixa')) return;
+  if (ev.target.closest('button, label, input, .dlg-fundo, .faixa')) return;
   agir('abrir_app');
 }
 
@@ -562,6 +568,15 @@ function aoMudarFoco({ payload: focado }) {
 window.addEventListener('mousedown', aoApertar, true);
 document.addEventListener('dblclick', aoClicarDuas);
 document.addEventListener('click', aoClicar);
+// o "Sempre que for na pasta" da pergunta de sessão nova (rodada 27): a caixa e a pasta mudam o
+// que os botões respondem; o dock se redesenha e o foco volta ao mesmo lugar
+document.addEventListener('change', (ev) => {
+  if (!mudarEscolha(ev.target)) return;
+  const d = ev.target.dataset;
+  desenhar();
+  const sel = d.pgSempre !== undefined ? `[data-pg-sempre][data-pergunta="${d.pergunta}"]` : `[data-pg-pasta][data-pergunta="${d.pergunta}"]:checked`;
+  raiz.querySelector(sel)?.focus();
+});
 janela().onMoved(guardar);
 janela().onResized(guardar);
 janela().onFocusChanged(aoMudarFoco);
@@ -602,6 +617,7 @@ aplicarTextos(document);
 
 aoMudar((s) => {
   snap = s;
+  esquecerEscolhas((s.perguntas ?? []).map((p) => p.id));
   // o idioma do estado (rodada 23): trocado, o dock se redesenha nele logo abaixo
   const idioma = idiomaDoEstado(s, navigator.language);
   if (definirIdioma(idioma)) aplicarTextos(document);

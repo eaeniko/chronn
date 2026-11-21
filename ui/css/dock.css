@@ -96,6 +96,50 @@ html[data-lado-y="baixo"] .rec { flex-direction: column-reverse; }
 .o button.y { background: var(--acento); color: #fff; }
 .o button.y:hover { filter: brightness(1.08); }
 
+/* a pergunta de sessão nova (rodada 27, opção A): o cartão de 400 px, com mais espaço. Em cima,
+   pequeno, "Sessão nova do Claude"; a pergunta maior; as linhas Sessão, Vem de e Pasta; os botões;
+   embaixo, separado por uma linha, o "Sempre que for na pasta" */
+.ask.sn { width: 400px; padding: 14px 16px 12px; }
+.sn-sobre { font-size: 11px; color: var(--tx3); letter-spacing: .01em; }
+.sn-titulo { margin-top: 2px; font-size: 15px; line-height: 1.3; font-weight: 650; color: var(--tx); }
+.sn-info { display: grid; gap: 5px; margin: 10px 0 0; padding: 8px 10px; border-radius: 9px; background: var(--pn2); }
+.sn-l { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.sn-l dt { font-size: 11px; color: var(--tx3); }
+.sn-l dd { margin: 0; min-width: 0; font-size: 12.5px; color: var(--tx); }
+/* o nome em destaque: pode quebrar em duas linhas, e corta depois */
+.sn-nome { font-weight: 650; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.sn-nome i { font-weight: 400; font-style: italic; color: var(--tx3); }
+.sn-pasta { font: 11.5px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+.sn-o { margin-top: 12px; }
+/* o principal com a segunda linha menor ("só esta sessão") */
+.o button.sn-principal { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 7px 10px; white-space: normal; }
+.sn-principal .sn-bt { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.o button.sn-principal small { font-size: 10.5px; font-weight: 450; color: inherit; opacity: .88; }
+/* "Não contar", discreto */
+.o button.sn-nao { background: none; color: var(--tx3); font-weight: 450; padding: 3px 8px; }
+.o button.sn-nao:hover { background: none; color: var(--tx); text-decoration: underline; }
+.sn-sempre { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--bd); }
+.sn-caixa { display: flex; align-items: center; gap: 8px; color: var(--tx); font-weight: 550; cursor: pointer; }
+.sn-caixa input, .sn-pi input { flex-shrink: 0; margin: 0; accent-color: var(--acento); cursor: pointer; }
+.sn-pastas { display: grid; gap: 3px; margin-top: 7px; }
+.sn-pi { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 7px; background: var(--pn2); cursor: pointer; }
+.sn-pi span { font: 11.5px/1.4 var(--mono); color: var(--tx); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sn-pi small { font-size: 10.5px; color: var(--tx3); white-space: nowrap; }
+.sn-pi:has(input:checked) { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acento) 60%, transparent); }
+.sn-ajuda { display: block; margin-top: 6px; font-size: 11px; line-height: 1.4; color: var(--tx3); }
+.ask .sn-ajuda { color: var(--tx3); }
+.sn-ajuda b { color: var(--tx2); font-weight: 600; }
+:root[data-tema="escuro"] .sn-sempre { border-top-color: #2a2c32; }
+/* no expandido, a mesma estrutura na largura dele (o fundo da pergunta já é o --pn2) */
+.dx-ask.sn { padding: 10px 11px; }
+.dx-ask .sn-titulo { font-size: 13.5px; }
+.dx-ask .sn-info, .dx-ask .sn-pi { background: var(--bg); }
+.dx-ask .sn-l { grid-template-columns: 56px minmax(0, 1fr); }
+.dx-ask .sn-l dd { font-size: 12px; }
+.dx-ask .sn-o { margin-top: 9px; }
+.dx-ask .o button.sn-principal { padding: 5px 8px; }
+.dx-ask .o button.sn-nao { padding: 2px 8px; }
+
 /* "Ligada a Flow pela pasta · Trocar": uma linha discreta por ~15 s, embaixo da pílula */
 .dav {
   max-width: 320px; padding: 5px 10px; border-radius: 10px; background: var(--bg); border: 1px solid var(--bd);
