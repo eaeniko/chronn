@@ -17,8 +17,12 @@ pub const RETOMADA_MS: Ms = 2 * MIN;
 
 mod chat;
 mod claude;
+mod janela;
 mod leitura;
 mod manual;
+
+/// A origem das sessões do app do Claude (o `CLAUDE_CODE_ENTRYPOINT` dele).
+pub const ORIGEM_APP_DO_CLAUDE: &str = "claude-desktop";
 
 pub use chat::{e_sessao_do_chat, sessao_do_chat, ChatAberto, SinaisDoChat, ORIGEM_CHAT, PREFIXO_CHAT};
 pub use claude::{chave_de_pasta, pasta_larga, pastas_entre, raiz_do_projeto, regra_da_pasta, regra_para, sugestao_de_pasta, LigadaSozinha, AVISO_LIGADA_MS, HERANCA_MS};
@@ -26,6 +30,7 @@ pub use leitura::{
     Aberta, Conversa, JanelaEmUso, Troca, ESPERA_RECENTE_MS, NEUTRA_MAX_MS, NOME_MIN_NO_TITULO, SAIDAS_PARA_LIBERAR,
     TROCA_SUAVE_MS,
 };
+pub use janela::{AMOSTRAS_GUARDADAS_MS, LIGACAO_JANELA_MAX_MS, LIGAR_JANELA_MS};
 pub use manual::{Amostra, DesfazerEncerrar, DESFAZER_ENCERRAR_MS};
 
 pub struct Motor {
@@ -99,6 +104,16 @@ pub struct Motor {
     /// em memória; o `Sessao.cwd` gravado segue sendo onde ela começou. A pergunta de sessão nova
     /// oferece as pastas entre as duas para o "Sempre que for na pasta".
     pub pasta_agora: BTreeMap<String, String>,
+    /// A conta do Claude do último evento do app do Claude (`claude-desktop`; rodada 28): o Chat não
+    /// diz a conta, e as conversas do Chat novas ficam com esta. Só em memória.
+    pub conta_do_app: Option<String>,
+    /// A leitura no terminal pela janela (rodada 28): as amostras recentes, as sessões ligadas a uma
+    /// janela (o HWND) e os pedidos esperando a amostra seguinte. Só em memória.
+    pub janelas: janela::Janelas,
+    /// A última amostra em que cada sessão estava sendo lida (0.6.1): o lembrete "esperando você"
+    /// conta o tempo dele desde a sua última leitura, e não só desde o fim do turno do Claude (sem
+    /// isto, a conversa que você acabou de ler sumia do dock ao passar para outra). Só em memória.
+    pub lida_em: BTreeMap<String, Ms>,
 }
 
 impl Motor {
@@ -132,6 +147,9 @@ impl Motor {
             pausado_desde: BTreeMap::new(),
             chat_trabalhando: BTreeMap::new(),
             pasta_agora: BTreeMap::new(),
+            conta_do_app: None,
+            janelas: janela::Janelas::default(),
+            lida_em: BTreeMap::new(),
         }
     }
 
@@ -306,6 +324,8 @@ impl Motor {
         out.extend(self.corte_do_dia(agora));
         // os avisos vencidos saem
         self.ligadas_sozinhas.retain(|_, l| agora < l.em + AVISO_LIGADA_MS);
+        // as ligações de janela de sessões que saíram ou sem evento há 24 h (rodada 28)
+        self.limpar_janelas(agora);
         out
     }
 

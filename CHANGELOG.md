@@ -3,6 +3,48 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.6.1] - 2026-11-23
+
+This release also brings 0.6.0, which wasn't released on its own: Claude Code in WSL, reading in
+the terminal by window, and Claude accounts linked to a space.
+
+### Fixed
+- Terminal sessions (Windows and WSL) now show their name: without a name you gave, Chronn uses
+  the title Claude Code generates for the session.
+- Terminal sessions now know their Claude account, read from the session itself. Chronn still
+  keeps only a short digest of the account id, never the id.
+- Accounts now say which one they are: the name, a masked e-mail and the plan
+  ("Ana · an•••@example.com · Pro"), in "Which space is this account in?" and under Settings.
+- The dock no longer swaps one timer for another: a session you were just reading stays in the
+  dock as "waiting for you" while you read another one.
+- Events from WSL arrive in about 2 seconds during a session (they could take over 30 seconds).
+- "Connect" also works on a stopped distro: Chronn starts it only when you click. The WSL section
+  under Settings now updates on its own while Settings is open.
+- "Always for this folder" warns when the folder is your user folder or holds several projects,
+  and tells you to open `claude` inside the project's folder instead.
+- If another program rewrites a distro's Claude Code settings without Chronn's hooks, Settings
+  and the main window now say so, with "Connect again". It shows the exact change first and
+  keeps everything else in the file.
+
+### Known limits
+- With the distro stopped, its last events wait in its queue until it runs again.
+
+## [0.6.0] - 2026-11-22
+
+### Added
+- Claude Code in WSL now counts. Under Settings, "Claude Code in WSL" lists your distros: link
+  one and Chronn shows the exact change to that distro's Claude Code settings first. A small
+  Linux hook writes the events inside the distro, and Chronn reads them from Windows, so nothing
+  in Linux needs to run Windows programs (it works with interop turned off). Chronn never wakes
+  a distro that isn't running.
+- Reading in the terminal without the session name in the title: when you send a message from
+  Windows Terminal or VS Code, Chronn remembers that window (in memory only) and counts the time
+  you spend in it as reading that session.
+- Claude accounts: with two or more spaces, Chronn asks once which space a new Claude account
+  belongs to. "Link a session" then lists the sessions of the timer's space first and folds the
+  others under "Other accounts". Chronn keeps only a short digest of the account id, never the
+  id. Manage them under Settings, "Claude accounts".
+
 ## [0.5.0] - 2026-11-21
 
 ### Added

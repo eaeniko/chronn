@@ -43,3 +43,4 @@ pub mod motor;
 pub mod relatorio;
 pub mod snapshot;
 pub mod tempo;
+pub mod wsl;

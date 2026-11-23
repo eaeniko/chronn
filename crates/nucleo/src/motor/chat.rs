@@ -70,7 +70,7 @@ pub struct ChatVisto {
 
 /// O evento sintético de uma conversa do Chat (sem pasta).
 fn evento_do_chat(evento: &str, sessao: &str, t: Ms) -> EventoHook {
-    EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: String::new(), transcript: None, notificacao: None, origem: Some(ORIGEM_CHAT.into()) }
+    EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: String::new(), transcript: None, notificacao: None, origem: Some(ORIGEM_CHAT.into()), conta: None }
 }
 
 fn chave(titulo: &str) -> String {
@@ -113,6 +113,7 @@ impl Motor {
                     ligacao: None,
                     desligada_em: None,
                     origem: Some(ORIGEM_CHAT.into()),
+                    conta: self.conta_do_app.clone(),
                 };
                 self.sessoes.insert(id, s.clone());
                 vec![Mudanca::Sessao(s)]
@@ -280,6 +281,40 @@ mod testes {
         assert!(m.amostra(&le(h(9, 1), "abc", "Receita de bolo")).iter().all(|x| !matches!(x, Mudanca::Sessao(_))));
         m.amostra(&le(h(9, 2), "abc", "Receita de torta"));
         assert_eq!(m.sessoes["chat:abc"].nome.as_deref(), Some("Receita de torta"));
+    }
+
+    #[test]
+    fn a_conta_da_sessao_a_primeira_fica_e_o_chat_novo_recebe_a_do_app() {
+        let mut m = motor();
+        let ev = |sessao: &str, origem: &str, conta: Option<&str>, t: Ms| EventoHook {
+            t,
+            evento: "UserPromptSubmit".into(),
+            sessao: sessao.into(),
+            cwd: "D:/Projetos/x".into(),
+            transcript: None,
+            notificacao: None,
+            origem: Some(origem.into()),
+            conta: conta.map(str::to_string),
+        };
+        // sem nenhuma conta do app: a conversa do Chat fica sem conta
+        m.amostra(&le(h(8, 30), "antes", "Antes"));
+        assert_eq!(m.sessoes["chat:antes"].conta, None);
+        let mud = m.evento(&ev("t1", "cli", Some("1111111111111111"), h(9, 0)));
+        assert!(mud.contains(&Mudanca::Conta { id: "1111111111111111".into(), origem: Some("cli".into()), visto_em: h(9, 0) }));
+        assert_eq!(m.sessoes["t1"].conta.as_deref(), Some("1111111111111111"));
+        // a primeira não vazia fica; um valor que não é resumo fica de fora
+        m.evento(&ev("t1", "cli", Some("2222222222222222"), h(9, 1)));
+        assert_eq!(m.sessoes["t1"].conta.as_deref(), Some("1111111111111111"));
+        let mud = m.evento(&ev("t2", "cli", Some("0A1B-uuid-de-verdade"), h(9, 2)));
+        assert!(!mud.iter().any(|x| matches!(x, Mudanca::Conta { .. })));
+        assert_eq!(m.sessoes["t2"].conta, None);
+        assert_eq!(m.conta_do_app, None, "o terminal não é o app");
+        // a do app do Claude passa às conversas do Chat novas (as de antes ficam como estavam)
+        m.evento(&ev("a1", "claude-desktop", Some("3333333333333333"), h(9, 3)));
+        assert_eq!(m.conta_do_app.as_deref(), Some("3333333333333333"));
+        m.amostra(&le(h(9, 4), "nova", "Nova"));
+        assert_eq!(m.sessoes["chat:nova"].conta.as_deref(), Some("3333333333333333"));
+        assert_eq!(m.sessoes["chat:antes"].conta, None);
     }
 
     #[test]

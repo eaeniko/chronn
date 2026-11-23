@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::banco::Banco;
 use crate::config::{texto_de_corte, ConfigApp};
-use crate::modelo::{Atividade, EstadoSessao, Grupo, Ligacao, MotivoFim, Origem, Pergunta, Sessao, Timer, Trecho, ATIVIDADE_REUNIAO};
+use crate::modelo::{Atividade, ContaClaude, EstadoSessao, Grupo, Ligacao, MotivoFim, Origem, Pergunta, Sessao, Timer, Trecho, ATIVIDADE_REUNIAO};
 use crate::motor::{chave_de_pasta, raiz_do_projeto, sugestao_de_pasta, Motor, AVISO_LIGADA_MS};
 use crate::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
 use crate::idioma::{self, tf, Idioma};
@@ -38,6 +38,35 @@ pub struct Snapshot {
     /// "sistema" resolvido pelo idioma do Windows. As páginas seguem este, para os textos que vêm
     /// do núcleo (as perguntas) e os delas saírem no mesmo idioma.
     pub idioma: String,
+    /// As contas do Claude vistas (rodada 28, Ajustes → "Contas do Claude"), a vista por último
+    /// primeiro: só o resumo do id, nunca o id.
+    pub contas: Vec<ContaDto>,
+    /// As distros ligadas cujos hooks saíram do `settings.json` de lá (0.6.1, outro programa
+    /// regravou o arquivo): a janela principal avisa, com o "Ligar de novo". O app preenche
+    /// (`Nucleo::snapshot`); o núcleo não olha o WSL.
+    #[serde(default)]
+    pub wsl_sem_hooks: Vec<String>,
+}
+
+/// Uma conta do Claude para a tela (rodada 28).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ContaDto {
+    /// O resumo (16 caracteres hexadecimais).
+    pub id: String,
+    /// Os 4 primeiros do resumo: "Conta ·1a2b".
+    pub curta: String,
+    /// "Nome · ni•••@dominio · Pro" (0.6.1), do `~/.claude.json`; sem ele, a tela usa a curta.
+    pub rotulo: Option<String>,
+    pub origem: Option<String>,
+    pub visto_em: Ms,
+    pub espaco_id: Option<i64>,
+}
+
+/// O id da pergunta "De qual espaço é esta conta?" (rodada 28): a pergunta não é do motor (sai do
+/// banco a cada estado); o id fica acima de 2^52, longe dos do motor, e é o mesmo para a mesma
+/// conta.
+pub fn id_da_pergunta_de_conta(conta: &str) -> u64 {
+    (1u64 << 52) | u64::from_str_radix(conta.get(..12).unwrap_or("0"), 16).unwrap_or(0)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -208,6 +237,10 @@ pub struct SessaoDto {
     /// De onde a sessão veio (rodada 27): "claude-desktop", "cli", "claude-vscode", "chat" ou
     /// outro valor; a tela mostra o rótulo ("app do Claude", "terminal"…). Sem origem: nulo.
     pub origem: Option<String>,
+    /// A conta do Claude da sessão (rodada 28): o resumo, e o espaço do Chronn dela (a lista de
+    /// ligar põe primeiro as do espaço do timer). Sem conta, ou sem espaço: nulo.
+    pub conta: Option<String>,
+    pub conta_espaco: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -230,6 +263,16 @@ pub struct PerguntaDto {
     /// As pastas do "Sempre que for na pasta", da onde a sessão começou até onde ela está agora
     /// (vazia no Chat, sem pasta).
     pub pastas: Vec<PastaDaPergunta>,
+    /// A cor de cada botão de `opcoes` (rodada 28: na pergunta da conta, a do espaço); vazia nas
+    /// outras.
+    pub cores: Vec<Option<String>>,
+    /// A pergunta `conta_nova` (0.6.1): o rótulo da conta ("Nome · ni•••@dominio · Pro") e, sem
+    /// ele, os 4 primeiros do resumo ("Conta ·1a2b").
+    pub conta_rotulo: Option<String>,
+    pub conta_curta: Option<String>,
+    /// A pergunta `sessao_nova` (0.6.1): a pasta de agora é larga demais para uma regra (a pasta do
+    /// usuário, o drive, o home de uma distro): o dock diz para abrir o `claude` dentro do projeto.
+    pub pasta_larga: bool,
 }
 
 /// Uma pasta da lista do "Sempre que for na pasta" (rodada 27).
@@ -242,6 +285,9 @@ pub struct PastaDaPergunta {
     pub comecou: bool,
     /// A pasta onde a sessão está agora (a escolhida de início).
     pub agora: bool,
+    /// Uma pasta com vários projetos (0.6.1, `pastas::pasta_mae`): a regra pegaria todos, e o dock
+    /// avisa.
+    pub varios: bool,
 }
 
 const COR_SEM_GRUPO: &str = "#8a8f98";
@@ -294,7 +340,7 @@ pub fn proximo_vencimento(motor: &Motor, cfg: &ConfigApp, pausados: &[Ms], agora
         .sessoes
         .values()
         .filter(|s| espera_na_tela(motor, s, dia_inicio))
-        .filter_map(|s| s.terminou_em)
+        .filter_map(|s| motor.espera_ultima(s, agora))
         .flat_map(|t| limites.iter().map(move |l| t + l));
     let tarefas = motor.segundo_plano.values().copied();
     // o pausado sai do dock recolhido (rodada 14)
@@ -381,6 +427,11 @@ pub fn pausados_de_hoje(banco: &Banco, motor: &Motor, agora: Ms) -> rusqlite::Re
 
 /// Ultimas duas partes da pasta, com `\` (ex.: `Clientes\Cliente D`).
 fn pasta_curta(cwd: &str) -> String {
+    // `\\wsl$\` é o mesmo que `\\wsl.localhost\` (rodada 28)
+    let cwd = match cwd.get(..7) {
+        Some(p) if p.eq_ignore_ascii_case(r"\\wsl$\") => format!(r"\\wsl.localhost\{}", &cwd[7..]),
+        _ => cwd.to_string(),
+    };
     let partes: Vec<&str> = cwd.split(['\\', '/']).filter(|p| !p.is_empty()).collect();
     partes[partes.len().saturating_sub(2)..].join("\\")
 }
@@ -426,6 +477,8 @@ fn sessao_dto_com(i: Idioma, s: &Sessao, estado: EstadoSessao, regras: &[crate::
         regra_id: regra.map(|r| r.id),
         regra_pasta: regra.map(|r| r.pasta.clone()),
         origem: s.origem.clone(),
+        conta: s.conta.clone(),
+        conta_espaco: None,
     }
 }
 
@@ -545,6 +598,7 @@ fn pergunta_dto(
                     curta: pasta_curta(&x),
                     comecou: chave_de_pasta(&x) == inicio,
                     agora: chave_de_pasta(&x) == agora,
+                    varios: crate::pastas::pasta_mae_com_cache(&x, &motor.regras_pasta),
                     pasta: x,
                 })
                 .collect();
@@ -630,7 +684,79 @@ fn pergunta_dto(
             contar_ou_nao(*de, *ate),
         ),
     };
-    PerguntaDto { id, tipo: tipo.to_string(), texto, opcoes, sessao_id, pasta, pasta_curta: curta, sessao_nome, origem, pastas }
+    // a pasta do usuário (ou o drive, ou o home de uma distro) não vira regra: o dock diz para
+    // abrir o `claude` dentro do projeto (0.6.1)
+    let pasta_larga = matches!(p, Pergunta::SessaoNova { .. })
+        && pasta.as_deref().is_some_and(|x| crate::motor::pasta_larga(x, std::env::var("USERPROFILE").ok().as_deref()));
+    PerguntaDto {
+        id,
+        tipo: tipo.to_string(),
+        texto,
+        opcoes,
+        sessao_id,
+        pasta,
+        pasta_curta: curta,
+        sessao_nome,
+        origem,
+        pastas,
+        cores: vec![],
+        conta_rotulo: None,
+        conta_curta: None,
+        pasta_larga,
+    }
+}
+
+/// O rótulo da conta na tela (0.6.1): duas contas com o mesmo rótulo (o mesmo nome, e-mail
+/// mascarado e plano) levam os 4 primeiros do resumo junto ("Ana · Pro ·1a2b"; revisão M6).
+fn rotulo_na_tela(c: &ContaClaude, todas: &[ContaClaude]) -> Option<String> {
+    let r = c.rotulo.as_deref()?;
+    let repetido = todas.iter().any(|o| o.id != c.id && o.rotulo.as_deref() == Some(r));
+    Some(if repetido { format!("{r} ·{}", c.id.chars().take(4).collect::<String>()) } else { r.to_string() })
+}
+
+/// As perguntas "De qual espaço é esta conta?" (rodada 28): só com 2 ou mais espaços não
+/// arquivados, para cada conta sem espaço que ainda não foi perguntada hoje (`perguntado_em` nulo
+/// ou de outro dia de trabalho). "Vem de": a origem do último evento da conta; "Pasta": a pasta de
+/// agora da sessão mais recente dela (no Chat, nenhuma). Um botão por espaço, com a cor dele, e o
+/// "Depois".
+fn perguntas_de_conta(i: Idioma, contas: &[ContaClaude], espacos: &[crate::modelo::Espaco], motor: &Motor, dia: chrono::NaiveDate) -> Vec<PerguntaDto> {
+    let ativos: Vec<&crate::modelo::Espaco> = espacos.iter().filter(|e| !e.arquivado).collect();
+    if ativos.len() < 2 {
+        return vec![];
+    }
+    let (corte, fuso) = (motor.cfg.corte_min, motor.cfg.fuso_min);
+    contas
+        .iter()
+        .filter(|c| c.espaco_id.is_none() && c.perguntado_em.is_none_or(|p| dia_de(p, corte, fuso) != dia))
+        .map(|c| {
+            let sessao = motor.sessoes.values().filter(|s| s.conta.as_deref() == Some(c.id.as_str())).max_by_key(|s| s.ultimo_evento);
+            let pasta = sessao
+                .filter(|s| !crate::motor::e_sessao_do_chat(&s.id))
+                .map(|s| raiz_do_projeto(motor.pasta_de_agora(&s.id, &s.cwd)).to_string())
+                .filter(|p| !p.trim().is_empty());
+            let mut opcoes: Vec<(String, String)> =
+                ativos.iter().map(|e| (format!("conta:{}:espaco:{}", c.id, e.id), e.nome.clone())).collect();
+            let mut cores: Vec<Option<String>> = ativos.iter().map(|e| Some(e.cor.clone())).collect();
+            opcoes.push((format!("conta:{}:depois", c.id), idioma::t(i, "pg.depois").to_string()));
+            cores.push(None);
+            PerguntaDto {
+                id: id_da_pergunta_de_conta(&c.id),
+                tipo: "conta_nova".to_string(),
+                texto: idioma::t(i, "pg.conta_nova").to_string(),
+                opcoes,
+                sessao_id: None,
+                pasta_curta: pasta.as_deref().map(pasta_curta),
+                pasta,
+                sessao_nome: None,
+                origem: c.origem.clone(),
+                pastas: vec![],
+                cores,
+                conta_rotulo: rotulo_na_tela(c, contas),
+                conta_curta: Some(c.id.chars().take(4).collect()),
+                pasta_larga: false,
+            }
+        })
+        .collect()
 }
 
 /// "ligado" ou "ligados", pelo número de timers.
@@ -653,6 +779,9 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
 
     // Os espaços arquivados ficam fora, com os grupos e os timers deles (rodada 20).
     let espacos = banco.espacos()?;
+    // as contas do Claude (rodada 28) e os espaços dos botões da pergunta da conta
+    let contas = banco.contas()?;
+    let espacos_dos_botoes = espacos.clone();
     let ativos: Vec<i64> = espacos.iter().filter(|e| !e.arquivado).map(|e| e.id).collect();
     let grupos: Vec<Grupo> = banco.grupos()?.into_iter().filter(|g| ativos.contains(&g.espaco_id)).collect();
     // o espaço de cada grupo, os arquivados também (o timer rodando num deles)
@@ -750,7 +879,7 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
                 .sessoes
                 .values()
                 .filter(|s| s.timer_id == Some(t.id) && espera_na_tela(motor, s, dia_inicio))
-                .filter_map(|s| if motor.lendo_agora() == Some(s.id.as_str()) { Some(agora) } else { s.terminou_em })
+                .filter_map(|s| motor.espera_ultima(s, agora))
                 .max(),
             situacao_claude: situacao_claude(motor, t.id, &origens, dia_inicio, agora),
             pausado_em: pausado_em(motor, t.id, &trechos),
@@ -854,6 +983,7 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
             .perguntas
             .iter()
             .map(|(id, p)| pergunta_dto(*id, p, &timers, &rotulos, &atividades, dia_inicio, corte, motor, i))
+            .chain(perguntas_de_conta(i, &contas, &espacos_dos_botoes, motor, dia))
             .collect(),
         lendo: motor.lendo_agora().map(str::to_string),
         escrevendo: motor.escrevendo_agora(),
@@ -862,6 +992,18 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
         espacos: espacos_dto,
         config: banco.config_app()?,
         idioma: i.codigo().to_string(),
+        wsl_sem_hooks: vec![],
+        contas: contas
+            .iter()
+            .map(|c| ContaDto {
+                id: c.id.clone(),
+                curta: c.id.chars().take(4).collect(),
+                rotulo: rotulo_na_tela(c, &contas),
+                origem: c.origem.clone(),
+                visto_em: c.visto_em,
+                espaco_id: c.espaco_id,
+            })
+            .collect(),
     })
 }
 
@@ -979,6 +1121,7 @@ mod testes {
             transcript: None,
             notificacao: None,
             origem: None,
+            conta: None,
         };
         let mud = m.evento(&ev);
         b.aplicar(&mud).unwrap();
@@ -1106,7 +1249,7 @@ mod testes {
         assert_eq!(s.atividades.iter().map(|a| a.nome.as_str()).collect::<Vec<_>>(), ["Trabalho", "Reunião", "Estudo"]);
         // o Claude trabalhando junto: a reunião segue na frente
         m.regras_pasta = vec![RegraPasta { id: 1, pasta: "G:\\Cliente A".into(), timer_id: t }];
-        let ev = EventoHook { t: h(9, 40), evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None, origem: None };
+        let ev = EventoHook { t: h(9, 40), evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None, origem: None, conta: None };
         b.aplicar(&m.evento(&ev)).unwrap();
         let s = montar(&b, &m, h(9, 45)).unwrap();
         let cliente_a = s.grupos.iter().flat_map(|g| &g.timers).find(|x| x.id == t).unwrap();
@@ -1212,6 +1355,7 @@ mod testes {
             ligacao: None,
             desligada_em: None,
             origem: None,
+            conta: None,
         };
         // de anteontem e de hoje cedo
         m.sessoes.insert("velha".into(), sessao("velha", h(0, 0) - 30 * 60 * MIN));
@@ -1238,7 +1382,7 @@ mod testes {
     }
 
     fn ev(t: Ms, evento: &str, sessao: &str) -> EventoHook {
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: "G:\\Projeto A".into(), transcript: None, notificacao: None, origem: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: "G:\\Projeto A".into(), transcript: None, notificacao: None, origem: None, conta: None }
     }
     fn situacao_de(s: &Snapshot, id: i64) -> Option<String> {
         s.grupos.iter().flat_map(|g| &g.timers).find(|t| t.id == id).unwrap().situacao.clone()
@@ -1271,6 +1415,32 @@ mod testes {
         // escrever nela: trabalhando de novo
         b.aplicar(&m.evento(&ev(h(9, 30), "UserPromptSubmit", "s1"))).unwrap();
         assert_eq!(situacao_de(&montar(&b, &m, h(9, 31)).unwrap(), t).as_deref(), Some("trabalhando"));
+    }
+
+    #[test]
+    fn duas_contas_com_o_mesmo_rotulo_levam_a_curta() {
+        let c = |id: &str, r: Option<&str>| ContaClaude { id: id.into(), espaco_id: None, origem: None, visto_em: 0, perguntado_em: None, rotulo: r.map(str::to_string) };
+        let todas = vec![c("1a2b000000000000", Some("Ana · Pro")), c("3c4d000000000000", Some("Ana · Pro")), c("5e6f000000000000", Some("Bia · Max")), c("7a8b000000000000", None)];
+        let v: Vec<Option<String>> = todas.iter().map(|x| rotulo_na_tela(x, &todas)).collect();
+        assert_eq!(v, [Some("Ana · Pro ·1a2b".into()), Some("Ana · Pro ·3c4d".into()), Some("Bia · Max".into()), None]);
+    }
+
+    /// 0.6.1: o lembrete conta da sua última leitura da sessão (o dock não troca uma pela outra).
+    #[test]
+    fn a_espera_conta_da_ultima_leitura_no_snapshot_e_no_vencimento() {
+        let b = Banco::abrir_memoria().unwrap();
+        let t = b.criar_timer(None, "Projeto A", "#c00").unwrap();
+        let mut m = motor(h(9, 0));
+        m.regras_pasta = vec![RegraPasta { id: 1, pasta: "G:\\Projeto A".into(), timer_id: t }];
+        b.aplicar(&m.evento(&ev(h(9, 0), "UserPromptSubmit", "s1"))).unwrap();
+        b.aplicar(&m.evento(&ev(h(9, 8), "Stop", "s1"))).unwrap();
+        m.lida_em.insert("s1".into(), h(9, 50));
+        let s = montar(&b, &m, h(9, 51)).unwrap();
+        let timer = &s.grupos[0].timers[0];
+        assert_eq!((timer.espera_desde, timer.espera_ultima), (Some(h(9, 8)), Some(h(9, 50))));
+        // o dock recolhido (30 min) tira o lembrete às 10:20, não às 9:38
+        let cfg = ConfigApp { espera_dock_min: 30, espera_app_min: 0, ..Default::default() };
+        assert_eq!(proximo_vencimento(&m, &cfg, &[], h(9, 51)), h(10, 20));
     }
 
     #[test]
@@ -1416,6 +1586,54 @@ mod testes {
     }
 
     #[test]
+    fn a_pergunta_da_conta_so_com_dois_espacos_uma_vez_por_dia_e_com_vem_de_e_pasta() {
+        let b = Banco::abrir_memoria().unwrap();
+        let mut m = motor(h(9, 0));
+        let conta = "1a2b3c4d5e6f7081";
+        let ev = EventoHook {
+            t: h(9, 0),
+            evento: "UserPromptSubmit".into(),
+            sessao: "s1".into(),
+            cwd: "D:/Projetos/site".into(),
+            transcript: None,
+            notificacao: None,
+            origem: Some("cli".into()),
+            conta: Some(conta.into()),
+        };
+        b.aplicar(&m.evento(&ev)).unwrap();
+        let de_conta = |s: &Snapshot| s.perguntas.iter().filter(|p| p.tipo == "conta_nova").cloned().collect::<Vec<_>>();
+        // um espaço só: nada
+        let s = montar(&b, &m, h(9, 1)).unwrap();
+        assert!(de_conta(&s).is_empty());
+        assert_eq!(s.contas, vec![ContaDto { id: conta.into(), curta: "1a2b".into(), rotulo: None, origem: Some("cli".into()), visto_em: h(9, 0), espaco_id: None }]);
+        let pessoal = b.criar_espaco("Pessoal", "#e86bd0").unwrap();
+        let s = montar_em(&b, &m, h(9, 1), Idioma::Pt).unwrap();
+        let p = &de_conta(&s)[0];
+        assert_eq!(p.id, id_da_pergunta_de_conta(conta));
+        assert!(p.id > 1 << 52 && p.id < 1 << 53, "longe dos ids do motor e inteiro na página");
+        assert_eq!((p.texto.as_str(), p.origem.as_deref(), p.pasta_curta.as_deref()), ("De qual espaço é esta conta?", Some("cli"), Some(r"Projetos\site")));
+        let valores: Vec<&str> = p.opcoes.iter().map(|o| o.0.as_str()).collect();
+        assert_eq!(valores, [format!("conta:{conta}:espaco:1"), format!("conta:{conta}:espaco:{pessoal}"), format!("conta:{conta}:depois")]);
+        assert_eq!(p.cores, vec![Some(crate::banco::COR_ESPACO_PRIMEIRO.to_string()), Some("#e86bd0".into()), None]);
+        assert_eq!(montar_em(&b, &m, h(9, 1), Idioma::En).unwrap().perguntas.last().unwrap().opcoes.last().unwrap().1, "Later");
+        // "Depois": só volta noutro dia de trabalho
+        b.marcar_conta_perguntada(conta, h(9, 2)).unwrap();
+        assert!(de_conta(&montar(&b, &m, h(18, 0)).unwrap()).is_empty());
+        assert_eq!(de_conta(&montar(&b, &m, h(9, 0) + 24 * 60 * MIN).unwrap()).len(), 1, "no dia seguinte");
+        // com espaço: nunca mais
+        b.definir_espaco_da_conta(conta, Some(pessoal)).unwrap();
+        assert!(de_conta(&montar(&b, &m, h(9, 0) + 48 * 60 * MIN).unwrap()).is_empty());
+        // a conta do Chat: sem a pasta
+        b.definir_espaco_da_conta(conta, None).unwrap();
+        b.esquecer_conta(conta).unwrap();
+        let chat = "9f8e7d6c5b4a3921";
+        m.sessoes.insert("chat:x".into(), Sessao { id: "chat:x".into(), cwd: String::new(), nome: None, transcript: None, timer_id: None, estado: EstadoSessao::Parada, ultimo_evento: h(9, 5), terminou_em: None, criada_em: h(9, 5), ligacao: None, desligada_em: None, origem: Some("chat".into()), conta: Some(chat.into()) });
+        b.aplicar(&[Mudanca::Conta { id: chat.into(), origem: Some("claude-desktop".into()), visto_em: h(9, 5) }]).unwrap();
+        let p = de_conta(&montar(&b, &m, h(9, 6)).unwrap())[0].clone();
+        assert_eq!((p.pasta, p.origem.as_deref()), (None, Some("claude-desktop")));
+    }
+
+    #[test]
     fn a_pergunta_de_sessao_nova_traz_o_nome_a_origem_e_as_pastas_ate_a_de_agora() {
         let b = Banco::abrir_memoria().unwrap();
         let t = b.criar_timer(None, "Projetos", "#a00").unwrap();
@@ -1428,6 +1646,7 @@ mod testes {
             transcript: None,
             notificacao: None,
             origem: Some("cli".into()),
+            conta: None,
         };
         m.evento(&ev(h(9, 0), "UserPromptSubmit", "D:\\Projetos"));
         let s = montar(&b, &m, h(9, 0)).unwrap();
@@ -1703,6 +1922,7 @@ mod testes {
             ligacao: None,
             desligada_em: None,
             origem: None,
+            conta: None,
         };
         // no idioma pedido (o do snapshot), não no global
         assert_eq!(nome_da_sessao(Idioma::Pt, &s("chat:0a1b", "", None)), "Conversa do Chat");

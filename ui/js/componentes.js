@@ -642,20 +642,60 @@ export function perguntaSessaoNova(p) {
         )
         .join('')}</div>`
     : '';
-  const deCima = sempre && pastas.length > 1 && pasta.pasta === pastas[0].pasta;
+  // 0.6.1: a pasta escolhida tem vários projetos (a regra pega todos): o aviso diz para abrir o
+  // claude dentro do projeto; sem ele, a pasta de cima avisa como antes
+  const varios = sempre && Boolean(pastas.find((x) => x.pasta === pasta.pasta)?.varios);
+  const deCima = !varios && sempre && pastas.length > 1 && pasta.pasta === pastas[0].pasta;
+  const aviso = varios ? TEXTOS.avisoVariosProjetos : deCima ? TEXTOS.ajudaPastaDeCima : '';
   const rodape = pastas.length
     ? `<div class="sn-sempre" data-tauri-drag-region="false">
 <label class="sn-caixa"><input type="checkbox" data-pg-sempre data-pergunta="${p.id}" data-pasta="${esc(pasta.pasta)}"${sempre ? ' checked' : ''}><span>${esc(TEXTOS.sempreQueForNaPasta)}</span></label>${lista}
-<small class="sn-ajuda">${esc(TEXTOS.ajudaSempreNaPasta)}${deCima ? ` <b>${esc(TEXTOS.ajudaPastaDeCima)}</b>` : ''}</small></div>`
-    : '';
+<small class="sn-ajuda">${esc(TEXTOS.ajudaSempreNaPasta)}${aviso ? ` <b>${esc(aviso)}</b>` : ''}</small></div>`
+    : // a pasta do usuário (ou o home de uma distro) não vira regra: o dock diz como separar
+      p.pasta_larga
+      ? `<div class="sn-sempre" data-tauri-drag-region="false"><small class="sn-ajuda"><b>${esc(TEXTOS.avisoPastaLarga)}</b></small></div>`
+      : '';
   return `<div class="sn-sobre">${esc(TEXTOS.sessaoNovaSobre)}</div><div class="sn-titulo">${esc(TEXTOS.emQualTimer)}</div><dl class="sn-info">${linhas}</dl><div class="o sn-o">${botoes}</div>${rodape}`;
 }
 
+// ---- a pergunta da conta nova no dock (rodada 28, opção B) ----
+
 /**
- * Uma pergunta inteira no dock: a de sessão nova pelo desenho novo (rodada 27); as outras, o
- * texto e os botões de sempre.
+ * "De qual espaço é esta conta?" (rodada 28): em cima, pequeno, "Conta nova do Claude"; o título;
+ * as linhas "Vem de" (a origem do evento) e "Pasta" (a pasta curta; no Chat, não aparece), para
+ * ajudar a reconhecer a conta; um botão por espaço, com a cor dele, e o "Depois", discreto.
+ * O cartão é o da sessão nova (`sn`), com a mesma grade de botões.
  */
-export const htmlDaPergunta = (p) => (p.tipo === 'sessao_nova' ? perguntaSessaoNova(p) : `${textoDaPergunta(p)}${opcoesDaPergunta(p)}`);
+export function perguntaContaNova(p) {
+  const origem = TEXTOS.origemDaSessao(p.origem);
+  // 0.6.1: qual é a conta ("Nome · ni•••@dominio · Pro"; sem o rótulo, "Conta ·1a2b")
+  const conta = p.conta_rotulo || (p.conta_curta ? TEXTOS.contaCurta(p.conta_curta) : '');
+  const linhas = [
+    conta ? `<div class="sn-l"><dt>${esc(TEXTOS.rotuloConta)}</dt><dd class="sn-nome" title="${esc(conta)}">${esc(conta)}</dd></div>` : '',
+    origem ? `<div class="sn-l"><dt>${esc(TEXTOS.rotuloVemDe)}</dt><dd>${esc(origem)}</dd></div>` : '',
+    p.pasta
+      ? `<div class="sn-l"><dt>${esc(TEXTOS.rotuloPasta)}</dt><dd class="sn-pasta mono" title="${esc(p.pasta)}">${esc(p.pasta_curta || p.pasta)}</dd></div>`
+      : '',
+  ].join('');
+  const espacos = p.opcoes.map((o, i) => [o, p.cores?.[i] ?? null]).filter(([[v]]) => !v.endsWith(':depois'));
+  const depois = p.opcoes.find(([v]) => v.endsWith(':depois'));
+  const botao = ([valor, rotulo], c, classe) =>
+    `<button class="${classe}" title="${esc(rotulo)}"${c ? ` style="--c:${cor(c)}"` : ''} data-acao="responder" data-pergunta="${p.id}" data-valor="${esc(valor)}">${c ? '<i></i>' : ''}<span>${esc(rotulo)}</span></button>`;
+  const botoes =
+    espacos.map(([o, c], i) => botao(o, c, `cn-esp${espacos.length % 2 === 1 && i === espacos.length - 1 ? ' largo' : ''}`)).join('') +
+    (depois ? botao(depois, null, 'largo sn-nao') : '');
+  return `<div class="sn-sobre">${esc(TEXTOS.contaNovaSobre)}</div><div class="sn-titulo">${esc(TEXTOS.contaNovaTitulo)}</div>${linhas ? `<dl class="sn-info">${linhas}</dl>` : ''}<div class="o sn-o">${botoes}</div>`;
+}
+
+/** As perguntas que usam o cartão grande (`sn`) no dock: a sessão nova e a conta nova. */
+export const perguntaGrande = (p) => p?.tipo === 'sessao_nova' || p?.tipo === 'conta_nova';
+
+/**
+ * Uma pergunta inteira no dock: a de sessão nova pelo desenho novo (rodada 27) e a da conta nova
+ * (rodada 28); as outras, o texto e os botões de sempre.
+ */
+export const htmlDaPergunta = (p) =>
+  p.tipo === 'sessao_nova' ? perguntaSessaoNova(p) : p.tipo === 'conta_nova' ? perguntaContaNova(p) : `${textoDaPergunta(p)}${opcoesDaPergunta(p)}`;
 
 /** O estado de uma sessão na tela ("trabalhando", "esperando você", "parada"). */
 export const estadoDaSessao = (estado) => TEXTOS.estadoSessao(estado);

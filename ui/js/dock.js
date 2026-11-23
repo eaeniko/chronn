@@ -35,6 +35,7 @@ import {
   dicaDoTempo,
   tituloDoTempo,
   htmlDaPergunta,
+  perguntaGrande,
   mudarEscolha,
   esquecerEscolhas,
   sempreDoBotao,
@@ -164,7 +165,7 @@ function recolhido(agora) {
     : '';
   const p = snap.perguntas[0];
   // a pergunta de sessão nova tem o cartão mais largo (rodada 27, opção A: 400 px)
-  const ask = p ? `<div class="ask${p.tipo === 'sessao_nova' ? ' sn' : ''}">${htmlDaPergunta(p)}</div>` : '';
+  const ask = p ? `<div class="ask${perguntaGrande(p) ? ' sn' : ''}">${htmlDaPergunta(p)}</div>` : '';
   const total = `<div class="dtot" title="${dicaDoTotal(agora)}">${TEXTOS.hojeMin} <b class="mono" data-total-dia>${totalDoDia(agora)}</b></div>`;
   return `<div class="pilula">${marcaDeTeste()}${timers}${total}<button class="dbt" data-acao="expandir" title="${TEXTOS.expandir}" aria-label="${TEXTOS.expandirODock}">${ICONE_EXPANDIR}</button>${dois}</div>${ask}${avisoDeLigacao('dav')}`;
 }
@@ -241,7 +242,7 @@ function expandidoHtml(agora) {
   const mais = resto.length
     ? `<small class="dx-mais">${TEXTOS.perguntasDepois(resto.length)}</small>`
     : '';
-  const pergunta = p ? `<div class="dx-ask${p.tipo === 'sessao_nova' ? ' sn' : ''}">${htmlDaPergunta(p)}${mais}</div>` : '';
+  const pergunta = p ? `<div class="dx-ask${perguntaGrande(p) ? ' sn' : ''}">${htmlDaPergunta(p)}${mais}</div>` : '';
   // o aviso de ligada sozinha vem antes da pergunta: dura só ~15 s e não pode ficar rolado para fora
   const asks = avisoDeLigacao('dx-aviso') + pergunta + lendoAgora();
   // com algo rodando, o "Pausar tudo" toma o lugar da contagem (as linhas acesas já mostram quais)

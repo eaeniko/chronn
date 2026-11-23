@@ -26,6 +26,13 @@ Claude app).
 - Chat conversations in the Claude app count too, once linked to a timer: Chronn sees the open
   conversation (reading and writing) and when Claude is answering. It keeps only the
   conversation's code, never its title or messages.
+- Claude Code in the terminal counts too: Windows Terminal, VS Code and WSL. For WSL, link each
+  distro under Settings ("Claude Code in WSL"): a small Linux hook writes the events inside the
+  distro and Chronn reads them from Windows, so it works with interop turned off. Chronn never
+  starts a stopped distro on its own. If another program rewrites the distro's Claude Code
+  settings without Chronn's hooks, the main window says so and offers to connect again.
+- Claude accounts: with two or more spaces, Chronn asks once which space an account belongs to,
+  showing its name, a masked e-mail and the plan. It keeps only a short digest of the account id.
 - Reset without deleting: the day's history stays.
 - A 1-minute tour, per-screen help and first-time tips.
 - English and Portuguese (Brazil), following Windows or chosen in Settings.

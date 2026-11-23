@@ -85,6 +85,9 @@ pub struct ConfigApp {
     /// Quando a última busca de atualização deu certo (ms desde 1970), automática ou pelo
     /// "Verificar atualizações"; nula antes da primeira.
     pub atualizacao_ultima: Option<i64>,
+    /// As distros do WSL com o Claude Code ligado (rodada 28): o Chronn lê a fila de cada uma, pelo
+    /// Windows, enquanto ela roda. Só o "Ligar" e o "Desligar" da distro mudam isto.
+    pub wsl_distros: Vec<String>,
 }
 
 impl ConfigApp {
@@ -146,6 +149,7 @@ impl Default for ConfigApp {
             dock_espaco: DOCK_ESPACO_TIMER.into(),
             atualizar_auto: true,
             atualizacao_ultima: None,
+            wsl_distros: vec![],
         }
     }
 }

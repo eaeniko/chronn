@@ -90,15 +90,50 @@ pub fn varios_projetos(pasta: &Path) -> bool {
         .is_some()
 }
 
-/// A pasta é uma pasta-mãe (uma regra nela pegaria vários projetos)? Regra (a) ou (b).
+/// A pasta é uma pasta-mãe (uma regra nela pegaria vários projetos)? Regra (a) ou (b). Numa
+/// pasta do WSL cuja distro não se sabe se roda, só a (a): ler o disco ligaria a distro (revisão I1).
 pub fn pasta_mae(pasta: &str, regras: &[RegraPasta]) -> bool {
-    ancestral_de_outra_regra(pasta, regras) || varios_projetos(Path::new(pasta))
+    ancestral_de_outra_regra(pasta, regras) || (crate::wsl::pode_tocar(pasta) && varios_projetos(Path::new(pasta)))
 }
 
 /// O "Trocar por uma subpasta…" da sessão: só vale a pasta da regra ou uma subpasta dela que
 /// contenha a pasta da conversa.
 pub fn subpasta_valida(regra: &str, nova: &str, cwd: &str) -> bool {
     chave_de_pasta(regra) == chave_de_pasta(nova) || (ancestral(regra, nova) && dentro_de(cwd, nova))
+}
+
+/// Quanto tempo vale a leitura do disco de `pasta_mae_com_cache`.
+const CACHE_PASTA_MAE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `pasta_mae` para a pergunta de sessão nova (0.6.1), que é montada a cada estado: a leitura das
+/// subpastas fica guardada por `CACHE_PASTA_MAE` (uma pasta do WSL é lida pelo 9P). A regra (a) é
+/// conferida sempre.
+pub fn pasta_mae_com_cache(pasta: &str, regras: &[RegraPasta]) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static CACHE: Mutex<Option<HashMap<String, (Instant, bool)>>> = Mutex::new(None);
+    if ancestral_de_outra_regra(pasta, regras) {
+        return true;
+    }
+    let chave = chave_de_pasta(pasta);
+    let mut g = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mapa = g.get_or_insert_with(HashMap::new);
+    // o guardado vale mesmo com a lista das distros rodando vencida (re-revisão R2: sem isto, o
+    // aviso de uma pasta do WSL piscava no modal)
+    if let Some((quando, v)) = mapa.get(&chave) {
+        if quando.elapsed() < CACHE_PASTA_MAE {
+            return *v;
+        }
+    }
+    // ler o disco de uma pasta do WSL só com a distro rodando
+    if !crate::wsl::pode_tocar(pasta) {
+        return false;
+    }
+    let v = varios_projetos(Path::new(pasta));
+    mapa.retain(|_, (q, _)| q.elapsed() < CACHE_PASTA_MAE);
+    mapa.insert(chave, (Instant::now(), v));
+    v
 }
 
 #[cfg(test)]
@@ -110,12 +145,36 @@ mod testes {
     }
 
     #[test]
+    fn a_pasta_com_varios_projetos_avisa_na_pergunta() {
+        let d = tempfile::tempdir().unwrap();
+        let raiz = d.path().join("Projetos");
+        for p in ["a", "b"] {
+            std::fs::create_dir_all(raiz.join(p).join(".git")).unwrap();
+        }
+        std::fs::create_dir_all(raiz.join("a").join("src")).unwrap();
+        let raiz = raiz.to_string_lossy().to_string();
+        assert!(pasta_mae_com_cache(&raiz, &[]));
+        assert!(!pasta_mae_com_cache(&format!("{raiz}\\a"), &[]), "o projeto não");
+        // pela regra (a), sem olhar o disco
+        assert!(pasta_mae_com_cache("Z:\\Nao\\Existe", &[r(1, "Z:\\Nao\\Existe\\app")]));
+    }
+
+    #[test]
     fn ancestral_sem_maiusculas_nem_barras() {
         assert!(ancestral("G:\\Empresa\\Projeto", "G:\\Empresa\\Projeto\\Flow"));
         assert!(ancestral("g:/empresa/projeto/", "G:\\Empresa\\Projeto\\Flow\\sub"));
         assert!(!ancestral("G:\\Empresa\\Projeto", "G:\\Empresa\\Projeto"), "a própria pasta não");
         assert!(!ancestral("G:\\Empresa\\Projeto", "G:\\Empresa\\Projeto A"), "outro nome que começa igual");
         assert!(!ancestral("G:\\Empresa\\Projeto\\Flow", "G:\\Empresa\\Projeto"));
+    }
+
+    #[test]
+    fn pasta_mae_no_wsl_sem_saber_se_a_distro_roda_so_pela_regra_a() {
+        // revisão I1: o `read_dir` ligaria a distro; numa distro que nenhum `rodando()` listou, o
+        // disco não é tocado (o nome é só deste teste)
+        let pasta = r"\\wsl.localhost\ParadaDoTesteI1\home\u\projetos";
+        assert!(!pasta_mae(pasta, &[]));
+        assert!(pasta_mae(pasta, &[r(1, r"\\wsl$\ParadaDoTesteI1\home\u\projetos\site")]), "a regra (a) segue valendo");
     }
 
     #[test]

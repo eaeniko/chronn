@@ -25,6 +25,13 @@ do Claude).
 - As conversas do Chat no app do Claude também contam, depois de ligadas a um timer: o Chronn vê a
   conversa aberta (lendo e escrevendo) e quando o Claude está respondendo. Ele guarda só o código
   da conversa, nunca o título nem as mensagens.
+- O Claude Code no terminal também conta: Windows Terminal, VS Code e WSL. No WSL, ligue cada
+  distro nos Ajustes ("Claude Code no WSL"): um hook pequeno para Linux grava os eventos dentro da
+  distro, e o Chronn os lê pelo Windows, então funciona com o interop desligado. O Chronn nunca
+  liga sozinho uma distro parada. Se outro programa regravar as configurações do Claude Code da
+  distro sem os hooks do Chronn, a janela principal avisa e oferece ligar de novo.
+- Contas do Claude: com dois ou mais espaços, o Chronn pergunta uma vez de qual espaço é cada
+  conta, mostrando o nome, o e-mail mascarado e o plano. Ele guarda só um resumo do id da conta.
 - Zerar sem apagar: o histórico do dia fica.
 - Tour de 1 minuto, ajuda por tela e dicas na primeira vez.
 - Português (Brasil) e inglês, seguindo o Windows ou escolhido nos Ajustes.

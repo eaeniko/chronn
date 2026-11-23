@@ -40,7 +40,8 @@ unsafe fn abrir(dono: Option<isize>, inicial: Option<&str>, titulo: &str) -> Res
             let o = d.GetOptions()?;
             d.SetOptions(o | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST)?;
             d.SetTitle(&HSTRING::from(titulo))?;
-            if let Some(p) = inicial.filter(|p| std::path::Path::new(p).is_dir()) {
+            // uma pasta do WSL só com a distro rodando: o `is_dir` ligaria uma parada (revisão I1)
+            if let Some(p) = inicial.filter(|p| nucleo::wsl::pode_tocar(p) && std::path::Path::new(p).is_dir()) {
                 if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(p), None) {
                     let _ = d.SetFolder(&item);
                 }

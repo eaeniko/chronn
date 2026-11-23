@@ -105,6 +105,13 @@ code.aj-bloco { display: block; padding: 7px 9px; }
 .aj-lista .bt { flex-shrink: 0; }
 .aj-lista .aj-vazio { color: var(--mu); font-size: 12px; border-style: dashed; background: none; }
 
+/* rodada 28: "Claude Code no WSL" e "Contas do Claude", embaixo do cartão do Claude Code */
+.aj-wsl, .aj-contas { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; max-width: 620px; }
+.aj-sub { margin: 0; font-size: 12.5px; font-weight: 650; color: var(--tx); }
+.aj-wsl .aj-estado { flex-shrink: 0; }
+.aj-contas li > i { background: var(--c, var(--mu2)); }
+.aj-conta-esp { flex-shrink: 0; max-width: 160px; height: 28px; padding: 0 8px; border: 1px solid var(--bd); border-radius: 8px; background: var(--btn); color: var(--tx); font: inherit; font-size: 12px; }
+
 /* sobre */
 .aj-sobre { display: flex; flex-direction: column; gap: 4px; }
 .aj-sobre .logo { font-size: 16px; }

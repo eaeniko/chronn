@@ -5,7 +5,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::time::Duration;
 
-use nucleo::claude_registros::titulo_da_sessao;
+use nucleo::claude_registros::registro_da_sessao;
 use nucleo::motor::{Amostra, ChatAberto, Conversa, SinaisDoChat};
 use nucleo::tempo::Ms;
 use sinais::conversa::{e_app_do_claude, ConversaLida, LeitorConversa, SinaisChat, LIMITE_CONSULTA};
@@ -59,6 +59,8 @@ pub fn amostra_de(
         em_foco: j.em_foco,
         reuniao_ativa: false,
         chat: None,
+        // o HWND (rodada 28): só em memória, para ligar a sessão do terminal à janela
+        janela: Some(j.hwnd),
     }
 }
 
@@ -73,9 +75,16 @@ pub fn sinais_para_o_motor(s: SinaisChat) -> SinaisDoChat {
     }
 }
 
-/// Um ciclo do laço (sem Tauri, testável). Devolve se algo mudou.
-/// A trava é solta enquanto os títulos são lidos do disco.
+/// Um ciclo do laço (sem Tauri, testável), sem as filas do WSL. Devolve se algo mudou.
+#[cfg(test)]
 pub fn ciclo(estado: &Estado, fila: &Path, amostra: Amostra) -> Result<bool, String> {
+    ciclo_com_wsl(estado, fila, &[], amostra)
+}
+
+/// Um ciclo do laço com as filas das distros do WSL ligadas e rodando (`filas_wsl`: a distro e o
+/// caminho da fila dela pelo Windows; rodada 28), lidas logo depois da do Windows. Devolve se algo
+/// mudou. A trava é solta enquanto os títulos são lidos do disco.
+pub fn ciclo_com_wsl(estado: &Estado, fila: &Path, filas_wsl: &[(String, std::path::PathBuf)], amostra: Amostra) -> Result<bool, String> {
     let agora = amostra.t;
     let mut mudou = false;
 
@@ -112,6 +121,13 @@ pub fn ciclo(estado: &Estado, fila: &Path, amostra: Amostra) -> Result<bool, Str
             }
             Err(e) => log_debug!("worktimer: erro lendo a fila: {e}"),
         }
+        // as filas do WSL (rodada 28): a distro que parou no meio só não é lida, sem erro na tela
+        for (distro, caminho) in filas_wsl {
+            match n.ler_fila_da_distro(distro, caminho) {
+                Ok(m) => mudou |= m,
+                Err(e) => log_debug!("worktimer: erro lendo a fila do WSL ({distro}): {e}"),
+            }
+        }
         (n.titulos_a_ler(agora), n.transcripts_a_conferir(agora))
     };
     let (ler, fins) = ler;
@@ -126,13 +142,21 @@ pub fn ciclo(estado: &Estado, fila: &Path, amostra: Amostra) -> Result<bool, Str
             (id, leitor, r)
         })
         .collect();
-    let lidos: Vec<(String, Option<String>)> =
-        ler.into_iter().map(|(id, caminho)| (id, titulo_da_sessao(&caminho))).collect();
+    // o nome e, sem a conta do hook, a conta (0.6.1); o transcript do WSL só com a distro rodando
+    // (`titulos_a_ler` confere o `pode_tocar`)
+    let (lidos, contas): (Vec<(String, Option<String>)>, Vec<(String, Option<String>)>) = ler
+        .into_iter()
+        .map(|(id, caminho, quer_conta)| {
+            let r = registro_da_sessao(&caminho, quer_conta);
+            ((id.clone(), r.titulo), (id, if quer_conta { r.conta } else { None }))
+        })
+        .unzip();
 
     // 3–5. amostra, tique e gravação
     let mut n = trava(estado);
     let escrevia = n.motor.escrevendo_agora();
-    let mut mud = n.aplicar_titulos(lidos, agora);
+    let mut mud = n.aplicar_contas(contas);
+    mud.extend(n.aplicar_titulos(lidos, agora));
     let segundo_plano = n.motor.segundo_plano.clone();
     mud.extend(n.aplicar_fins(fins, agora));
     // entrar ou sair do "segundo plano" só muda a etiqueta: a tela precisa saber
@@ -174,12 +198,21 @@ pub fn iniciar(app: AppHandle) {
         let fila = fila::caminhos::fila();
         let backups = fila::caminhos::backups();
         let mut hook_conferido = std::time::Instant::now();
+        // o WSL (rodada 28) tem o laço dele, numa thread própria (0.6.1, revisão C1): ele pergunta
+        // quais distros rodam e lê as filas logo em seguida
+        crate::wsl_app::iniciar(app.clone());
+        // o rótulo das contas do `~/.claude.json` do Windows (0.6.1); o das distros, no laço do WSL
+        let mut rotulos = crate::wsl_app::LeitorDeRotulos::default();
+        let mut rotulos_em: Option<std::time::Instant> = None;
+        let claude_json = fila::caminhos::pasta_do_usuario().join(".claude.json");
         loop {
             if hook_conferido.elapsed() >= CONFERIR_HOOK {
                 hook_conferido = std::time::Instant::now();
                 if let Err(e) = crate::comandos::copiar_hook() {
                     log_debug!("worktimer: {e}");
                 }
+                // o hook das distros também é conferido de novo
+                crate::wsl_app::conferir_de_novo();
             }
             let r = catch_unwind(AssertUnwindSafe(|| {
                 let estado = app.state::<Estado>();
@@ -199,7 +232,23 @@ pub fn iniciar(app: AppHandle) {
                 if chat.atrasadas != atrasadas {
                     log_debug!("worktimer: os sinais do Chat passaram de 300 ms ({} vezes até agora)", chat.atrasadas);
                 }
-                let r = ciclo(&estado, &fila, a);
+                let r = ciclo_com_wsl(&estado, &fila, &[], a);
+                // os rótulos das contas, fora da trava (o arquivo tem uns 200 KB; só relido quando
+                // muda; revisão M2)
+                let r = if rotulos_em.is_none_or(|u| u.elapsed() >= crate::wsl_app::ROTULOS_A_CADA) {
+                    rotulos_em = Some(std::time::Instant::now());
+                    let lidos: Vec<(String, String)> = rotulos.ler(&claude_json).into_iter().collect();
+                    let mudou = match trava(&estado).aplicar_rotulos(&lidos) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            log_debug!("worktimer: rótulos das contas: {e}");
+                            false
+                        }
+                    };
+                    r.map(|x| x || mudou)
+                } else {
+                    r
+                };
                 // backup a cada 6 h com o app aberto
                 if let Err(e) = trava(&estado).backup_se_devido(&backups, chrono::Local::now().naive_local(), false) {
                     log_debug!("worktimer: erro no backup: {e}");
@@ -272,6 +321,52 @@ mod testes {
         // a mesma linha não é relida
         assert!(!ciclo(&e, &f, am(h(9, 2), 0)).unwrap());
         assert_eq!(trava(&e).motor.perguntas.len(), 1);
+    }
+
+    /// 0.6.1: a sessão do terminal (sem o `CLAUDE_CODE_ACCOUNT_UUID`) ganha o nome pelo `aiTitle` e
+    /// a conta pelo `session-owner` do transcript; o rótulo vem do `~/.claude.json` em que o resumo
+    /// bate. O id nunca vai para o banco.
+    #[test]
+    fn a_sessao_do_terminal_ganha_nome_conta_e_rotulo_pelo_transcript() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("fila").join("eventos.jsonl");
+        let tr = d.path().join("s.jsonl");
+        let uuid = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
+        std::fs::write(
+            &tr,
+            format!(
+                "{}\n{}\n",
+                serde_json::json!({"type": "session-owner", "accountUuid": uuid, "sessionId": "t1"}),
+                serde_json::json!({"type": "ai-title", "aiTitle": "Arrumar o login", "sessionId": "t1"})
+            ),
+        )
+        .unwrap();
+        let e = estado(h(9, 0));
+        linha(&f, serde_json::json!({"t": h(9, 1), "evento": "UserPromptSubmit", "sessao": "t1", "cwd": "D:\\Novo", "transcript": tr.to_string_lossy(), "origem": "cli"}));
+        assert!(ciclo(&e, &f, am(h(9, 1) + 5_000, 0)).unwrap());
+        let resumo = fila::resumo_da_conta(Some(uuid)).unwrap();
+        {
+            let n = trava(&e);
+            let s = &n.motor.sessoes["t1"];
+            assert_eq!((s.nome.as_deref(), s.conta.as_deref()), (Some("Arrumar o login"), Some(resumo.as_str())));
+            let contas = n.banco.contas().unwrap();
+            assert_eq!(contas.iter().map(|c| (c.id.as_str(), c.origem.as_deref())).collect::<Vec<_>>(), [(resumo.as_str(), Some("cli"))]);
+            let gravada = n.banco.sessoes_desde(0).unwrap().into_iter().find(|x| x.id == "t1").unwrap();
+            assert_eq!(gravada.conta.as_deref(), Some(resumo.as_str()));
+        }
+        // o rótulo: o `~/.claude.json` de outra conta não muda nada; o da mesma conta, sim
+        let cj = d.path().join(".claude.json");
+        let oauth = |id: &str| serde_json::json!({"oauthAccount": {"accountUuid": id, "displayName": "Ana", "emailAddress": "ana@exemplo.com", "organizationType": "claude_pro"}}).to_string();
+        std::fs::write(&cj, oauth("11111111-2222-3333-4444-555555555555")).unwrap();
+        let ler = |p: &Path| crate::wsl_app::LeitorDeRotulos::default().ler(p).into_iter().collect::<Vec<_>>();
+        assert!(!trava(&e).aplicar_rotulos(&ler(&cj)).unwrap());
+        std::fs::write(&cj, oauth(uuid)).unwrap();
+        assert!(trava(&e).aplicar_rotulos(&ler(&cj)).unwrap());
+        let n = trava(&e);
+        let s = n.snapshot(h(9, 2)).unwrap();
+        assert_eq!(s.contas[0].rotulo.as_deref(), Some("Ana · an•••@exemplo.com · Pro"));
+        let banco = serde_json::to_string(&n.banco.contas().unwrap()).unwrap();
+        assert!(!banco.contains(uuid) && !banco.contains("ana@"), "nem o id nem o e-mail inteiro");
     }
 
     #[test]
@@ -352,6 +447,7 @@ mod testes {
         let a = amostra_de(h(9, 0), 1_000, janela("claude", "Chrome_WidgetWin_1", outro_pid), lida);
         assert_eq!(a.conversa, Conversa::App(Some("conversa da janela 42".into())));
         assert!(!a.neutra && a.em_foco && !a.escrevendo);
+        assert_eq!(a.janela, Some(42), "a janela vai junto (rodada 28)");
         // o foco na caixa de mensagem da conversa: a mesma consulta diz "escrevendo"
         let escrevendo = |_: isize, _: bool| Some(ConversaLida { titulo: "x".into(), escrevendo: true, chat: None });
         let a = amostra_de(h(9, 0), 1_000, janela("claude", "Chrome_WidgetWin_1", outro_pid), escrevendo);
@@ -454,5 +550,62 @@ mod testes {
         let n = trava(&e);
         assert!(n.banco.abertos().unwrap().is_empty());
         assert_eq!(n.motor.sessoes["chat:0a1b"].estado, nucleo::modelo::EstadoSessao::EsperandoVoce);
+    }
+
+    #[test]
+    fn ciclo_le_a_fila_de_cada_distro_com_o_proprio_offset_e_o_cwd_traduzido() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("win").join("eventos.jsonl");
+        let ubuntu = d.path().join("ubuntu").join("eventos.jsonl");
+        let debian = d.path().join("debian").join("eventos.jsonl");
+        let e = estado(h(9, 0));
+        let t = trava(&e).banco.criar_timer(None, "Projeto", "#a00").unwrap();
+        trava(&e).criar_regra(r"\\wsl.localhost\Ubuntu\home\u\proj", t).unwrap();
+        {
+            let mut n = trava(&e);
+            let mut cfg = n.banco.config_app().unwrap();
+            cfg.pastas_ignoradas = vec![r"\\wsl$\Ubuntu\home\u\pessoal".into()];
+            n.salvar_config(&cfg, &d.path().join("hook.json")).unwrap();
+        }
+        linha(&ubuntu, serde_json::json!({"t": h(9, 1), "evento": "UserPromptSubmit", "sessao": "w1", "cwd": "/home/u/proj/api", "origem": "cli"}));
+        // a defesa em dobro: o hook.json da distro estava velho e deixou passar a pasta ignorada
+        linha(&ubuntu, serde_json::json!({"t": h(9, 1), "evento": "UserPromptSubmit", "sessao": "w2", "cwd": "/home/u/pessoal/x", "origem": "cli"}));
+        linha(&debian, serde_json::json!({"t": h(9, 2), "evento": "UserPromptSubmit", "sessao": "d1", "cwd": "/mnt/c/Projetos/x", "origem": "claude-vscode"}));
+        let filas = vec![("Ubuntu".to_string(), ubuntu.clone()), ("Debian".to_string(), debian.clone())];
+        assert!(ciclo_com_wsl(&e, &f, &filas, am(h(9, 3), 0)).unwrap());
+        {
+            let n = trava(&e);
+            let w1 = &n.motor.sessoes["w1"];
+            assert_eq!((w1.cwd.as_str(), w1.origem.as_deref(), w1.timer_id), (r"\\wsl.localhost\Ubuntu\home\u\proj\api", Some("wsl"), Some(t)));
+            assert!(!n.motor.sessoes.contains_key("w2"), "a pasta ignorada fica de fora");
+            let d1 = &n.motor.sessoes["d1"];
+            assert_eq!((d1.cwd.as_str(), d1.origem.as_deref()), (r"C:\Projetos\x", Some("claude-vscode")));
+            let tam = |p: &Path| std::fs::metadata(p).unwrap().len().to_string();
+            assert_eq!(n.banco.valor("fila_offset_wsl:Ubuntu").unwrap(), Some(tam(&ubuntu)));
+            assert_eq!(n.banco.valor("fila_offset_wsl:Debian").unwrap(), Some(tam(&debian)));
+            assert_eq!(n.banco.valor("fila_offset").unwrap(), None, "a do Windows é outra");
+        }
+        // a mesma linha não é relida; a distro que parou (sem a fila) não dá erro
+        assert!(!ciclo_com_wsl(&e, &f, &filas, am(h(9, 4), 0)).unwrap());
+        let parada = vec![("Ubuntu".to_string(), d.path().join("sumiu").join("eventos.jsonl"))];
+        assert!(ciclo_com_wsl(&e, &f, &parada, am(h(9, 5), 0)).is_ok());
+        // o offset segue depois de reabrir: o do banco
+        trava(&e).offsets_wsl.clear();
+        assert!(!ciclo_com_wsl(&e, &f, &filas, am(h(9, 6), 0)).unwrap());
+        let novas = trava(&e).motor.perguntas.iter().filter(|(_, p)| matches!(p, nucleo::modelo::Pergunta::SessaoNova { .. })).count();
+        assert_eq!(novas, 1, "só a d1 pergunta (a w1 tem regra)");
+        // 0.6.1: a distro com evento recente fica "quente" (o laço do WSL roda a cada 2 s), até o
+        // fim da sessão
+        let quente = crate::wsl_app::QUENTE;
+        assert!(trava(&e).distro_quente("Ubuntu", quente) && trava(&e).distro_quente("Debian", quente));
+        assert!(!trava(&e).distro_quente("Kali", quente), "sem evento nenhum");
+        linha(&ubuntu, serde_json::json!({"t": h(9, 7), "evento": "Stop", "sessao": "w1", "cwd": "/home/u/proj/api", "origem": "cli"}));
+        assert!(trava(&e).ler_fila_da_distro("Ubuntu", &ubuntu).unwrap());
+        assert_eq!(trava(&e).motor.sessoes["w1"].estado, nucleo::modelo::EstadoSessao::EsperandoVoce);
+        assert!(trava(&e).distro_quente("Ubuntu", quente));
+        linha(&ubuntu, serde_json::json!({"t": h(9, 8), "evento": "SessionEnd", "sessao": "w1", "cwd": "/home/u/proj/api", "origem": "cli"}));
+        trava(&e).ler_fila_da_distro("Ubuntu", &ubuntu).unwrap();
+        assert!(!trava(&e).distro_quente("Ubuntu", quente), "depois do fim da sessão, não");
+        assert!(!trava(&e).ler_fila_da_distro("Ubuntu", &ubuntu).unwrap(), "nada novo");
     }
 }

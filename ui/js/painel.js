@@ -81,7 +81,7 @@ import {
   TEXTO_PEDIDO_DESCARTADO,
   GRUPO_NOME_MAX,
 } from './editar.js';
-import { montarAjustes, atualizarAjustes, esperarGravacoes, ligarAoClaude, faixaDosHooks } from './ajustes.js';
+import { montarAjustes, atualizarAjustes, esperarGravacoes, ligarAoClaude, faixaDosHooks, faixaDoWsl, ligarDistro } from './ajustes.js';
 import { inicioSemTimers, semTimers, primeiroUso } from './primeiro-uso.js';
 import { NOME_APP, nomearPagina, linhaDoConsole } from './nome.js';
 import { vigiarTitulos, trocarTitulo } from './titulos.js';
@@ -836,6 +836,37 @@ function ligarFaixaHooks() {
   inicioResolvido.then(verHooks);
 }
 
+// ---- faixa do WSL sem os hooks (0.6.1) ----
+// Outro programa regravou o settings.json de uma distro sem os nossos hooks. O app nunca regrava
+// sozinho: a faixa leva à mesma prévia do "Ligar" dos Ajustes, que mantém o resto do arquivo.
+
+/** As distros da faixa que a pessoa escondeu (volta se outra distro entrar, ou na próxima abertura). */
+let faixaWslEscondida = '';
+
+function mostrarFaixaWsl() {
+  const el = $('#faixa-wsl');
+  if (!el) return;
+  const f = faixaDoWsl(snap?.wsl_sem_hooks);
+  if (f) {
+    el.querySelector('span').textContent = f.texto;
+    el.dataset.distro = f.distro;
+  }
+  el.hidden = !f || f.chave === faixaWslEscondida || Boolean(document.querySelector('.dlg-fundo'));
+}
+
+function ligarFaixaWsl() {
+  $('#bt-wsl-de-novo')?.addEventListener('click', () => {
+    const d = $('#faixa-wsl').dataset.distro;
+    if (d) ligarDistro(d);
+  });
+  $('#bt-wsl-esconder')?.addEventListener('click', () => {
+    faixaWslEscondida = faixaDoWsl(snap?.wsl_sem_hooks)?.chave ?? '';
+    mostrarFaixaWsl();
+  });
+  // um diálogo abriu ou fechou
+  new MutationObserver(() => mostrarFaixaWsl()).observe(document.body, { childList: true });
+}
+
 // ---- tour (rodada 16) ----
 
 /**
@@ -1348,6 +1379,7 @@ function seguirIdioma(s) {
   menuAberto?.fechar();
   if (visao === 'ajustes') remontarAjustesNoIdioma();
   if (tourAtivo()) redesenharTour();
+  mostrarFaixaWsl();
   mostrarFaixaHooks();
   mostrarAtualizacao(novidade);
 }
@@ -1408,6 +1440,7 @@ aoMudar((s) => {
   desenhar();
   // com timers e os hooks desligados, a faixa "Ligar" (os timers podem ter acabado de nascer)
   mostrarFaixaHooks();
+  mostrarFaixaWsl();
   if (!primeiroUsoVisto) {
     primeiroUsoVisto = true;
     // sem timers: o primeiro uso
@@ -1435,4 +1468,5 @@ window.__TAURI__.event.listen('aviso-do-dock', ({ payload: a }) =>
   faixa(a.texto, a.botao ?? null, a.botao ? () => chamar('aviso_clicado', { id: a.id }) : null, a.ms ?? 4000),
 );
 ligarFaixaHooks();
+ligarFaixaWsl();
 ligarRelogio();

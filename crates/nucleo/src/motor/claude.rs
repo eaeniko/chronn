@@ -31,8 +31,9 @@ pub struct LigadaSozinha {
 }
 
 // IMPL-INICIO
+/// A pasta comparável (`fila::normaliza`): `/` = `\`, sem maiúsculas, `\\wsl$\` = `\\wsl.localhost\`.
 fn normaliza(s: &str) -> String {
-    s.replace('\\', "/").to_lowercase()
+    fila::normaliza(s)
 }
 
 /// Regra de pasta de prefixo mais longo (sem diferenciar maiusculas, `/` = `\`, respeitando limite de caminho).
@@ -69,6 +70,9 @@ pub fn pasta_larga(p: &str, perfil: Option<&str>) -> bool {
         [] => true,
         [d] if drive(d) => true,
         [d, "users", _] if drive(d) => true,
+        // o WSL (rodada 28): a raiz de uma distro e a pasta de um usuário dela
+        ["wsl.localhost"] | ["wsl.localhost", _] | ["wsl.localhost", _, "home" | "root"] => true,
+        ["wsl.localhost", _, "home", _] => true,
         _ => perfil.is_some_and(|u| !u.trim().is_empty() && chave_de_pasta(u) == c),
     }
 }
@@ -201,6 +205,7 @@ impl Motor {
                     ligacao: timer_id.map(|_| Ligacao::Regra),
                     desligada_em: None,
                     origem: ev.origem.clone().filter(|o| !o.trim().is_empty()),
+                    conta: fila::conta_valida(ev.conta.as_deref()),
                 },
             );
         } else if t < self.sessoes[&ev.sessao].ultimo_evento {
@@ -221,6 +226,17 @@ impl Motor {
         // a primeira origem não vazia fica (rodada 27)
         if s.origem.is_none() {
             s.origem = ev.origem.clone().filter(|o| !o.trim().is_empty());
+        }
+        // a conta do Claude (rodada 28): a primeira fica na sessão; a do app do Claude passa às
+        // conversas do Chat novas; toda conta vista vai para `contas`
+        if let Some(conta) = fila::conta_valida(ev.conta.as_deref()) {
+            if s.conta.is_none() {
+                s.conta = Some(conta.clone());
+            }
+            if ev.origem.as_deref() == Some(super::ORIGEM_APP_DO_CLAUDE) {
+                self.conta_do_app = Some(conta.clone());
+            }
+            out.push(Mudanca::Conta { id: conta, origem: ev.origem.clone().filter(|o| !o.trim().is_empty()), visto_em: t });
         }
         // a pasta de agora (o `cwd` vem a cada evento), só em memória: o `Sessao.cwd` gravado segue
         // sendo onde a sessão começou
@@ -298,6 +314,10 @@ impl Motor {
             }
         }
         self.sessoes.insert(ev.sessao.clone(), s.clone());
+        // a mensagem no terminal liga a sessão à janela em que você escreveu (rodada 28)
+        if ev.evento == "UserPromptSubmit" {
+            self.pedir_ligacao_da_janela(&ev.sessao, t);
+        }
         out.push(Mudanca::Sessao(s));
         out
     }
@@ -596,7 +616,7 @@ mod testes {
         ]
     }
     fn ev(evento: &str, sessao: &str, cwd: &str, t: Ms) -> EventoHook {
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None, origem: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None, origem: None, conta: None }
     }
     fn trechos(v: &[Mudanca]) -> Vec<Mudanca> {
         v.iter().filter(|m| matches!(m, Mudanca::Abriu { .. } | Mudanca::Fechou { .. })).cloned().collect()
@@ -1178,5 +1198,19 @@ mod testes {
         assert!(v.iter().any(|x| matches!(x, Mudanca::Sessao(s) if s.id == "s1" && s.estado == EstadoSessao::Parada)));
         // terminou ha 5 min: ainda espera voce depois da virada
         assert_eq!(m.sessoes["s2"].estado, EstadoSessao::EsperandoVoce);
+    }
+
+    #[test] fn regra_de_pasta_num_caminho_do_wsl_com_os_dois_nomes() {
+        let mut m = motor();
+        m.regras_pasta = vec![RegraPasta { id: 9, pasta: r"\\wsl.localhost\Ubuntu\home\u\proj".into(), timer_id: 4 }];
+        assert_eq!(regra_para(&m.regras_pasta, r"\\wsl.localhost\Ubuntu\home\u\proj\api"), Some(4));
+        assert_eq!(regra_para(&m.regras_pasta, r"\\wsl$\ubuntu\home\u\proj"), Some(4), "o wsl$ é o mesmo lugar");
+        assert_eq!(regra_para(&m.regras_pasta, r"\\wsl.localhost\Debian\home\u\proj"), None, "outra distro");
+        assert_eq!(trechos(&m.evento(&ev("UserPromptSubmit", "s1", r"\\wsl$\Ubuntu\home\u\proj\api", h(9, 0)))), vec![abriu(Some(4), h(9, 0))]);
+        // a raiz da distro e a pasta do usuário dela não podem ter regra
+        for larga in [r"\\wsl.localhost\Ubuntu", r"\\wsl$\Ubuntu\home\u", r"\\wsl.localhost\Ubuntu\home", r"\\wsl.localhost\Ubuntu\root"] {
+            assert!(pasta_larga(larga, None), "{larga}");
+        }
+        assert!(!pasta_larga(r"\\wsl.localhost\Ubuntu\home\u\proj", None));
     }
 }

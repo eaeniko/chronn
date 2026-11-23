@@ -75,6 +75,20 @@ pub struct Nucleo {
     /// A troca do banco falhou e nem o banco de antes reabriu: o núcleo está num banco em memória
     /// e não grava nada (o laço para e a tela mostra o erro). Só sai reiniciando o app.
     pub quebrado: Option<String>,
+    /// Até onde a fila de cada distro do WSL foi lida (rodada 28; gravado no banco como o da fila
+    /// do Windows, `fila_offset_wsl:<distro>`). Carregado na primeira leitura de cada uma.
+    pub offsets_wsl: std::collections::BTreeMap<String, u64>,
+    /// Quando a fila de cada distro trouxe evento por último e se ele foi o fim da sessão (0.6.1):
+    /// a distro "quente" tem a fila lida a cada 2 s. Só em memória.
+    pub wsl_ultimo_evento: std::collections::BTreeMap<String, (std::time::Instant, bool)>,
+    /// As distros ligadas cujos hooks saíram do `settings.json` de lá, pela última conferência do
+    /// laço do WSL (0.6.1). Só em memória; a distro parada fica como estava.
+    pub wsl_sem_hooks: BTreeSet<String>,
+}
+
+/// A chave do banco com até onde a fila da distro foi lida (rodada 28).
+pub fn chave_offset_wsl(distro: &str) -> String {
+    format!("fila_offset_wsl:{distro}")
 }
 
 fn com_sufixo(p: &Path, sufixo: &str) -> PathBuf {
@@ -391,6 +405,9 @@ impl Nucleo {
             esperando: BTreeSet::new(),
             ultimo_backup: None,
             quebrado: None,
+            offsets_wsl: std::collections::BTreeMap::new(),
+            wsl_ultimo_evento: std::collections::BTreeMap::new(),
+            wsl_sem_hooks: BTreeSet::new(),
         };
         // com o "Zerar sozinho na virada" ligado e o app fechado num corte: vale o mais recente
         n.zerar_na_virada(agora)?;
@@ -551,6 +568,79 @@ impl Nucleo {
         Ok(())
     }
 
+    /// Lê o que chegou na fila da distro do WSL (rodada 28; `fila`: o caminho dela pelo Windows,
+    /// com a distro rodando). Como a do Windows: o próprio offset (gravado no banco), a fila
+    /// encolhida recomeça do zero e a lida inteira e grande demais é esvaziada. Cada evento entra
+    /// no motor com o `cwd` traduzido para o Windows e a origem `wsl` (`nucleo::wsl::evento_da_distro`):
+    /// as regras de pasta, as pastas ignoradas (a defesa em dobro, para um `hook.json` velho) e a
+    /// raiz do projeto valem como hoje. A distro não vai para o banco. Devolve se algo mudou.
+    pub fn ler_fila_da_distro(&mut self, distro: &str, fila: &Path) -> Result<bool, String> {
+        self.checar_banco()?;
+        let gravado = self.offset_da_distro(distro)?;
+        // sem a fila (ainda não houve evento) ou sem acesso a ela (a distro parou no meio): nada
+        // muda, nem o offset (um erro passageiro não pode fazer a fila ser relida do zero)
+        let Some((evs, novo)) = crate::wsl_app::ler_fila_fora(fila, gravado)? else { return Ok(false) };
+        let mudou = self.aplicar_fila_da_distro(distro, evs, novo)?;
+        if let Ok(true) = fila::esvaziar_se_lida(fila, novo, fila::LIMITE_FILA) {
+            self.definir_offset_da_distro(distro, 0)?;
+        }
+        Ok(mudou)
+    }
+
+    /// Até onde a fila da distro foi lida (0.6.1: o laço do WSL lê a fila fora da trava).
+    pub fn offset_da_distro(&mut self, distro: &str) -> Result<u64, String> {
+        self.checar_banco()?;
+        if let Some(o) = self.offsets_wsl.get(distro) {
+            return Ok(*o);
+        }
+        Ok(self.banco.valor(&chave_offset_wsl(distro)).map_err(texto)?.and_then(|v| v.parse().ok()).unwrap_or(0))
+    }
+
+    /// Guarda até onde a fila da distro foi lida (em memória e no banco, se mudou).
+    pub fn definir_offset_da_distro(&mut self, distro: &str, novo: u64) -> Result<(), String> {
+        let gravado = self.offset_da_distro(distro)?;
+        if novo != gravado || !self.offsets_wsl.contains_key(distro) {
+            self.banco.gravar_valor(&chave_offset_wsl(distro), &novo.to_string()).map_err(texto)?;
+        }
+        self.offsets_wsl.insert(distro.to_string(), novo);
+        Ok(())
+    }
+
+    /// Os eventos lidos da fila da distro (fora da trava; 0.6.1) entram no motor com o `cwd`
+    /// traduzido e a origem `wsl`, e o offset passa a `novo`. A distro fica "quente" pelo último
+    /// evento. Devolve se algo mudou.
+    pub fn aplicar_fila_da_distro(&mut self, distro: &str, evs: Vec<fila::EventoHook>, novo: u64) -> Result<bool, String> {
+        self.checar_banco()?;
+        if let Some(ultimo) = evs.last() {
+            self.wsl_ultimo_evento.insert(distro.to_string(), (std::time::Instant::now(), ultimo.evento == "SessionEnd"));
+        }
+        let mut mud = vec![];
+        for ev in evs {
+            mud.extend(self.motor.evento(&nucleo::wsl::evento_da_distro(distro, ev)));
+        }
+        self.aplicar(&mud)?;
+        self.definir_offset_da_distro(distro, novo)?;
+        Ok(!mud.is_empty())
+    }
+
+    /// A distro teve evento há menos de `quente` e o último não foi o fim da sessão (0.6.1): a
+    /// fila dela é lida a cada 2 s. Depois do fim da sessão, não (a distro pode parar logo, e a
+    /// leitura a ligaria de novo).
+    pub fn distro_quente(&self, distro: &str, quente: std::time::Duration) -> bool {
+        self.wsl_ultimo_evento.get(distro).is_some_and(|(quando, fim)| !fim && quando.elapsed() < quente)
+    }
+
+    /// Os rótulos lidos dos `~/.claude.json` (o resumo do `accountUuid` e o rótulo; 0.6.1): cada
+    /// um vai para a conta vista com o mesmo resumo. Devolve se algum mudou.
+    pub fn aplicar_rotulos(&mut self, lidos: &[(String, String)]) -> Result<bool, String> {
+        self.checar_banco()?;
+        let mut mudou = false;
+        for (id, rotulo) in lidos {
+            mudou |= self.banco.definir_rotulo_da_conta(id, rotulo).map_err(texto)?;
+        }
+        Ok(mudou)
+    }
+
     /// Grava o `hook.json` (as pastas ignoradas que o hook lê) com a config do banco.
     pub fn gravar_hook_json(&self, hook_json: &Path) -> Result<(), String> {
         let cfg = self.banco.config_app().map_err(texto)?;
@@ -610,7 +700,10 @@ impl Nucleo {
 
     pub fn snapshot(&self, agora: Ms) -> Result<Snapshot, String> {
         self.checar_banco()?;
-        let s = snapshot::montar(&self.banco, &self.motor, agora).map_err(texto)?;
+        let mut s = snapshot::montar(&self.banco, &self.motor, agora).map_err(texto)?;
+        // as distros ligadas sem os hooks (0.6.1), só as que seguem na config
+        let ligadas = self.banco.config_app().map(|c| c.wsl_distros).unwrap_or_default();
+        s.wsl_sem_hooks = self.wsl_sem_hooks.iter().filter(|d| ligadas.contains(d)).cloned().collect();
         // o idioma do estado vale para o resto do app: a bandeja, os títulos e os erros (rodada 23)
         nucleo::idioma::usar(if s.idioma == nucleo::idioma::IDIOMA_EN { nucleo::idioma::Idioma::En } else { nucleo::idioma::Idioma::Pt });
         Ok(s)
@@ -1345,6 +1438,11 @@ impl Nucleo {
 
     /// `valor`: "contar" | "retomar" | "pausado" | "nao" | "certo" | "ligar:{id}" | "ligar:{id}:regra".
     pub fn responder(&mut self, pergunta_id: u64, valor: &str, agora: Ms) -> Result<Vec<Mudanca>, String> {
+        // "De qual espaço é esta conta?" (rodada 28): a pergunta é do banco, não do motor
+        if let Some(resto) = valor.strip_prefix("conta:") {
+            self.responder_conta(resto, agora)?;
+            return Ok(vec![]);
+        }
         let r = resposta_de(valor)?;
         let pergunta = self.motor.perguntas.iter().find(|(id, _)| *id == pergunta_id).map(|(_, p)| p.clone());
         let mut regra = None;
@@ -1376,6 +1474,55 @@ impl Nucleo {
             self.criar_regra(&cwd, timer_id)?;
         }
         Ok(vec![])
+    }
+
+    /// A resposta da pergunta da conta (rodada 28): "<conta>:espaco:<id>" grava o espaço da conta;
+    /// "<conta>:depois" grava só a hora da pergunta (ela volta noutro dia).
+    fn responder_conta(&mut self, resto: &str, agora: Ms) -> Result<(), String> {
+        let desconhecida = || format!("resposta desconhecida: conta:{resto}");
+        let (conta, cauda) = resto.split_once(':').ok_or_else(desconhecida)?;
+        self.checar_conta(conta)?;
+        match cauda.strip_prefix("espaco:") {
+            Some(e) => {
+                let espaco: i64 = e.parse().map_err(|_| desconhecida())?;
+                self.checar_espaco(espaco, true)?;
+                self.banco.definir_espaco_da_conta(conta, Some(espaco)).map_err(texto)?;
+            }
+            None if cauda == "depois" => {
+                self.banco.marcar_conta_perguntada(conta, agora).map_err(texto)?;
+            }
+            None => return Err(desconhecida()),
+        }
+        Ok(())
+    }
+
+    /// A conta existe em `contas`?
+    fn checar_conta(&self, conta: &str) -> Result<(), String> {
+        if self.banco.contas().map_err(texto)?.iter().any(|c| c.id == conta) {
+            Ok(())
+        } else {
+            Err(ta("erro.conta_desconhecida").into())
+        }
+    }
+
+    /// Ajustes → "Contas do Claude" (rodada 28): o espaço da conta (`None`: "Sem espaço").
+    pub fn definir_espaco_da_conta(&mut self, conta: &str, espaco: Option<i64>) -> Result<(), String> {
+        self.checar_banco()?;
+        self.checar_conta(conta)?;
+        if let Some(e) = espaco {
+            self.checar_espaco(e, true)?;
+        }
+        self.banco.definir_espaco_da_conta(conta, espaco).map_err(texto)?;
+        Ok(())
+    }
+
+    /// Ajustes → "Esquecer" (rodada 28): a linha da conta sai; as sessões guardam a conta, que
+    /// volta a ser nova no próximo evento.
+    pub fn esquecer_conta(&mut self, conta: &str) -> Result<(), String> {
+        self.checar_banco()?;
+        self.checar_conta(conta)?;
+        self.banco.esquecer_conta(conta).map_err(texto)?;
+        Ok(())
     }
 
     /// Grava a config, regrava o `hook.json` (pastas ignoradas) e atualiza o motor.
@@ -1413,6 +1560,8 @@ impl Nucleo {
             dicas_vistas: atual.dicas_vistas.clone(),
             // só a busca de atualização muda isto (rodada 25)
             atualizacao_ultima: atual.atualizacao_ultima,
+            // só o "Ligar" e o "Desligar" de uma distro do WSL mudam isto (rodada 28)
+            wsl_distros: atual.wsl_distros.clone(),
             ..cfg.clone()
         }
         .normalizada();
@@ -1482,7 +1631,17 @@ impl Nucleo {
         });
         // estável: dentro de cada grupo, a ordem do banco ao contrário (a mais recente primeiro)
         v.sort_by_key(|s| s.timer_id.is_some());
-        Ok(v.iter().map(|s| snapshot::sessao_dto(nucleo::idioma::atual(), s, &self.motor.regras_pasta)).collect())
+        // o espaço da conta de cada sessão (rodada 28): a lista põe primeiro as do espaço do timer
+        let espacos: HashMap<String, i64> =
+            self.banco.contas().map_err(texto)?.into_iter().filter_map(|c| Some((c.id, c.espaco_id?))).collect();
+        Ok(v
+            .iter()
+            .map(|s| {
+                let mut d = snapshot::sessao_dto(nucleo::idioma::atual(), s, &self.motor.regras_pasta);
+                d.conta_espaco = s.conta.as_ref().and_then(|c| espacos.get(c).copied());
+                d
+            })
+            .collect())
     }
 
     /// Sessões cujo título precisa ser lido agora; marca a conferência no cache.
@@ -1490,17 +1649,21 @@ impl Nucleo {
     /// guarda como está o transcript (sem ler). Depois: ativa (trabalhando ou com evento nos últimos
     /// 5 min) 1×/min; parada a cada 10 min (pega a renomeada no app). Conferir é olhar tamanho e
     /// data do transcript; o arquivo só é lido se mudou desde a última leitura.
-    pub fn titulos_a_ler(&mut self, agora: Ms) -> Vec<(String, PathBuf)> {
+    pub fn titulos_a_ler(&mut self, agora: Ms) -> Vec<(String, PathBuf, bool)> {
         let mut conferir = vec![];
         let mut so_marcar = vec![];
         for s in self.motor.sessoes.values() {
-            let Some(tr) = s.transcript.as_deref() else { continue };
+            // o transcript do WSL só com a distro rodando (revisão I4): ler ligaria uma parada
+            let Some(tr) = s.transcript.as_deref().filter(|t| nucleo::wsl::pode_tocar(t)) else { continue };
             let ativa = s.estado == EstadoSessao::Trabalhando || agora - s.ultimo_evento < TITULO_ATIVA_MS;
             let folga = if ativa { RELER_TITULO_MS } else { RELER_TITULO_PARADA_MS };
+            // sem a conta do hook (o terminal não passa o `CLAUDE_CODE_ACCOUNT_UUID`), ela sai do
+            // transcript (0.6.1)
+            let quer_conta = s.conta.is_none();
             match self.titulo_lido.get(&s.id) {
-                None if s.nome.is_none() || ativa => conferir.push((s.id.clone(), PathBuf::from(tr))),
+                None if s.nome.is_none() || ativa => conferir.push((s.id.clone(), PathBuf::from(tr), quer_conta)),
                 None => so_marcar.push((s.id.clone(), PathBuf::from(tr))),
-                Some(t) if agora - t >= folga => conferir.push((s.id.clone(), PathBuf::from(tr))),
+                Some(t) if agora - t >= folga => conferir.push((s.id.clone(), PathBuf::from(tr), quer_conta)),
                 Some(_) => {}
             }
         }
@@ -1511,7 +1674,7 @@ impl Nucleo {
             }
         }
         let mut v = vec![];
-        for (id, caminho) in conferir {
+        for (id, caminho, quer_conta) in conferir {
             self.titulo_lido.insert(id.clone(), agora);
             let assinatura: Option<Assinatura> =
                 std::fs::metadata(&caminho).ok().map(|m| (m.len(), m.modified().ok()));
@@ -1522,7 +1685,7 @@ impl Nucleo {
                 Some(a) => self.titulo_arquivo.insert(id.clone(), a),
                 None => self.titulo_arquivo.remove(&id),
             };
-            v.push((id, caminho));
+            v.push((id, caminho, quer_conta));
         }
         v
     }
@@ -1537,7 +1700,8 @@ impl Nucleo {
     pub fn transcripts_a_conferir(&mut self, agora: Ms) -> Vec<(String, PathBuf, LeitorDoTranscript)> {
         let mut v = vec![];
         for s in self.motor.sessoes.values() {
-            let Some(tr) = s.transcript.as_deref() else { continue };
+            // o transcript do WSL só com a distro rodando (revisão I4): ler ligaria uma parada
+            let Some(tr) = s.transcript.as_deref().filter(|t| nucleo::wsl::pode_tocar(t)) else { continue };
             let leitor = self.leitores.get(&s.id);
             let conferir = match s.estado {
                 EstadoSessao::Trabalhando => agora - s.ultimo_evento >= CONFERIR_INTERRUPCAO_MS,
@@ -1590,6 +1754,24 @@ impl Nucleo {
             }
         }
         self.motor.segundo_plano = m;
+    }
+
+    /// A conta lida do transcript (a linha `session-owner`, só o resumo; 0.6.1) das sessões que
+    /// ainda não têm conta: a do hook, quando veio, vence. A conta passa a ser conhecida
+    /// (`contas`), com a origem e o último evento da sessão.
+    pub fn aplicar_contas(&mut self, lidas: Vec<(String, Option<String>)>) -> Vec<Mudanca> {
+        let mut mud = vec![];
+        for (id, conta) in lidas {
+            let Some(conta) = fila::conta_valida(conta.as_deref()) else { continue };
+            let Some(s) = self.motor.sessoes.get_mut(&id) else { continue };
+            if s.conta.is_some() {
+                continue;
+            }
+            s.conta = Some(conta.clone());
+            mud.push(Mudanca::Sessao(s.clone()));
+            mud.push(Mudanca::Conta { id: conta, origem: s.origem.clone(), visto_em: s.ultimo_evento });
+        }
+        mud
     }
 
     /// Põe os títulos lidos nas sessões; devolve as sessões que mudaram. O nome que chega pode
@@ -1645,7 +1827,7 @@ mod testes {
         Nucleo::abrir(Banco::abrir_memoria().unwrap(), agora, F, dia()).unwrap()
     }
     pub fn ev(t: Ms, evento: &str, sessao: &str, cwd: &str) -> EventoHook {
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None, origem: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd: cwd.into(), transcript: None, notificacao: None, origem: None, conta: None }
     }
 
     #[test]
@@ -2354,6 +2536,42 @@ mod testes {
         assert!(n.zerar_na_virada(d18(0, 0) + 1000).unwrap());
         assert!(n.banco.zerados_atividade().unwrap().is_empty());
         assert_eq!(n.banco.zerados().unwrap()[&t], d18(0, 0));
+    }
+
+    #[test]
+    fn a_pergunta_da_conta_grava_o_espaco_ou_o_depois_e_a_lista_leva_o_espaco_da_conta() {
+        let mut n = nucleo(h(9, 0));
+        let pessoal = n.criar_espaco("Pessoal", "#e86bd0").unwrap();
+        let conta = "1a2b3c4d5e6f7081";
+        let ev_c = |min: u32, sessao: &str, conta: Option<&str>| EventoHook { conta: conta.map(str::to_string), ..ev(h(9, min), "UserPromptSubmit", sessao, r"G:\Projeto A") };
+        for (min, s, c) in [(0, "s1", Some(conta)), (1, "s2", None)] {
+            let mud = n.motor.evento(&ev_c(min, s, c));
+            n.aplicar(&mud).unwrap();
+        }
+        let snap = n.snapshot(h(9, 2)).unwrap();
+        let p = snap.perguntas.iter().find(|p| p.tipo == "conta_nova").expect("a pergunta da conta").clone();
+        // conta ou espaço que não existem: erro, nada muda
+        assert!(n.responder(p.id, "conta:ffffffffffffffff:depois", h(9, 2)).is_err());
+        assert!(n.responder(p.id, &format!("conta:{conta}:espaco:999"), h(9, 2)).is_err());
+        assert!(n.responder(p.id, &format!("conta:{conta}:qualquer"), h(9, 2)).is_err());
+        // "Depois": a pergunta sai até o dia seguinte
+        n.responder(p.id, &format!("conta:{conta}:depois"), h(9, 2)).unwrap();
+        assert!(!n.snapshot(h(9, 3)).unwrap().perguntas.iter().any(|p| p.tipo == "conta_nova"));
+        assert_eq!(n.banco.contas().unwrap()[0].espaco_id, None);
+        n.responder(p.id, &format!("conta:{conta}:espaco:{pessoal}"), h(9, 4)).unwrap();
+        assert_eq!(n.banco.contas().unwrap()[0].espaco_id, Some(pessoal));
+        let lista = n.sessoes_recentes(h(9, 5)).unwrap();
+        let espaco_de = |id: &str| lista.iter().find(|s| s.id == id).map(|s| (s.conta.clone(), s.conta_espaco));
+        assert_eq!(espaco_de("s1"), Some((Some(conta.to_string()), Some(pessoal))));
+        assert_eq!(espaco_de("s2"), Some((None, None)));
+        // os Ajustes: "Sem espaço" e "Esquecer"
+        n.definir_espaco_da_conta(conta, None).unwrap();
+        assert_eq!(n.banco.contas().unwrap()[0].espaco_id, None);
+        assert!(n.definir_espaco_da_conta(conta, Some(999)).is_err());
+        n.esquecer_conta(conta).unwrap();
+        assert!(n.banco.contas().unwrap().is_empty());
+        assert!(n.esquecer_conta(conta).is_err(), "já esquecida");
+        assert_eq!(n.sessoes_recentes(h(9, 6)).unwrap().iter().find(|s| s.id == "s1").unwrap().conta.as_deref(), Some(conta), "a sessão guarda a conta");
     }
 
     #[test]
@@ -3490,6 +3708,23 @@ mod testes {
             assert_eq!(conferir_fins(&mut n, h(9, 1)), 0);
         }
         println!("conferir 20 sessões sem mudança: {:.3} ms", t0.elapsed().as_secs_f64() * 1000.0 / 200.0);
+    }
+
+    #[test]
+    fn o_transcript_e_a_pasta_mae_do_wsl_nunca_tocam_uma_distro_que_nao_se_sabe_rodando() {
+        // revisão I1 e I4: uma distro que nenhum `rodando()` listou (o nome só deste teste)
+        let mut n = nucleo(h(9, 0));
+        let mut e = ev(h(9, 0), "UserPromptSubmit", "w1", r"\\wsl.localhost\ParadaDoTesteI4\home\u\proj");
+        e.transcript = Some(r"\\wsl.localhost\ParadaDoTesteI4\home\u\.claude\projects\p\w1.jsonl".into());
+        n.motor.evento(&e);
+        assert!(n.titulos_a_ler(h(9, 0)).is_empty(), "o título não é lido");
+        let mut e = ev(h(9, 1), "Stop", "w1", r"\\wsl.localhost\ParadaDoTesteI4\home\u\proj");
+        e.transcript = Some(r"\\wsl.localhost\ParadaDoTesteI4\home\u\.claude\projects\p\w1.jsonl".into());
+        n.motor.evento(&e);
+        assert!(n.transcripts_a_conferir(h(9, 2)).is_empty(), "nem o fim do transcript");
+        // o "+ Novo timer…" da sessão do WSL: a conferência da pasta não lê o disco
+        let p = n.pedido_novo_timer("w1", None, None).unwrap();
+        assert!(!p.pasta_mae, "{p:?}");
     }
 
     #[test]

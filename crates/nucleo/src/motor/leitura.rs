@@ -39,11 +39,13 @@ pub struct JanelaEmUso {
     pub processo: Option<String>,
     pub titulo: Option<String>,
     pub conversa: Conversa,
+    /// A janela (o HWND; rodada 28), só em memória: a conversa aberta no terminal sem o nome no título.
+    pub janela: Option<isize>,
 }
 
 impl JanelaEmUso {
     fn de(a: &Amostra) -> JanelaEmUso {
-        JanelaEmUso { processo: a.processo.clone(), titulo: a.titulo.clone(), conversa: a.conversa.clone() }
+        JanelaEmUso { processo: a.processo.clone(), titulo: a.titulo.clone(), conversa: a.conversa.clone(), janela: a.janela }
     }
 }
 
@@ -120,6 +122,17 @@ impl Motor {
         self.abertos.iter().find(|t| t.origem == Origem::Leitura).and_then(|t| t.sessao_id.as_deref())
     }
 
+    /// O fim de turno mais recente de uma sessão que espera você, para o tempo do lembrete
+    /// (0.6.1): a lida agora, `agora`; as outras, o mais novo entre o fim do turno do Claude e a
+    /// sua última leitura dela depois dele (`lida_em`).
+    pub fn espera_ultima(&self, s: &Sessao, agora: Ms) -> Option<Ms> {
+        if self.lendo_agora() == Some(s.id.as_str()) {
+            return Some(agora);
+        }
+        let fim = s.terminou_em?;
+        Some(self.lida_em.get(&s.id).copied().filter(|l| *l > fim).unwrap_or(fim))
+    }
+
     /// A sessao ainda espera voce de verdade: e a que esta sendo lida ou terminou ha menos de
     /// `ESPERA_RECENTE_MS`. A que terminou ha horas continua `EsperandoVoce` no estado.
     /// Com o timer encerrado (■), o lembrete some.
@@ -159,23 +172,32 @@ impl Motor {
                     .collect();
                 if iguais.is_empty() { Aberta::Desconhecida } else { uma_so(&iguais) }
             }
-            Conversa::PeloTitulo => {
-                let Some(titulo) = j.titulo.as_deref().map(str::to_lowercase) else { return Aberta::NaoSei };
-                let contidas: Vec<(usize, &Sessao)> = self
-                    .sessoes
-                    .values()
-                    .filter(do_code)
-                    .filter_map(|s| {
-                        let n = nome_de(s)?;
-                        let letras = n.chars().count();
-                        (letras >= NOME_MIN_NO_TITULO && titulo.contains(&n.to_lowercase())).then_some((letras, s))
-                    })
-                    .collect();
-                let maior = contidas.iter().map(|(l, _)| *l).max().unwrap_or(0);
-                let mais_longas: Vec<&Sessao> = contidas.iter().filter(|(l, _)| *l == maior).map(|(_, s)| *s).collect();
-                uma_so(&mais_longas)
-            }
+            // rodada 28: sem o nome no título (o Claude Code no terminal não põe), a sessão ligada à
+            // janela que terminou por último (`sessao_pela_janela`)
+            Conversa::PeloTitulo => match self.pelo_titulo(j) {
+                Aberta::Sessao(id) => Aberta::Sessao(id),
+                _ => self.sessao_pela_janela(j.janela).map_or(Aberta::NaoSei, Aberta::Sessao),
+            },
         }
+    }
+
+    /// A conversa aberta pelo título da janela (o nome da sessão contido nele, o mais longo vencendo).
+    fn pelo_titulo(&self, j: &JanelaEmUso) -> Aberta {
+        let do_code = |s: &&Sessao| !e_sessao_do_chat(&s.id);
+        let Some(titulo) = j.titulo.as_deref().map(str::to_lowercase) else { return Aberta::NaoSei };
+        let contidas: Vec<(usize, &Sessao)> = self
+            .sessoes
+            .values()
+            .filter(do_code)
+            .filter_map(|s| {
+                let n = nome_de(s)?;
+                let letras = n.chars().count();
+                (letras >= NOME_MIN_NO_TITULO && titulo.contains(&n.to_lowercase())).then_some((letras, s))
+            })
+            .collect();
+        let maior = contidas.iter().map(|(l, _)| *l).max().unwrap_or(0);
+        let mais_longas: Vec<&Sessao> = contidas.iter().filter(|(l, _)| *l == maior).map(|(_, s)| *s).collect();
+        uma_so(&mais_longas)
     }
 
     /// Ligada a um timer nao encerrado, sem trabalhar (esperando voce ou parada, ate de dias atras)
@@ -519,7 +541,7 @@ mod testes {
     }
     fn ev(evento: &str, sessao: &str, t: Ms) -> EventoHook {
         let cwd = format!("G:\\{sessao}");
-        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd, transcript: None, notificacao: None, origem: None }
+        EventoHook { t, evento: evento.into(), sessao: sessao.into(), cwd, transcript: None, notificacao: None, origem: None, conta: None }
     }
     /// Nome das sessoes de teste (o custom-title do transcript).
     fn nome(s: &str) -> String { format!("Conversa {s}") }
@@ -1384,6 +1406,28 @@ mod testes {
         let v = m.amostra(&nao_sei(ms_local(2026, 11, 18, 0, 0, F) + 30_000));
         assert_eq!(trechos(&v), vec![fechou_l(2, "B", h(23, 59), MotivoFim::OutraSessao)]);
         assert!(m.abertos.is_empty());
+    }
+    /// 0.6.1, o dock que trocava um timer pelo outro: A e B esperam você desde 10:00 e 10:02;
+    /// você lê B das 10:40 às 10:50 e passa para A. B não é mais lida, mas o tempo do lembrete
+    /// dela conta da sua última leitura (10:50), não do fim do turno (10:00): as duas ficam no dock.
+    #[test] fn o_lembrete_conta_da_ultima_leitura_e_nao_so_do_fim_do_turno() {
+        let mut m = dois();
+        firme(&mut m, le(h(10, 40), "B"));
+        assert_eq!(m.espera_ultima(&m.sessoes["B"], h(10, 45)), Some(h(10, 45)), "lida agora");
+        for k in 1..=110 {
+            m.amostra(&le(h(10, 40) + TROCA_SUAVE_MS + k * S5, "B"));
+        }
+        firme(&mut m, le(h(10, 50), "A"));
+        assert_eq!(m.lendo_agora(), Some("A"));
+        // a amostra das 10:50 ainda via B (a troca suave confirma depois): a saída foi ali
+        assert_eq!(m.espera_ultima(&m.sessoes["B"], h(10, 51)), Some(h(10, 50)));
+        assert_eq!(m.sessoes["B"].terminou_em, Some(h(10, 0)), "o fim do turno não muda");
+        // a A, nunca lida antes, conta do fim do turno dela quando você sai dela
+        assert_eq!(m.espera_ultima(&m.sessoes["A"], h(10, 51)), Some(h(10, 51)), "lida agora");
+        // um turno novo de B depois da leitura: vale o fim dele
+        m.evento(&ev("UserPromptSubmit", "B", h(11, 0)));
+        m.evento(&ev("Stop", "B", h(11, 5)));
+        assert_eq!(m.espera_ultima(&m.sessoes["B"], h(11, 6)), Some(h(11, 5)));
     }
     #[test] fn espera_recente_vale_por_uma_hora_ou_enquanto_lida() {
         let m = lendo_b();

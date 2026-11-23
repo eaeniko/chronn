@@ -75,7 +75,17 @@ const COLUNAS_V5: [(&str, &str); 3] =
 pub const CHAVE_ENCERRADOS: &str = "encerrados";
 
 /// Versão do esquema que este código conhece.
-pub const VERSAO_ESQUEMA: i64 = 10;
+pub const VERSAO_ESQUEMA: i64 = 12;
+
+/// A versão 12 (0.6.1): `contas.rotulo`, o rótulo da conta lido do `~/.claude.json` ("Nome ·
+/// ni•••@dominio · Pro"), nunca o id. Rodar de novo não muda nada; um app da versão 11 abre o banco
+/// (a coluna fica de fora do que ele grava).
+fn migrar_v12(conn: &Connection) -> Result<()> {
+    if !tem_coluna(conn, "contas", "rotulo")? {
+        conn.execute_batch("ALTER TABLE contas ADD COLUMN rotulo TEXT;")?;
+    }
+    conn.execute_batch("PRAGMA user_version = 12;")
+}
 
 /// A marca do app no banco (rodada 18): o `PRAGMA application_id` com "CHRN", gravado na
 /// criação e na abertura de um banco sem marca (0). Um banco com outra marca fica como está. Não
@@ -90,6 +100,20 @@ fn marcar_application_id(conn: &Connection) -> Result<()> {
 
 /// Cor do primeiro espaço (o "Trabalho" da migração, o "Geral" do banco novo).
 pub const COR_ESPACO_PRIMEIRO: &str = "#5b8def";
+
+/// A versão 11 (rodada 28): a conta do Claude. `sessoes.conta` (o resumo que o hook manda, nunca o
+/// id) e a tabela `contas` (id, o espaço do Chronn dela, a origem e a hora em que foi vista por último
+/// e quando a pergunta "De qual espaço é esta conta?" saiu). Rodar de novo não muda nada; um app
+/// da versão 10 abre o banco (a coluna e a tabela ficam de fora do que ele grava).
+fn migrar_v11(conn: &Connection) -> Result<()> {
+    if !tem_coluna(conn, "sessoes", "conta")? {
+        conn.execute_batch("ALTER TABLE sessoes ADD COLUMN conta TEXT;")?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS contas (id TEXT PRIMARY KEY, espaco_id INTEGER NULL, origem TEXT, visto_em INTEGER NOT NULL, perguntado_em INTEGER NULL);
+         PRAGMA user_version = 11;",
+    )
+}
 
 /// A versão 10 (rodada 27): `sessoes.origem`, de onde a sessão veio (o `CLAUDE_CODE_ENTRYPOINT`
 /// do hook, ou `chat`). Nula nas sessões de antes. Rodar de novo não muda nada; um app da versão 9
@@ -311,6 +335,8 @@ impl Banco {
             migrar_v8(&tx)?;
             migrar_v9(&tx)?;
             migrar_v10(&tx)?;
+            migrar_v11(&tx)?;
+            migrar_v12(&tx)?;
             tx.commit()?;
         }
         marcar_application_id(&conn)?;
@@ -482,11 +508,16 @@ impl Banco {
     }
 
     pub fn editar_espaco(&self, e: &Espaco) -> Result<()> {
-        self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
             "UPDATE espacos SET nome=?1, cor=?2, ordem=?3, arquivado=?4 WHERE id=?5",
             params![e.nome, e.cor, e.ordem, e.arquivado, e.id],
         )?;
-        Ok(())
+        // arquivado: as contas do Claude dele ficam sem espaço (a pergunta volta; revisão M3)
+        if e.arquivado {
+            tx.execute("UPDATE contas SET espaco_id = NULL WHERE espaco_id = ?1", params![e.id])?;
+        }
+        tx.commit()
     }
 
     /// O que o espaço tem: os grupos e os timers sem grupo, os não arquivados (`ativos`) e os
@@ -514,6 +545,8 @@ impl Banco {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("UPDATE grupos SET espaco_id = ?1 WHERE espaco_id = ?2", params![destino, id])?;
         tx.execute("UPDATE timers SET espaco_id = ?1 WHERE espaco_id = ?2", params![destino, id])?;
+        // as contas do Claude dele ficam sem espaço (a pergunta volta; revisão M3)
+        tx.execute("UPDATE contas SET espaco_id = NULL WHERE espaco_id = ?1", params![id])?;
         tx.execute("DELETE FROM espacos WHERE id = ?1", params![id])?;
         tx.commit()?;
         Ok(Some(c.arquivados))
@@ -902,7 +935,7 @@ impl Banco {
                 Mudanca::Fechou { fim, .. } => self.mexeu_no_passado(Some(*fim)),
                 Mudanca::Reatribuir { .. } => self.mexeu_no_passado(None),
                 Mudanca::ReatribuirDesde { desde, .. } => self.mexeu_no_passado(Some(*desde)),
-                Mudanca::Sessao(_) | Mudanca::Encerrados { .. } | Mudanca::Pergunta(..) | Mudanca::PerguntaResolvida(_) => {}
+                Mudanca::Sessao(_) | Mudanca::Encerrados { .. } | Mudanca::Conta { .. } | Mudanca::Pergunta(..) | Mudanca::PerguntaResolvida(_) => {}
             }
         }
         let tx = self.conn.unchecked_transaction()?;
@@ -948,6 +981,17 @@ impl Banco {
                         "INSERT INTO config (chave, valor) VALUES (?1, ?2)
                          ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor",
                         params![CHAVE_ENCERRADOS, j],
+                    )?;
+                }
+                // a conta nova ganha a linha; a conhecida, a hora e a origem de agora, só de um
+                // evento mais novo (a fila do WSL chega atrasada; revisão M11). A resposta da
+                // pergunta e o "Esquecer" são dos Ajustes
+                Mudanca::Conta { id, origem, visto_em } => {
+                    tx.execute(
+                        "INSERT INTO contas (id, origem, visto_em) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(id) DO UPDATE SET visto_em = MAX(visto_em, excluded.visto_em),
+                            origem = CASE WHEN excluded.visto_em >= visto_em THEN COALESCE(excluded.origem, origem) ELSE origem END",
+                        params![id, origem, visto_em],
                     )?;
                 }
                 Mudanca::Pergunta(..) | Mudanca::PerguntaResolvida(_) => {}
@@ -1130,7 +1174,7 @@ impl Banco {
 
     pub fn sessoes_desde(&self, t: Ms) -> Result<Vec<Sessao>> {
         let mut st = self.conn.prepare(
-            "SELECT id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em, origem
+            "SELECT id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em, origem, conta
              FROM sessoes WHERE ultimo_evento >= ?1 ORDER BY ultimo_evento, id",
         )?;
         let v = st.query_map(params![t], |r| {
@@ -1150,9 +1194,51 @@ impl Banco {
                 ligacao: ligacao.as_deref().and_then(Ligacao::de_str),
                 desligada_em: r.get(10)?,
                 origem: r.get(11)?,
+                conta: r.get(12)?,
             })
         })?;
         v.collect()
+    }
+
+    // ---- contas do Claude (rodada 28) ----
+
+    /// As contas do Claude vistas, a vista por último primeiro.
+    pub fn contas(&self) -> Result<Vec<ContaClaude>> {
+        let mut st =
+            self.conn.prepare("SELECT id, espaco_id, origem, visto_em, perguntado_em, rotulo FROM contas ORDER BY visto_em DESC, id")?;
+        let v = st.query_map([], |r| {
+            Ok(ContaClaude {
+                id: r.get(0)?,
+                espaco_id: r.get(1)?,
+                origem: r.get(2)?,
+                visto_em: r.get(3)?,
+                perguntado_em: r.get(4)?,
+                rotulo: r.get(5)?,
+            })
+        })?;
+        v.collect()
+    }
+
+    /// O rótulo da conta (0.6.1), lido do `~/.claude.json` quando o resumo do `accountUuid` de lá
+    /// bate com o da conta. Devolve se mudou (uma conta que o Chronn não viu não ganha linha).
+    pub fn definir_rotulo_da_conta(&self, id: &str, rotulo: &str) -> Result<bool> {
+        Ok(self.conn.execute("UPDATE contas SET rotulo = ?1 WHERE id = ?2 AND rotulo IS NOT ?1", params![rotulo, id])? > 0)
+    }
+
+    /// O espaço da conta (`None`: "Sem espaço"). Devolve se a conta existe.
+    pub fn definir_espaco_da_conta(&self, id: &str, espaco_id: Option<i64>) -> Result<bool> {
+        Ok(self.conn.execute("UPDATE contas SET espaco_id = ?1 WHERE id = ?2", params![espaco_id, id])? > 0)
+    }
+
+    /// O "Depois" da pergunta: a conta fica sem espaço e a pergunta só volta noutro dia.
+    pub fn marcar_conta_perguntada(&self, id: &str, em: Ms) -> Result<bool> {
+        Ok(self.conn.execute("UPDATE contas SET perguntado_em = ?1 WHERE id = ?2", params![em, id])? > 0)
+    }
+
+    /// "Esquecer": apaga a linha da conta (as sessões guardam a conta, que volta a ser nova no
+    /// próximo evento).
+    pub fn esquecer_conta(&self, id: &str) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM contas WHERE id = ?1", params![id])? > 0)
     }
 
     // ---- regras de pasta ----
@@ -1272,15 +1358,15 @@ fn movida_a_mao(conn: &Connection, sessao_id: &str, pela_regra: Option<i64>) -> 
 fn salvar_sessao_em(conn: &Connection, s: &Sessao) -> Result<()> {
     let nome = if crate::motor::e_sessao_do_chat(&s.id) { None } else { s.nome.as_deref() };
     conn.execute(
-        "INSERT INTO sessoes (id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em, origem)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "INSERT INTO sessoes (id, cwd, nome, transcript, timer_id, estado, ultimo_evento, terminou_em, criada_em, ligacao, desligada_em, origem, conta)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(id) DO UPDATE SET cwd=excluded.cwd, nome=excluded.nome, transcript=excluded.transcript,
             timer_id=excluded.timer_id, estado=excluded.estado, ultimo_evento=excluded.ultimo_evento,
             terminou_em=excluded.terminou_em, criada_em=excluded.criada_em, ligacao=excluded.ligacao,
-            desligada_em=excluded.desligada_em, origem=excluded.origem",
+            desligada_em=excluded.desligada_em, origem=excluded.origem, conta=excluded.conta",
         params![
             s.id, s.cwd, nome, s.transcript, s.timer_id, s.estado.as_str(),
-            s.ultimo_evento, s.terminou_em, s.criada_em, s.ligacao.map(|l| l.as_str()), s.desligada_em, s.origem
+            s.ultimo_evento, s.terminou_em, s.criada_em, s.ligacao.map(|l| l.as_str()), s.desligada_em, s.origem, s.conta
         ],
     )?;
     Ok(())
@@ -1297,7 +1383,7 @@ mod testes {
 
     fn sessao(id: &str, timer: Option<i64>) -> Sessao {
         Sessao { id: id.into(), cwd: "C:\\x".into(), nome: None, transcript: None, timer_id: timer,
-            estado: EstadoSessao::Trabalhando, ultimo_evento: h(9, 0), terminou_em: None, criada_em: h(9, 0), ligacao: None, desligada_em: None, origem: None }
+            estado: EstadoSessao::Trabalhando, ultimo_evento: h(9, 0), terminou_em: None, criada_em: h(9, 0), ligacao: None, desligada_em: None, origem: None, conta: None }
     }
 
     fn application_id(conn: &Connection) -> i32 {
@@ -1681,11 +1767,115 @@ mod testes {
         let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
         assert_eq!(b.sessoes_desde(0).unwrap().iter().find(|x| x.id == "s1").unwrap().origem.as_deref(), Some("claude-desktop"));
     }
+    /// Rodada 28: a sessão do terminal ligada à janela (o HWND) é gravada sem ele: nenhuma coluna
+    /// de nenhuma tabela tem o número.
+    #[test] fn o_hwnd_da_janela_nao_vai_para_o_banco() {
+        use crate::config::{ConfigApp, ConfigMotor};
+        use crate::motor::{Amostra, Motor};
+        const HWND: isize = 0x1234_5678_9abc;
+        let b = Banco::abrir_memoria().unwrap();
+        let t = b.criar_timer(None, "A", "#a00").unwrap();
+        let app = ConfigApp { programas_claude: vec!["windowsterminal".into()], ..ConfigApp::default() };
+        let mut m = Motor::novo(ConfigMotor::de(&app, F), h(8, 0));
+        m.regras_pasta = vec![RegraPasta { id: 1, pasta: "G:\\A".into(), timer_id: t }];
+        let terminal = |t: Ms| Amostra { t, ocioso_ms: 1_000, processo: Some("WindowsTerminal".into()), titulo: Some("claude".into()), janela: Some(HWND), em_foco: true, ..Default::default() };
+        let ev = |evento: &str, t: Ms| fila::EventoHook { t, evento: evento.into(), sessao: "s1".into(), cwd: "G:\\A".into(), transcript: None, notificacao: None, origem: Some("cli".into()), conta: None };
+        let mut mud = m.amostra(&terminal(h(9, 0) - 1_000));
+        mud.extend(m.evento(&ev("UserPromptSubmit", h(9, 0))));
+        mud.extend(m.amostra(&terminal(h(9, 0) + 4_000)));
+        mud.extend(m.evento(&ev("Stop", h(9, 1))));
+        mud.extend(m.amostra(&terminal(h(9, 2))));
+        mud.extend(m.amostra(&terminal(h(9, 2) + 5_000)));
+        assert_eq!(m.lendo_agora(), Some("s1"), "a leitura pela janela");
+        b.aplicar(&mud).unwrap();
+        let tabelas: Vec<String> = {
+            let mut st = b.conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(|x| x.unwrap()).collect()
+        };
+        let numero = HWND.to_string();
+        for tabela in tabelas {
+            let mut st = b.conn.prepare(&format!("SELECT * FROM {tabela}")).unwrap();
+            let n = st.column_count();
+            let mut linhas = st.query([]).unwrap();
+            while let Some(r) = linhas.next().unwrap() {
+                for i in 0..n {
+                    let v: rusqlite::types::Value = r.get(i).unwrap();
+                    let texto = match v {
+                        rusqlite::types::Value::Integer(x) => x.to_string(),
+                        rusqlite::types::Value::Text(s) => s,
+                        _ => String::new(),
+                    };
+                    assert!(!texto.contains(&numero), "o HWND apareceu em {tabela}: {texto}");
+                }
+            }
+        }
+    }
+    #[test] fn versao_11_grava_a_conta_da_sessao_e_as_contas() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("w.db");
+        {
+            // um banco da versão 10, sem a coluna nem a tabela
+            let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
+            b.conn.execute_batch("ALTER TABLE sessoes DROP COLUMN conta; DROP TABLE contas; PRAGMA user_version = 10;").unwrap();
+            b.conn.execute_batch("INSERT INTO sessoes (id, cwd, nome, estado, ultimo_evento, criada_em, origem) VALUES ('velha', 'C:\\x', 'Plano', 'parada', 100, 100, 'cli');").unwrap();
+        }
+        let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
+        let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, VERSAO_ESQUEMA);
+        let velha = b.sessoes_desde(0).unwrap().into_iter().find(|x| x.id == "velha").unwrap();
+        assert_eq!((velha.conta, velha.origem.as_deref(), velha.nome.as_deref()), (None, Some("cli"), Some("Plano")), "nada se perde");
+        assert!(b.contas().unwrap().is_empty());
+        let s = Sessao { conta: Some("af63dc4c8601ec8c".into()), ..sessao("s1", None) };
+        b.salvar_sessao(&s).unwrap();
+        assert_eq!(b.sessoes_desde(0).unwrap().iter().find(|x| x.id == "s1").unwrap().conta.as_deref(), Some("af63dc4c8601ec8c"));
+        // a conta nova ganha a linha; a vista de novo, a hora e a origem de agora
+        let conta = |origem: Option<&str>, t: Ms| Mudanca::Conta { id: "af63dc4c8601ec8c".into(), origem: origem.map(str::to_string), visto_em: t };
+        b.aplicar(&[conta(Some("cli"), h(9, 0))]).unwrap();
+        b.aplicar(&[conta(Some("claude-desktop"), h(9, 5)), conta(None, h(9, 1))]).unwrap();
+        // revisão M11: um evento mais antigo (a fila do WSL lida depois) não troca a origem
+        b.aplicar(&[conta(Some("wsl"), h(9, 4))]).unwrap();
+        let c = b.contas().unwrap();
+        assert_eq!(c, vec![ContaClaude { id: "af63dc4c8601ec8c".into(), espaco_id: None, origem: Some("claude-desktop".into()), visto_em: h(9, 5), perguntado_em: None, rotulo: None }]);
+        // 0.6.1: o rótulo só na conta conhecida, e só quando muda
+        assert!(b.definir_rotulo_da_conta("af63dc4c8601ec8c", "Ana · an•••@exemplo.com · Pro").unwrap());
+        assert!(!b.definir_rotulo_da_conta("af63dc4c8601ec8c", "Ana · an•••@exemplo.com · Pro").unwrap(), "igual: nada muda");
+        assert!(!b.definir_rotulo_da_conta("0000000000000000", "Outra").unwrap(), "desconhecida: nada");
+        assert_eq!(b.contas().unwrap()[0].rotulo.as_deref(), Some("Ana · an•••@exemplo.com · Pro"));
+        b.definir_rotulo_da_conta("af63dc4c8601ec8c", "Ana · an•••@exemplo.com · Max").unwrap();
+        assert_eq!(b.contas().unwrap().len(), 1);
+        assert!(b.definir_espaco_da_conta("af63dc4c8601ec8c", Some(2)).unwrap());
+        assert!(b.marcar_conta_perguntada("af63dc4c8601ec8c", h(9, 6)).unwrap());
+        assert!(!b.definir_espaco_da_conta("outra", Some(2)).unwrap(), "conta que não existe");
+        let c = &b.contas().unwrap()[0];
+        assert_eq!((c.espaco_id, c.perguntado_em), (Some(2), Some(h(9, 6))));
+        // esquecer: a linha sai, a sessão guarda a conta, e o próximo evento a cria de novo
+        assert!(b.esquecer_conta("af63dc4c8601ec8c").unwrap());
+        assert!(b.contas().unwrap().is_empty());
+        assert_eq!(b.sessoes_desde(0).unwrap().iter().find(|x| x.id == "s1").unwrap().conta.as_deref(), Some("af63dc4c8601ec8c"));
+        b.aplicar(&[conta(Some("cli"), h(9, 10))]).unwrap();
+        assert_eq!(b.contas().unwrap()[0].espaco_id, None, "volta a ser nova");
+        // revisão M3: arquivar ou apagar o espaço deixa a conta sem espaço
+        let freela = b.criar_espaco("Freela", "#123456").unwrap();
+        b.definir_espaco_da_conta("af63dc4c8601ec8c", Some(freela)).unwrap();
+        let mut e = b.espacos().unwrap().into_iter().find(|e| e.id == freela).unwrap();
+        e.arquivado = true;
+        b.editar_espaco(&e).unwrap();
+        assert_eq!(b.contas().unwrap()[0].espaco_id, None, "arquivado");
+        e.arquivado = false;
+        b.editar_espaco(&e).unwrap();
+        b.definir_espaco_da_conta("af63dc4c8601ec8c", Some(freela)).unwrap();
+        assert_eq!(b.apagar_espaco(freela, 1).unwrap(), Some(0));
+        assert_eq!(b.contas().unwrap()[0].espaco_id, None, "apagado");
+        // abrir de novo não muda nada
+        drop(b);
+        let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
+        assert_eq!(b.contas().unwrap().len(), 1);
+    }
     #[test] fn banco_novo_tem_versao_9_com_as_tres_atividades_e_o_espaco_geral() {
         let b = Banco::abrir_memoria().unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, VERSAO_ESQUEMA);
-        assert_eq!(v, 10);
+        assert_eq!(v, VERSAO_ESQUEMA);
         let a = b.atividades().unwrap();
         assert_eq!(
             a.iter().map(|x| (x.id, x.nome.as_str(), x.arquivada)).collect::<Vec<_>>(),
@@ -1790,7 +1980,7 @@ mod testes {
         assert!(antes.len() > 25);
         let b = Banco::abrir_em(&p, ms_local(2026, 11, 18, 14, 0, F), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 10);
+        assert_eq!(v, VERSAO_ESQUEMA);
         // todos os timers (o arquivado também) zerados no início de hoje: os números são os de hoje
         assert_eq!(b.zerados().unwrap().into_iter().collect::<Vec<_>>(), (1..=4).map(|t| (t, ms_local(2026, 11, 18, 0, 0, F))).collect::<Vec<_>>());
         assert_eq!(linhas_antigas(&b.conn), antes, "nenhuma linha antiga muda");
@@ -1838,7 +2028,7 @@ mod testes {
             }
             let b = Banco::abrir_em(&p, h(15, 30), F).unwrap();
             let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-            assert_eq!(v, 10, "da versão {versao}");
+            assert_eq!(v, VERSAO_ESQUEMA, "da versão {versao}");
             assert_eq!(b.zerados().unwrap()[&1], h(0, 0), "da versão {versao}: zerado no início de hoje");
             assert_eq!(b.atividades().unwrap().len(), 3);
             assert_eq!(b.trechos_entre(0, 10).unwrap().iter().map(|t| t.atividade_id).collect::<Vec<_>>(), [1, 1]);
@@ -2022,7 +2212,7 @@ mod testes {
         assert_eq!(copia, dir.join("antes-migracao-v8-20261120-0930.db"));
         let b = Banco::abrir_em(&p, ms_local(2026, 11, 20, 9, 30, F), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 10);
+        assert_eq!(v, VERSAO_ESQUEMA);
         // um espaço, "Trabalho", com todos os grupos e timers (os arquivados também)
         assert_eq!(b.espacos().unwrap().iter().map(|e| (e.id, e.nome.as_str(), e.arquivado)).collect::<Vec<_>>(), [(1, "Trabalho", false)]);
         assert!(b.espacos_dos_grupos().unwrap().values().all(|e| *e == 1));
@@ -2160,7 +2350,7 @@ mod testes {
         assert_eq!(copia, dir.join("antes-migracao-v7-20261120-0930.db"));
         let b = Banco::abrir_em(&p, h(9, 0), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 10);
+        assert_eq!(v, VERSAO_ESQUEMA);
         assert!(b.zerados_atividade().unwrap().is_empty(), "os números ficam os mesmos");
         assert_eq!(b.zerados().unwrap()[&t], h(8, 0));
         // rodar de novo não muda nada
@@ -2176,7 +2366,7 @@ mod testes {
         }
         let b = Banco::abrir_em(&p1, h(9, 0), F).unwrap();
         let v: i64 = b.conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(v, 10);
+        assert_eq!(v, VERSAO_ESQUEMA);
         assert!(b.zerados_atividade().unwrap().is_empty());
     }
 

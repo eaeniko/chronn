@@ -1679,6 +1679,25 @@ export function ordemDeLigar(sessoes, timerId) {
   return sessoes.map((s, i) => [grupo(s), i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, i]) => i);
 }
 
+/**
+ * As três faixas da lista de ligar (rodada 28, opção B), com 2 ou mais espaços (`nEspacos`, os não
+ * arquivados) e pelo menos uma sessão de conta com espaço: 1) as sessões de contas do espaço do
+ * timer (`espacoId`); 2) as sem conta, ou de conta ainda sem espaço; 3) as de contas de outro
+ * espaço (a tela recolhe esta numa linha "Outras contas (N) ›"). Dentro de cada faixa vale a ordem
+ * de `ordemDeLigar`. Sem isso, nulo: a lista fica como antes. Devolve os índices em `sessoes`.
+ */
+export function faixasDeLigar(sessoes, timerId, espacoId, nEspacos) {
+  if (nEspacos < 2 || espacoId === null || espacoId === undefined) return null;
+  if (!sessoes.some((s) => s.conta_espaco !== null && s.conta_espaco !== undefined)) return null;
+  const faixa = (s) => (s.conta_espaco === null || s.conta_espaco === undefined ? 1 : s.conta_espaco === espacoId ? 0 : 2);
+  const faixas = [[], [], []];
+  for (const i of ordemDeLigar(sessoes, timerId)) faixas[faixa(sessoes[i])].push(i);
+  return faixas;
+}
+
+/** O espaço do timer (o do grupo em que ele está na tela), ou nulo. */
+const espacoDoTimer = (snap, timerId) => (snap?.grupos ?? []).find((g) => g.timers.some((t) => t.id === timerId))?.espaco_id ?? null;
+
 /** "+ Ligar uma sessão" de um timer: escolhe a sessão, depois desde quando. */
 export async function ligarSessao(lerSnap, timerId) {
   const snap = lerSnap();
@@ -1687,19 +1706,32 @@ export async function ligarSessao(lerSnap, timerId) {
   const { sessoes, erro } = await buscarSessoes();
   const estadoClaude = await estadoDoClaude();
   const nomeTimer = new Map(todosTimers(snap).map((t) => [t.id, t.nome]));
+  // as outras contas recolhidas (rodada 28): abrir vale só para esta lista, não fica guardado
+  let outrasAbertas = false;
   const passo1 = () => {
     const lista = sessoes ?? [];
-    const itens = ordemDeLigar(lista, timer.id)
-      .map((i) => {
-        const s = lista[i];
-        const mesma = s.timer_id === timer.id;
-        const onde = mesma ? TEXTOS.jaLigada : s.timer_id !== null ? TEXTOS.emTimer(esc(nomeTimer.get(s.timer_id) ?? TEXTOS.outroTimer)) : '';
-        return `<button type="button" class="it" data-i="${i}"${mesma ? ' disabled' : ''}>
+    const item = (i) => {
+      const s = lista[i];
+      const mesma = s.timer_id === timer.id;
+      const onde = mesma ? TEXTOS.jaLigada : s.timer_id !== null ? TEXTOS.emTimer(esc(nomeTimer.get(s.timer_id) ?? TEXTOS.outroTimer)) : '';
+      return `<button type="button" class="it" data-i="${i}"${mesma ? ' disabled' : ''}>
   <span class="it-n">${esc(s.nome)}</span><span class="it-e">${esc(estadoDaSessao(s.estado))}</span>
   ${linhaDaSessao(s)}${onde ? `<small class="it-t">${onde}</small>` : ''}
 </button>`;
-      })
-      .join('');
+    };
+    const nEspacos = (snap.espacos ?? []).filter((e) => !e.arquivado).length;
+    const faixas = faixasDeLigar(lista, timer.id, espacoDoTimer(snap, timer.id), nEspacos);
+    const itensDe = () =>
+      faixas
+        ? faixas[0].map(item).join('') +
+          faixas[1].map(item).join('') +
+          (faixas[2].length
+            ? outrasAbertas
+              ? `<div class="lista-g it-outras-t">${esc(TEXTOS.outrasContas(faixas[2].length))}</div>${faixas[2].map(item).join('')}`
+              : `<button type="button" class="it it-outras" data-outras="1" aria-expanded="false"><span class="it-n">${esc(TEXTOS.outrasContas(faixas[2].length))} ›</span></button>`
+            : '')
+        : ordemDeLigar(lista, timer.id).map(item).join('');
+    const itens = itensDe();
     const vazio = erro
       ? `<p class="dlg-p">${esc(erro)}</p>`
       : `<p class="dlg-p">${TEXTOS.nenhumaSessao7}</p>`;
@@ -1709,9 +1741,18 @@ export async function ligarSessao(lerSnap, timerId) {
       enviar: null,
       aoMontar(form) {
         ligarLinhaClaude(form);
-        form.querySelector('.lista')?.addEventListener('click', (ev) => {
+        const el = form.querySelector('.lista');
+        el?.addEventListener('click', (ev) => {
           const b = ev.target.closest('.it');
-          if (b && !b.disabled) passoOpcoes(sessoes[Number(b.dataset.i)], timer, passo1);
+          if (!b || b.disabled) return;
+          // "Outras contas (N) ›": a faixa abre no lugar, sem diálogo novo
+          if (b.dataset.outras) {
+            outrasAbertas = true;
+            el.innerHTML = itensDe();
+            el.querySelector('.it-outras-t + .it, .it-outras-t ~ .it:not([disabled])')?.focus();
+            return;
+          }
+          passoOpcoes(sessoes[Number(b.dataset.i)], timer, passo1);
         });
       },
     });

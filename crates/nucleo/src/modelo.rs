@@ -306,6 +306,11 @@ pub struct Sessao {
     /// não vazia fica.
     #[serde(default)]
     pub origem: Option<String>,
+    /// A conta do Claude da sessão (rodada 28, versão 11 do banco): o resumo que o hook manda
+    /// (`fila::resumo_da_conta`), nunca o id. A primeira não vazia fica. A conversa do Chat recebe a
+    /// do último evento do app do Claude (`Motor::conta_do_app`).
+    #[serde(default)]
+    pub conta: Option<String>,
 }
 
 /// Ajuste à mão do tempo de um timer num dia de trabalho (`dia` = AAAA-MM-DD): soma ao total do
@@ -322,6 +327,22 @@ pub struct Ajuste {
     /// Soma na atividade e no timer (Trabalho nos ajustes de antes da versão 5 do banco).
     #[serde(default = "trabalho")]
     pub atividade_id: i64,
+}
+
+/// Uma conta do Claude vista pelo Chronn (rodada 28, a tabela `contas`): o resumo do id (nunca o
+/// id), o espaço do Chronn escolhido para ela, de onde veio o último evento e quando, e quando a
+/// pergunta "De qual espaço é esta conta?" saiu pela última vez.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ContaClaude {
+    pub id: String,
+    pub espaco_id: Option<i64>,
+    pub origem: Option<String>,
+    pub visto_em: Ms,
+    pub perguntado_em: Option<Ms>,
+    /// "Nome · ni•••@dominio · Pro" (0.6.1, a versão 12 do banco), do `~/.claude.json` em que o
+    /// resumo do `accountUuid` bate; sem ele, a tela mostra "Conta ·1a2b".
+    #[serde(default)]
+    pub rotulo: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -388,6 +409,9 @@ pub enum Mudanca {
     /// Os timers encerrados (■) no dia de trabalho `dia` (AAAA-MM-DD), o conjunto inteiro: o banco
     /// grava para valer depois de reabrir o app no mesmo dia.
     Encerrados { dia: String, timers: Vec<i64> },
+    /// Um evento com a conta do Claude `id` (o resumo) chegou em `visto_em`, vindo de `origem`
+    /// (rodada 28): a conta nova ganha a linha em `contas`; a conhecida, a hora e a origem de agora.
+    Conta { id: String, origem: Option<String>, visto_em: Ms },
 }
 
 #[cfg(test)]

@@ -183,6 +183,15 @@ export function faixaDosHooks(estado, temTimers, encontrado = true) {
 }
 
 /**
+ * A faixa do WSL sem os hooks (0.6.1): `{ texto, distro, chave }` com a primeira distro da lista
+ * (`chave`: todas, para o "×" esconder só até a lista mudar); sem nenhuma, nulo.
+ */
+export function faixaDoWsl(distros) {
+  if (!distros?.length) return null;
+  return { texto: TEXTOS.faixaWslSemHooks(distros.join(', ')), distro: distros[0], chave: distros.join('|') };
+}
+
+/**
  * Corpo com a prévia exata do settings.json (bloco monoespaçado com rolagem) e, antes de ligar,
  * as pastas que nunca contam: elas valem desde o primeiro evento. `atualizar`: os hooks da
  * versão antiga saem e entram os de agora.
@@ -243,11 +252,28 @@ export async function ligarAoClaude({ atualizar = false } = {}) {
       return;
     }
     let copia = null;
-    abrirDialogo({
+    const d = abrirDialogo({
       titulo,
       classe: 'largo',
-      corpo: corpoPrevia(previa, settings, pastas, atualizar),
+      // rodada 28: embaixo, o Claude Code no WSL (só com alguma distro no registro), desenhado
+      // quando a leitura chega: o diálogo nunca espera o WSL (revisão I2)
+      corpo: `${corpoPrevia(previa, settings, pastas, atualizar)}<div data-wsl-dialogo></div>`,
       enviar: atualizar ? TEXTOS.atualizar : TEXTOS.conectar,
+      aoMontar(form) {
+        lerWsl().then((wsl) => {
+          const lugar = form.querySelector('[data-wsl-dialogo]');
+          if (lugar) lugar.innerHTML = htmlWsl(wsl);
+        });
+        // o "Ligar" ou o "Desligar" de uma distro fecha este diálogo e abre o da distro
+        form.addEventListener('click', (ev) => {
+          const b = ev.target.closest('[data-aj="wsl-ligar"], [data-aj="wsl-desligar"]');
+          if (!b) return;
+          ev.preventDefault();
+          d.fechar();
+          if (b.dataset.aj === 'wsl-ligar') ligarDistro(b.dataset.distro, b.dataset.subir === '1');
+          else desligarDistro(b.dataset.distro);
+        });
+      },
       async aoEnviar(form) {
         // as pastas primeiro: o hook já nasce sabendo o que não registrar
         await gravarPastas(form);
@@ -424,6 +450,143 @@ export function htmlConexaoClaude(h, encontrado = true, settings = '', comBotao 
 </div>`;
 }
 
+/** "21/11 14:05" (ou "Nov 21 14:05"): quando a conta foi vista por último. */
+const quandoVista = (ms) => dataDoBackup(new Date(ms - new Date(ms).getTimezoneOffset() * 60_000).toISOString());
+
+/**
+ * Ajustes → "Contas do Claude" (rodada 28): só com pelo menos uma conta. Uma linha por conta:
+ * "Conta ·1a2b" (os 4 primeiros do resumo), a origem e quando foi vista por último, o seletor de
+ * espaço (com "Sem espaço"; só os não arquivados, mais o da conta, se estiver arquivado) e o
+ * "Esquecer". Embaixo, a ajuda: o Chronn guarda só um resumo do id.
+ */
+export function htmlContas(contas, espacos = []) {
+  if (!contas?.length) return '';
+  const itens = contas
+    .map((c) => {
+      const visiveis = espacos.filter((e) => !e.arquivado || e.id === c.espaco_id);
+      const ops = [`<option value=""${c.espaco_id == null ? ' selected' : ''}>${esc(TEXTOS.semEspaco)}</option>`]
+        .concat(visiveis.map((e) => `<option value="${e.id}"${e.id === c.espaco_id ? ' selected' : ''}>${esc(e.nome)}</option>`))
+        .join('');
+      // 0.6.1: o rótulo do `~/.claude.json` ("Nome · ni•••@dominio · Pro"); sem ele, a curta
+      const nome = c.rotulo || TEXTOS.contaCurta(c.curta);
+      const espaco = espacos.find((e) => e.id === c.espaco_id);
+      return `<li${espaco ? ` style="--c:${cor(espaco.cor)}"` : ''}><i></i><span class="aj-n">${esc(nome)}</span><small>${esc(TEXTOS.contaVista(TEXTOS.origemDaSessao(c.origem), quandoVista(c.visto_em)))}</small>
+<select class="aj-conta-esp" data-conta="${esc(c.id)}" aria-label="${esc(TEXTOS.espacoDaConta(nome))}">${ops}</select>
+<button type="button" class="bt mini" data-aj="conta-esquecer" data-conta="${esc(c.id)}" aria-label="${esc(TEXTOS.esquecerConta(nome))}">${esc(TEXTOS.esquecer)}</button></li>`;
+    })
+    .join('');
+  return `<div class="aj-contas"><h4 class="aj-sub">${esc(TEXTOS.contasDoClaude)}</h4><ul class="aj-lista">${itens}</ul><small class="aj-dica">${esc(TEXTOS.contasAjuda)}</small></div>`;
+}
+
+/**
+ * "Claude Code no WSL" (rodada 28), nos Ajustes e no diálogo de conectar: só com pelo menos uma
+ * distro no registro (`distros` vazio ou nulo: nada). Uma linha por distro, com o nome e o estado
+ * ("ligada", "Claude Code não encontrado", "parada", "hook desatualizado") e o "Ligar" (abre a
+ * prévia) ou o "Desligar". Na distro parada (0.6.1), o "Ligar" liga a distro só no clique
+ * (`data-subir`); o Chronn nunca liga a distro sozinho.
+ */
+export function htmlWsl(distros) {
+  // a leitura falhou (o WSL não respondeu): a seção diz isso (revisão M10); ainda sem leitura, ou
+  // sem distros, nada
+  if (distros === null) {
+    return `<div class="aj-wsl"><h4 class="aj-sub">${esc(TEXTOS.wslTitulo)}</h4><small class="aj-dica" role="note">${esc(TEXTOS.wslNaoDeuLer)}</small></div>`;
+  }
+  if (!distros?.length) return '';
+  const classe = { ligada: 'on', desatualizado: 'antigo', sem_hooks: 'antigo', sem_claude: 'ausente', parada: 'ausente', desligada: '' };
+  const itens = distros
+    .map((d) => {
+      const ligada = d.estado === 'ligada' || d.estado === 'desatualizado' || d.ligada;
+      // 0.6.1: ligada, mas outro programa tirou os hooks do settings.json: o "Ligar de novo" (a
+      // prévia, como no primeiro Ligar) vem antes do "Desligar"
+      const deNovo =
+        d.estado === 'sem_hooks'
+          ? `<button type="button" class="bt mini pri" data-aj="wsl-ligar" data-distro="${esc(d.nome)}" title="${esc(TEXTOS.wslSemHooksDica(d.nome))}">${esc(TEXTOS.wslLigarDeNovo)}</button>`
+          : '';
+      const botao = ligada
+        ? `<button type="button" class="bt mini" data-aj="wsl-desligar" data-distro="${esc(d.nome)}">${esc(TEXTOS.wslDesligar)}</button>`
+        : d.estado === 'desligada'
+          ? `<button type="button" class="bt mini pri" data-aj="wsl-ligar" data-distro="${esc(d.nome)}">${esc(TEXTOS.wslLigar)}</button>`
+          : d.estado === 'parada'
+            ? `<button type="button" class="bt mini" data-aj="wsl-ligar" data-subir="1" data-distro="${esc(d.nome)}" title="${esc(TEXTOS.wslLigarParada(d.nome))}">${esc(TEXTOS.wslLigar)}</button>`
+            : '';
+      return `<li data-wsl="${esc(d.nome)}"><span class="aj-n">${esc(d.nome)}</span><span class="aj-estado ${classe[d.estado] ?? ''}"><i></i>${esc(TEXTOS.wslEstado(d.estado))}</span><small></small>${deNovo}${botao}</li>`;
+    })
+    .join('');
+  return `<div class="aj-wsl"><h4 class="aj-sub">${esc(TEXTOS.wslTitulo)}</h4><ul class="aj-lista">${itens}</ul><small class="aj-dica">${esc(TEXTOS.wslAjuda)}</small></div>`;
+}
+
+/** As distros do WSL agora (`[]` sem nenhuma; nulo se não deu para ler). Nunca prende a tela: quem chama desenha a seção quando ela chega (revisão I2). */
+export async function lerWsl() {
+  try {
+    return await chamar('wsl_estado');
+  } catch (e) {
+    console.error('worktimer: wsl_estado', e);
+    return null;
+  }
+}
+
+/**
+ * "Ligar" o Claude Code de uma distro: a prévia exata do `settings.json` de lá, como no Windows;
+ * nada é gravado sem o clique. `subir` (0.6.1): a distro está parada, e o clique no "Ligar" a liga
+ * para mostrar a prévia (e de novo no "Ligar" da prévia, se ela parou enquanto você lia). Resolve
+ * `true` se ligou.
+ */
+export function ligarDistro(nome, subir = false) {
+  // revisão M4: a subida pode levar uns segundos; um segundo clique não sobe a distro de novo
+  if (subindo.has(nome)) return Promise.resolve(false);
+  subindo.add(nome);
+  return new Promise((ok) => {
+    chamar('wsl_previa', { distro: nome, subir })
+      .finally(() => subindo.delete(nome))
+      .then(({ previa, settings }) => {
+        let copia = null;
+        const cam = `<code class="aj-cam">${esc(settings)}</code>`;
+        abrirDialogo({
+          titulo: esc(TEXTOS.wslLigarTitulo(nome)),
+          classe: 'largo',
+          corpo: `<p class="dlg-p">${TEXTOS.wslPreviaTexto(NOME_APP, cam)}</p>
+<details class="mais aj-ver-muda" open><summary>${TEXTOS.verOQueMuda}</summary><div class="mais-corpo"><pre class="aj-previa" tabindex="0" aria-label="${TEXTOS.previaRotulo}">${esc(previa)}</pre></div></details>`,
+          enviar: TEXTOS.wslLigar,
+          async aoEnviar() {
+            copia = await chamar('wsl_ligar', { distro: nome, subir });
+          },
+          aoFechar(enviado) {
+            if (!enviado) return ok(false);
+            abrirDialogo({ titulo: esc(TEXTOS.wslLigada(nome)), corpo: corpoInstalado(copia), enviar: TEXTOS.ok, cancelar: null, aoFechar: () => ok(true) });
+          },
+        });
+      })
+      .catch((e) => {
+        abrirDialogo({
+          titulo: esc(TEXTOS.wslLigarTitulo(nome)),
+          corpo: `<p class="dlg-p">${TEXTOS.naoDeuPreparar(esc(textoDoErro(e)))}</p>`,
+          enviar: null,
+          cancelar: TEXTOS.fechar,
+          aoFechar: () => ok(false),
+        });
+      });
+  });
+}
+
+/** As distros com o "Ligar" em andamento (a prévia ainda não chegou). */
+const subindo = new Set();
+
+/** "Desligar" o Claude Code de uma distro: tira só os nossos hooks de lá. Resolve `true` se desligou. */
+export function desligarDistro(nome) {
+  return new Promise((ok) => {
+    abrirDialogo({
+      titulo: esc(TEXTOS.wslDesligarTitulo(nome)),
+      corpo: `<p class="dlg-p">${TEXTOS.wslDesligarTexto(NOME_APP, '<code class="aj-cam">~/.claude/settings.json</code>')}</p>`,
+      enviar: TEXTOS.wslDesligar,
+      perigo: true,
+      async aoEnviar() {
+        await chamar('wsl_desligar', { distro: nome });
+      },
+      aoFechar: ok,
+    });
+  });
+}
+
 /**
  * Ajustes → Aparência (rodada 21; o tema saiu do cabeçalho): Claro, Escuro e Sistema (o padrão,
  * que segue o claro/escuro do Windows). O "windows" de antes vale como Sistema.
@@ -582,6 +745,8 @@ ${campoDockEspaco(c.dock_espaco)}`,
     'claude',
     TEXTOS.secoes.claude,
     `<div data-bloco="hooks">${htmlConexaoClaude(dados.hooks, dados.encontrado !== false, dados.info?.settings)}</div>
+<div data-bloco="wsl">${htmlWsl(dados.wsl)}</div>
+<div data-bloco="contas">${htmlContas(snap.contas, snap.espacos)}</div>
 <label class="campo"><span>${TEXTOS.programasClaude}</span><textarea name="programas_claude" rows="4" spellcheck="false">${esc(c.programas_claude.join('\n'))}</textarea><small>${TEXTOS.programasClaudeDica}</small></label>`,
   )}
   ${secao('pastas', TEXTOS.secoes.pastas, campoPastas(c.pastas_ignoradas, ''), TEXTOS.pastasSecaoDica)}
@@ -673,7 +838,57 @@ async function carregar() {
     regras: val(regras, []),
     autostart: val(autostart, null),
     backups: val(backups, []),
+    // o WSL chega depois (`atualizarWsl`), sem prender os Ajustes (revisão I2)
+    wsl: undefined,
   };
+}
+
+/** Lê e redesenha a seção "Claude Code no WSL" (rodada 28), só se mudou. */
+async function atualizarWsl() {
+  const wsl = await lerWsl();
+  if (!dados) return;
+  dados.wsl = wsl;
+  const b = raiz?.querySelector('[data-bloco="wsl"]');
+  const novo = htmlWsl(wsl);
+  if (b && b.innerHTML !== novo) b.innerHTML = novo;
+}
+
+/** A cada quanto a seção do WSL é lida de novo com os Ajustes à vista (0.6.1). */
+export const WSL_A_CADA_MS = 10_000;
+
+/**
+ * Os Ajustes seguem à vista em `el` (montados ali, não escondidos, com a janela visível)? Só
+ * assim a seção do WSL é lida de novo (0.6.1): fechados, nada chama o `wsl.exe`.
+ */
+export const ajustesAVista = (el, atual, doc = globalThis.document) =>
+  Boolean(el) && atual === el && !el.hidden && el.isConnected !== false && doc?.visibilityState !== 'hidden';
+
+let relerWsl = null;
+
+/** Lê a seção do WSL a cada `WSL_A_CADA_MS` enquanto os Ajustes estão à vista (0.6.1). */
+function vigiarWsl(el) {
+  clearInterval(relerWsl);
+  relerWsl = setInterval(() => {
+    // saiu dos Ajustes: para (a próxima montagem começa de novo)
+    if (raiz !== el || el.hidden || el.isConnected === false) {
+      clearInterval(relerWsl);
+      return;
+    }
+    // a janela escondida, a seção ausente (sem distros) ou um diálogo aberto (a prévia do
+    // "Ligar"): espera
+    if (!ajustesAVista(el, raiz) || !el.querySelector('[data-bloco="wsl"]') || document.querySelector('.dlg-fundo') || subindo.size) return;
+    atualizarWsl();
+  }, WSL_A_CADA_MS);
+}
+
+/** Redesenha "Contas do Claude" se mudou (com o seletor em uso, espera). */
+function desenharContas() {
+  const b = raiz?.querySelector('[data-bloco="contas"]');
+  const snap = lerSnap();
+  if (!b || !snap) return;
+  if (b.contains(document.activeElement) && document.activeElement.matches('select')) return;
+  const novo = htmlContas(snap.contas, snap.espacos);
+  if (b.innerHTML !== novo) b.innerHTML = novo;
 }
 
 function desenharBackups() {
@@ -834,6 +1049,15 @@ function erroDoCampo(nome, msg) {
 
 async function aoMudar(ev) {
   const el = ev.target;
+  // o espaço de uma conta do Claude (rodada 28): não é da config
+  if (el.matches?.('select[data-conta]')) {
+    try {
+      await chamar('conta_definir', { conta: el.dataset.conta, espaco_id: el.value === '' ? null : Number(el.value) });
+    } catch (e) {
+      faixa(textoDoErro(e));
+    }
+    return;
+  }
   const nome = el.name;
   if (!nome) return;
   if (nome === 'esp_nome' || nome === 'esp_cor') {
@@ -1050,6 +1274,28 @@ async function aoClicar(ev) {
       await removerHooks();
       await atualizarHooks();
       break;
+    case 'wsl-ligar':
+      // a distro parada leva uns segundos para subir: o botão diz isso e não aceita outro clique
+      if (alvo.dataset.subir === '1') {
+        alvo.disabled = true;
+        alvo.textContent = TEXTOS.wslLigando;
+      }
+      if (await ligarDistro(alvo.dataset.distro, alvo.dataset.subir === '1')) await atualizarWsl();
+      else if (alvo.isConnected) {
+        alvo.disabled = false;
+        alvo.textContent = TEXTOS.wslLigar;
+      }
+      break;
+    case 'wsl-desligar':
+      if (await desligarDistro(alvo.dataset.distro)) await atualizarWsl();
+      break;
+    case 'conta-esquecer':
+      try {
+        await chamar('conta_esquecer', { conta: alvo.dataset.conta });
+      } catch (e) {
+        faixa(textoDoErro(e));
+      }
+      break;
     case 'backup-agora':
       alvo.disabled = true;
       try {
@@ -1134,6 +1380,8 @@ export async function montarAjustes(el, opcoes) {
   const snap = lerSnap();
   if (raiz !== el || !snap || el.hidden) return;
   el.innerHTML = html(snap);
+  atualizarWsl();
+  vigiarWsl(el);
   gruposDesenhados = htmlGrupos(snap);
   atividadesDesenhadas = htmlAtividades(snap);
   mostrarTempos(Boolean(snap.config.modo_dev));
@@ -1168,6 +1416,7 @@ export function atualizarAjustes(snap) {
   if (!raiz || !raiz.querySelector('.aj')) return;
   desenharGrupos();
   desenharAtividades();
+  desenharContas();
   if (pendentes > 0) return;
   const c = snap.config;
   for (const [nome, valor] of [

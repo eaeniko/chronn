@@ -112,6 +112,19 @@ pub fn previa_em(i: crate::idioma::Idioma, antes: &Value, depois: &Value) -> Str
 {}", t(i, "hooks.antes"), bloco(antes), t(i, "hooks.depois"), bloco(depois))
 }
 
+/// A prévia do `settings.json` em `caminho` com os hooks de `comando`, sem gravar nada (o arquivo
+/// que falta ou está vazio vale como `{}`).
+pub fn previa_do_arquivo(caminho: &Path, comando: &str) -> Result<String, String> {
+    let antes = match std::fs::read_to_string(caminho) {
+        Ok(t) if t.trim().is_empty() => json!({}),
+        Ok(t) => serde_json::from_str(&t).map_err(|e| crate::idioma::tfa("erro.json", &[&e.to_string()]))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(e) => return Err(crate::idioma::tfa("erro.ler", &[&e.to_string()])),
+    };
+    let depois = mesclar(antes.clone(), comando);
+    Ok(previa(&antes, &depois))
+}
+
 fn ler(caminho: &Path) -> Result<Option<(String, Value)>, String> {
     if !caminho.exists() {
         return Ok(None);

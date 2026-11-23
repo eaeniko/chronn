@@ -206,8 +206,9 @@ test('o dock: o cartão de 400 px só para a sessão nova, a mesma estrutura no 
   assert.match(css, /\.ask\.sn \{ width: 400px;/);
   assert.match(css, /\.ask \{\n  width: 320px;/, 'as outras perguntas seguem com 320 px');
   const dock = fonte('./dock.js');
-  assert.match(dock, /<div class="ask\$\{p\.tipo === 'sessao_nova' \? ' sn' : ''\}">\$\{htmlDaPergunta\(p\)\}<\/div>/);
-  assert.match(dock, /<div class="dx-ask\$\{p\.tipo === 'sessao_nova' \? ' sn' : ''\}">\$\{htmlDaPergunta\(p\)\}\$\{mais\}<\/div>/);
+  // rodada 28: o cartão grande também na pergunta da conta nova (`perguntaGrande`)
+  assert.match(dock, /<div class="ask\$\{perguntaGrande\(p\) \? ' sn' : ''\}">\$\{htmlDaPergunta\(p\)\}<\/div>/);
+  assert.match(dock, /<div class="dx-ask\$\{perguntaGrande\(p\) \? ' sn' : ''\}">\$\{htmlDaPergunta\(p\)\}\$\{mais\}<\/div>/);
   assert.match(dock, /document\.addEventListener\('change', \(ev\) => \{\n  if \(!mudarEscolha\(ev\.target\)\) return;/);
   // as chaves novas existem nos dois idiomas
   for (const k of ['sessaoNovaSobre', 'emQualTimer', 'rotuloSessao', 'rotuloVemDe', 'rotuloPasta', 'semNomeAinda', 'soEstaSessao', 'estaEProximas', 'sempreQueForNaPasta', 'ondeComecou', 'ondeEstaAgora', 'ajudaSempreNaPasta', 'ajudaPastaDeCima', 'pastasDaRegra']) {

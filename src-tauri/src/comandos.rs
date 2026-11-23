@@ -11,7 +11,6 @@ use nucleo::hooks_claude::{self, EstadoHooks};
 use nucleo::modelo::{Atividade, Grupo, Mudanca, Timer};
 use nucleo::snapshot::{SessaoDto, Snapshot};
 use nucleo::tempo::Ms;
-use serde_json::{json, Value};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
@@ -425,14 +424,32 @@ pub fn responder(app: AppHandle, estado: State<'_, Estado>, pergunta_id: u64, va
 
 // ---- configuração ----
 
+/// Ajustes → "Contas do Claude" (rodada 28): o espaço da conta (nulo: "Sem espaço").
+#[tauri::command(rename_all = "snake_case")]
+pub fn conta_definir(app: AppHandle, estado: State<'_, Estado>, conta: String, espaco_id: Option<i64>) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, _| n.definir_espaco_da_conta(&conta, espaco_id).map(|_| vec![]))
+}
+
+/// Ajustes → "Esquecer" a conta (rodada 28).
+#[tauri::command(rename_all = "snake_case")]
+pub fn conta_esquecer(app: AppHandle, estado: State<'_, Estado>, conta: String) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, _| n.esquecer_conta(&conta).map(|_| vec![]))
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn salvar_config(app: AppHandle, estado: State<'_, Estado>, config: ConfigApp) -> Result<Snapshot, String> {
-    agir(&app, &estado, |n, agora| {
+    let antes = trava(&estado).banco.config_app().map_err(texto)?.pastas_ignoradas;
+    let snap = agir(&app, &estado, |n, agora| {
         n.salvar_config(&config, &fila::caminhos::hook_json())?;
         // "Zerar sozinho na virada" ligado agora: conta a partir do corte de hoje
         n.zerar_na_virada(agora)?;
         Ok(vec![])
-    })
+    })?;
+    // as pastas ignoradas mudaram: o hook.json das distros do WSL ligadas e rodando também (rodada 28)
+    if snap.config.pastas_ignoradas != antes {
+        crate::wsl_app::regravar_hook_json_das_distros(snap.config.wsl_distros.clone(), snap.config.pastas_ignoradas.clone());
+    }
+    Ok(snap)
 }
 
 /// O que a tela de Ajustes mostra além da config: versão (Sobre), onde fica o
@@ -908,14 +925,8 @@ pub fn comando_hook() -> String {
 
 /// Antes e depois do bloco `hooks`, sem gravar nada.
 pub fn previa_em(settings: &Path, comando: &str) -> Result<String, String> {
-    let antes: Value = match std::fs::read_to_string(settings) {
-        Ok(t) if t.trim().is_empty() => json!({}),
-        Ok(t) => serde_json::from_str(&t).map_err(|e| tfa("erro.json", &[&e.to_string()]))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(e) => return Err(tfa("erro.ler", &[&e.to_string()])),
-    };
-    let depois = hooks_claude::mesclar(antes.clone(), comando);
-    Ok(hooks_claude::previa(&antes, &depois))
+    // a mesma do WSL (rodada 28)
+    hooks_claude::previa_do_arquivo(settings, comando)
 }
 
 /// Instala; devolve o caminho da cópia de segurança ("" se não havia arquivo).

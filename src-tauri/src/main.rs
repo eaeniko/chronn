@@ -19,6 +19,8 @@ mod estado_app;
 mod janelas;
 mod laco;
 mod perfil;
+mod wsl_app;
+mod wsl_real;
 
 use std::sync::Mutex;
 
@@ -257,6 +259,12 @@ fn main() {
             comandos::desligar_sessao,
             comandos::responder,
             comandos::salvar_config,
+            comandos::conta_definir,
+            comandos::conta_esquecer,
+            wsl_app::wsl_estado,
+            wsl_app::wsl_previa,
+            wsl_app::wsl_ligar,
+            wsl_app::wsl_desligar,
             comandos::ajustes_info,
             comandos::ler_corte,
             comandos::regras_pasta,
@@ -352,24 +360,24 @@ mod testes {
 
     /// 0.4.1 (teste do atualizador; antes, rodada 23: 0.3.1 → 0.4.0): a versão 0.4.1 no `tauri.conf.json` e nos
     /// `Cargo.toml`, e o instalador que o `build.ps1` copia com o nome de exibição:
-    /// `Chronn_0.5.0_x64-setup.exe`.
+    /// `Chronn_0.6.1_x64-setup.exe`.
     #[test]
     fn versao_0_4_1_e_o_nome_do_instalador() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.5.0");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.6.1");
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(conf["version"], "0.5.0");
+        assert_eq!(conf["version"], "0.6.1");
         for toml in [
             include_str!("../../crates/fila/Cargo.toml"),
             include_str!("../../crates/hook/Cargo.toml"),
             include_str!("../../crates/nucleo/Cargo.toml"),
             include_str!("../../crates/sinais/Cargo.toml"),
         ] {
-            assert!(toml.replace("\r\n", "\n").contains("\nversion = \"0.5.0\"\n"), "{toml}");
+            assert!(toml.replace("\r\n", "\n").contains("\nversion = \"0.6.1\"\n"), "{toml}");
         }
         // o Cargo.lock acompanha os pacotes do workspace
         let lock = include_str!("../../Cargo.lock").replace("\r\n", "\n");
         for nome in ["fila", "nucleo", "sinais", "work-timer", "work-timer-hook"] {
-            assert!(lock.contains(&format!("name = \"{nome}\"\nversion = \"0.5.0\"\n")), "{nome} no Cargo.lock");
+            assert!(lock.contains(&format!("name = \"{nome}\"\nversion = \"0.6.1\"\n")), "{nome} no Cargo.lock");
         }
         // o build.ps1 pega o instalador da versão do tauri.conf.json (revisão da rodada 25) e faz a
         // cópia com o nome de exibição
@@ -378,7 +386,7 @@ mod testes {
         assert!(ps1.contains(r#"(Join-Path $pasta "Work Timer_${versao}_x64-setup.exe")"#));
         assert!(ps1.contains(r#"$copia = Join-Path $pasta "${nome}_${versao}_x64-setup.exe""#));
         let versao = conf["version"].as_str().unwrap();
-        assert_eq!(format!("{APP_NOME}_{versao}_x64-setup.exe"), "Chronn_0.5.0_x64-setup.exe");
+        assert_eq!(format!("{APP_NOME}_{versao}_x64-setup.exe"), "Chronn_0.6.1_x64-setup.exe");
         // as variáveis da chave saem do ambiente no fim, com ou sem erro
         assert!(ps1.contains("Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD"));
     }

@@ -39,6 +39,9 @@ pub struct Amostra {
     /// Os sinais do Chat da janela do app do Claude, em uso ou nao (rodada 27); `None`: nao sei
     /// (sem a janela, sem resposta no teto ou com falha).
     pub chat: Option<SinaisDoChat>,
+    /// A janela em uso (o HWND da `JanelaInfo`; rodada 28): liga a sessão do terminal à janela em que
+    /// você escreveu. Só em memória: nunca vai para o banco, para log, para arquivo nem para erro.
+    pub janela: Option<isize>,
 }
 
 impl Motor {
@@ -326,6 +329,8 @@ impl Motor {
         if let Conversa::Chat { id, titulo } = &a.conversa {
             out.extend(self.conhecer_chat(id, titulo, a.t));
         }
+        // a amostra fica guardada (uns 45 s) para ligar a sessão do terminal à janela (rodada 28)
+        self.guardar_amostra_da_janela(a);
         let onde = self.onde_da_amostra(a);
         let anterior = self.ultima_amostra;
         self.ultima_amostra = Some(a.t);
@@ -366,6 +371,10 @@ impl Motor {
         // A leitura fecha e abre nos instantes dela (a troca suave vale desde quando aconteceu), cada
         // um com o corte que veio antes dele; o que segue aberto e dividido no corte depois.
         out.extend(self.leitura_na_amostra(a, &onde));
+        // a sessão lida nesta amostra (0.6.1): o lembrete dela conta desde aqui
+        if let Some(id) = self.lendo_agora().map(str::to_string) {
+            self.lida_em.insert(id, a.t);
+        }
         // O corte vem depois do sono e da inatividade: os que atravessam a meia-noite fecham no inicio da ausencia.
         out.extend(self.corte_do_dia(a.t));
         out
@@ -554,7 +563,7 @@ mod testes {
     #[test] fn pausar_bloqueia_sessoes_do_timer() {
         use crate::modelo::{EstadoSessao, Sessao};
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
-        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "x".into(), nome: None, transcript: None, timer_id: Some(1), estado: EstadoSessao::Trabalhando, ultimo_evento: h(8, 0), terminou_em: None, criada_em: h(8, 0), ligacao: None, desligada_em: None, origem: None });
+        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "x".into(), nome: None, transcript: None, timer_id: Some(1), estado: EstadoSessao::Trabalhando, ultimo_evento: h(8, 0), terminou_em: None, criada_em: h(8, 0), ligacao: None, desligada_em: None, origem: None, conta: None });
         m.pausar(1, h(9, 0));
         assert!(m.bloqueadas.contains_key("s1"));
     }
@@ -607,10 +616,10 @@ mod testes {
         m.abertos.iter().filter(|t| t.origem == Origem::Manual && t.timer_id == Some(id)).map(|t| t.atividade_id).collect()
     }
     fn com_sessao(m: &mut Motor, timer: i64) {
-        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "G:\\Cliente A".into(), nome: None, transcript: None, timer_id: Some(timer), estado: EstadoSessao::EsperandoVoce, ultimo_evento: h(8, 0), terminou_em: Some(h(8, 0)), criada_em: h(8, 0), ligacao: None, desligada_em: None, origem: None });
+        m.sessoes.insert("s1".into(), Sessao { id: "s1".into(), cwd: "G:\\Cliente A".into(), nome: None, transcript: None, timer_id: Some(timer), estado: EstadoSessao::EsperandoVoce, ultimo_evento: h(8, 0), terminou_em: Some(h(8, 0)), criada_em: h(8, 0), ligacao: None, desligada_em: None, origem: None, conta: None });
     }
     fn prompt(m: &mut Motor, t: Ms) -> Vec<Mudanca> {
-        m.evento(&EventoHook { t, evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None, origem: None })
+        m.evento(&EventoHook { t, evento: "UserPromptSubmit".into(), sessao: "s1".into(), cwd: "G:\\Cliente A".into(), transcript: None, notificacao: None, origem: None, conta: None })
     }
 
     #[test] fn play_usa_a_atividade_padrao_do_timer() {

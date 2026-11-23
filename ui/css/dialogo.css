@@ -200,6 +200,10 @@
 .it-t1 { display: flex; align-items: center; gap: 9px; }
 .it-t1 i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
 .it-t1 .it-t { margin-left: auto; }
+/* rodada 28: "Outras contas (N) ›", a faixa das contas de outro espaço, recolhida no fim da lista */
+.it-outras { margin-top: 4px; border-top: 1px dashed var(--bd); border-radius: 0 0 10px 10px; }
+.it-outras .it-n { font-weight: 500; color: var(--tx2); }
+.it-outras-t { margin-top: 10px; }
 /* "+ Novo timer…" no fim do "Ligar a um timer" */
 .it-novo .it-n { color: var(--acento); }
 

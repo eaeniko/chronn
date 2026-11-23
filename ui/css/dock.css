@@ -130,6 +130,10 @@ html[data-lado-y="baixo"] .rec { flex-direction: column-reverse; }
 .ask .sn-ajuda { color: var(--tx3); }
 .sn-ajuda b { color: var(--tx2); font-weight: 600; }
 :root[data-tema="escuro"] .sn-sempre { border-top-color: #2a2c32; }
+/* a pergunta da conta nova (rodada 28): um botão por espaço, com o ponto na cor dele */
+.o button.cn-esp { display: flex; align-items: center; justify-content: center; gap: 7px; font-weight: 600; }
+.o button.cn-esp i { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.o button.cn-esp span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* no expandido, a mesma estrutura na largura dele (o fundo da pergunta já é o --pn2) */
 .dx-ask.sn { padding: 10px 11px; }
 .dx-ask .sn-titulo { font-size: 13.5px; }
