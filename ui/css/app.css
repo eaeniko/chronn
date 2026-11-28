@@ -90,6 +90,9 @@ svg { display: block; fill: currentColor; }
 .day { position: relative; text-align: right; padding-left: 24px; line-height: 1.05; }
 .day small { position: absolute; right: 0; bottom: 100%; margin-bottom: 2px; font-size: 11.5px; color: var(--mu); letter-spacing: .01em; white-space: nowrap; }
 .day b { font-size: 30px; font-weight: 650; letter-spacing: -.03em; color: var(--tx); }
+/* spec 003: o real (ou o que o número é) pequeno ao lado do total grande */
+.day em { font-style: normal; font-size: 13px; color: var(--mu); margin-left: 6px; white-space: nowrap; }
+.day em:empty { display: none; }
 /* a linha 2: o menu das telas (o texto alinhado com o nome, em cima) */
 .telas { display: flex; align-items: center; }
 .telas-bt {

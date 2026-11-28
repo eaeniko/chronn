@@ -15,7 +15,7 @@
 // Duplo clique em qualquer etapa abre o app.
 // Posição, tamanho e etapa ficam no núcleo (dock_guardar / dock_etapa).
 import { chamar, aoMudar } from './api.js';
-import { curto, horaMin, relogio, totalDeTimers, timersParaDock, textoDosDeFora, dicaDoLembrete, recolherAoPerderFoco, trocarTexto, etiquetaComposta, dicaDoTotalDoDia, REUNIAO } from './formato.js';
+import { curto, horaMin, relogio, totalDoDia as totaisDoDock, escondidosDoDia, usarTotal, timersParaDock, textoDosDeFora, dicaDoLembrete, recolherAoPerderFoco, trocarTexto, etiquetaComposta, REUNIAO, avisoDaLeituraApp } from './formato.js';
 import {
   esc,
   cor,
@@ -66,9 +66,10 @@ const TRAVA_MS = 400;
 
 const todosTimers = () => (snap ? snap.grupos.flatMap((g) => g.timers) : []);
 const lerSnap = () => snap;
-const totalDoDia = (agora) => curto(totalDeTimers(todosTimers(), agora));
+// spec 003: o número que vale sozinho pela escolha dos Ajustes (a soma, ou o real), com os dois na dica
+const totalDoDia = (agora) => curto(totaisDoDock(todosTimers(), agora, undefined, escondidosDoDia(snap)).ms);
 /** "tempo contado 1min · ajustes +30min (Cliente C)": de onde vem o total do dia (rodada 12). */
-const dicaDoTotal = (agora) => esc(dicaDoTotalDoDia(todosTimers(), agora));
+const dicaDoTotal = (agora) => esc(totaisDoDock(todosTimers(), agora, undefined, escondidosDoDia(snap)).dica);
 const comSituacao = () => snap?.config.dock_situacao !== false;
 
 async function agir(nome, args) {
@@ -321,6 +322,18 @@ window.__TAURI__.event.listen('aviso-clicado', async (ev) => {
 });
 usarFaixa(avisoForaDoDock);
 
+// ---- a leitura no app do Claude falhando (spec 001) ----
+// Uma vez por falha (pelo instante em que começou), na janela de aviso, com o "Entendi". A linha
+// dos Ajustes segue mostrando enquanto durar.
+const AVISO_LEITURA_MS = 20_000;
+let leituraAvisada = null;
+function verLeituraApp(s) {
+  const a = avisoDaLeituraApp(s.leitura_app, leituraAvisada, s.dia_inicio);
+  if (!a) return;
+  leituraAvisada = a.chave;
+  avisoForaDoDock(a.texto, TEXTOS.entendi, async () => {}, AVISO_LEITURA_MS);
+}
+
 // ---- dicas (rodada 16) ----
 // O que acontece no dock (com ele à vista) mostra a dica na janela de aviso, por 15 s ou até o
 // clique. A janela principal à vista pede antes (a do dock espera 1,5 s). O núcleo dá a vez, uma
@@ -376,7 +389,7 @@ const agendadas = new Set();
  */
 function verDicas(s) {
   for (const id of gatilhos(s)) {
-    if (agendadas.has(id)) continue;
+    if (agendadas.has(id) || DICAS[id]?.soNaPrincipal) continue;
     agendadas.add(id);
     setTimeout(() => {
       agendadas.delete(id);
@@ -394,7 +407,7 @@ function andar() {
   if (!snap) return;
   const agora = Date.now();
   const total = totalDoDia(agora);
-  const dica = dicaDoTotalDoDia(todosTimers(), agora);
+  const dica = totaisDoDock(todosTimers(), agora, undefined, escondidosDoDia(snap)).dica;
   for (const el of raiz.querySelectorAll('[data-total-dia]')) {
     trocarTexto(el, total);
     // no recolhido, a dica fica no "hoje 31min" inteiro
@@ -578,8 +591,18 @@ document.addEventListener('change', (ev) => {
   const sel = d.pgSempre !== undefined ? `[data-pg-sempre][data-pergunta="${d.pergunta}"]` : `[data-pg-pasta][data-pergunta="${d.pergunta}"]:checked`;
   raiz.querySelector(sel)?.focus();
 });
+// o Rust grava só o arrastar da pessoa (spec 005): o que o app ou o Windows moveram, não
 janela().onMoved(guardar);
 janela().onResized(guardar);
+// o sinal de vida (spec 006): o Rust pergunta a cada ciclo; sem resposta por 30 s, recarrega a
+// página. É um ouvinte de evento, não um relógio: a página escondida não o atrasa
+window.__TAURI__.event.listen('dock-ping', () => chamar('dock_vivo').catch(() => {}));
+// o dock trocou de escala ou voltou do minimizado (specs 005 e 006): medir de novo e mandar o
+// tamanho, mesmo que seja o mesmo de antes
+window.__TAURI__.event.listen('dock-medir', () => {
+  medidaEnviada = '';
+  medir();
+});
 janela().onFocusChanged(aoMudarFoco);
 // o mouse em cima do dock segura o "Mostrar o dock agora" da bandeja (modo escondido, rodada 12)
 const avisarMouse = (dentro) => () => {
@@ -624,10 +647,12 @@ aoMudar((s) => {
   if (definirIdioma(idioma)) aplicarTextos(document);
   usarAtividades(s.atividades);
   usarCorte(s.config?.corte_min);
+  usarTotal(s.config?.total_topo);
   usarEsperaApp(s.config?.espera_app_min);
   aplicarTema();
   if (expandido === null) expandido = Boolean(s.config.dock_expandido);
   desenhar();
   verDicas(s);
+  verLeituraApp(s);
 });
 ligarRelogio();

@@ -7,10 +7,10 @@ test('curto', () => { assert.equal(curto(6*3600e3 + 12*M), '6h 12min'); assert.e
 test('tituloDoTrecho: horário, origem e duração', () => {
   const H = 3600e3;
   assert.equal(tituloDoTrecho({ inicio: 9*H + 30*M, fim: 11*H, origem: 'claude' }, 0, 12*H), '09:30–11:00 · Claude trabalhando · 1h 30min');
-  assert.equal(tituloDoTrecho({ inicio: 9*H, fim: null, origem: 'manual' }, 0, 9*H + 20*M), '09:00–agora · play manual · 20min');
+  assert.equal(tituloDoTrecho({ inicio: 9*H, fim: null, origem: 'manual' }, 0, 9*H + 20*M), '09:00–agora · você deu ▶ · 20min');
   assert.equal(tituloDoTrecho({ inicio: 14*H, fim: 14*H + 5*M, origem: 'leitura' }, 0, 15*H), '14:00–14:05 · você lendo · 5min');
   const [b] = trechosDoDia({ trechos: [{ inicio: 9*H, fim: 10*H, origem: 'manual' }] }, 0, 12*H);
-  assert.equal(b.titulo, '09:00–10:00 · play manual · 1h 00min');
+  assert.equal(b.titulo, '09:00–10:00 · você deu ▶ · 1h 00min');
 });
 test('uniaoMs nao conta em dobro e estende aberto', () => {
   assert.equal(uniaoMs([{inicio: 0, fim: 60*M}, {inicio: 30*M, fim: 90*M}], 0), 90*M);

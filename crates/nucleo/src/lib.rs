@@ -33,6 +33,7 @@ pub mod hooks_claude;
 pub mod banco;
 pub mod config;
 pub mod dados;
+pub mod diagnostico_leitura;
 pub mod dicas;
 pub mod fim_do_transcript;
 pub mod idioma;

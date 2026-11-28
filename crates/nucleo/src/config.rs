@@ -27,6 +27,22 @@ pub struct ConfigApp {
     pub dock_larg: Option<i32>,
     pub dock_alt: Option<i32>,
     pub dock_expandido: bool,
+    /// O tamanho do dock escolhido arrastando (spec 005), junto com `dock_x`/`dock_y`: o retângulo
+    /// inteiro (físico), para abrir pela borda que ele segura. Nulos (config de antes): o tamanho
+    /// inicial. Só o arrastar da pessoa (e o resgate da bandeja) muda os quatro.
+    pub dock_w: Option<i32>,
+    pub dock_h: Option<i32>,
+    /// O tamanho do dock expandido em pixels **lógicos** (spec 005, A12). Nulos: vale o
+    /// `dock_larg`/`dock_alt` de antes, que é físico.
+    pub dock_larg_l: Option<f64>,
+    pub dock_alt_l: Option<f64>,
+    /// O lugar da janela principal (spec 005, A06): o retângulo físico fora de maximizada e se ela
+    /// estava maximizada. Recriada, ela volta para lá (se ainda aparece num monitor).
+    pub principal_x: Option<i32>,
+    pub principal_y: Option<i32>,
+    pub principal_w: Option<i32>,
+    pub principal_h: Option<i32>,
+    pub principal_max: bool,
     pub visao: String,
     /// O X da janela principal: `"perguntar"` (padrão), `"bandeja"` (fecha a janela e segue
     /// na bandeja e no dock) ou `"sair"` (encerra o app).
@@ -88,6 +104,16 @@ pub struct ConfigApp {
     /// As distros do WSL com o Claude Code ligado (rodada 28): o Chronn lê a fila de cada uma, pelo
     /// Windows, enquanto ela roda. Só o "Ligar" e o "Desligar" da distro mudam isto.
     pub wsl_distros: Vec<String>,
+    /// O que o total do dia mostra (Ajustes → Painel, spec 003): `"os_dois"` (o padrão: a soma
+    /// dos timers, as horas a lançar, e o tempo real ao lado quando é diferente), `"soma"` ou
+    /// `"real"` (o tempo real, sem contar em dobro). Vale também nos grupos e nos espaços.
+    pub total_topo: String,
+    /// "Vários ▶ ao mesmo tempo" (Ajustes → O ▶, spec 003), desligado por padrão: desligado, o ▶
+    /// num timer pausa o ▶ dos outros (o Claude e a leitura seguem em paralelo).
+    pub varios_play: bool,
+    /// "Parar o ▶ quando o Claude termina e você sai da conversa" (Ajustes → O ▶, spec 009),
+    /// desligado por padrão: o ▶ é seu e só para no ⏸, no ■ ou na inatividade (19/11).
+    pub parar_play_claude: bool,
 }
 
 impl ConfigApp {
@@ -130,6 +156,15 @@ impl Default for ConfigApp {
             dock_larg: None,
             dock_alt: None,
             dock_expandido: false,
+            dock_w: None,
+            dock_h: None,
+            dock_larg_l: None,
+            dock_alt_l: None,
+            principal_x: None,
+            principal_y: None,
+            principal_w: None,
+            principal_h: None,
+            principal_max: false,
             visao: "painel".into(),
             ao_fechar: AO_FECHAR_PERGUNTAR.into(),
             dock_situacao: true,
@@ -150,6 +185,9 @@ impl Default for ConfigApp {
             atualizar_auto: true,
             atualizacao_ultima: None,
             wsl_distros: vec![],
+            total_topo: TOTAL_OS_DOIS.into(),
+            varios_play: false,
+            parar_play_claude: false,
         }
     }
 }
@@ -192,6 +230,11 @@ pub const DOCK_SO_PERGUNTAS: &str = "perguntas";
 pub const DOCK_ESPACO_TIMER: &str = "timer";
 pub const DOCK_ESPACO_TEXTO: &str = "texto";
 pub const DOCK_ESPACO_COR: &str = "cor";
+
+/// Valores de `total_topo` (spec 003).
+pub const TOTAL_OS_DOIS: &str = "os_dois";
+pub const TOTAL_SOMA: &str = "soma";
+pub const TOTAL_REAL: &str = "real";
 
 /// Valores de `ao_minimizar`.
 pub const AO_MINIMIZAR_PERGUNTAR: &str = "perguntar";
@@ -268,6 +311,10 @@ impl ConfigApp {
         if ![crate::idioma::IDIOMA_SISTEMA, crate::idioma::IDIOMA_PT, crate::idioma::IDIOMA_EN].contains(&c.idioma.as_str()) {
             c.idioma = crate::idioma::IDIOMA_SISTEMA.into();
         }
+        // total do dia desconhecido (config estragada): o padrão (spec 003)
+        if ![TOTAL_OS_DOIS, TOTAL_SOMA, TOTAL_REAL].contains(&c.total_topo.as_str()) {
+            c.total_topo = TOTAL_OS_DOIS.into();
+        }
         // espaço no dock desconhecido (config estragada): o padrão (rodada 24)
         if ![DOCK_ESPACO_TIMER, DOCK_ESPACO_TEXTO, DOCK_ESPACO_COR].contains(&c.dock_espaco.as_str()) {
             c.dock_espaco = DOCK_ESPACO_TIMER.into();
@@ -287,6 +334,10 @@ pub struct ConfigMotor {
     pub pastas_ignoradas: Vec<String>,
     /// A conversa nova numa pasta com regra pergunta "Certo?" (`ConfigApp::conversa_nova`).
     pub confirmar_conversa_nova: bool,
+    /// Um ▶ por vez (spec 003; `ConfigApp::varios_play` desligado): o ▶ num timer fecha o dos outros.
+    pub um_play_por_vez: bool,
+    /// O ▶ para quando o Claude termina e você sai da conversa (spec 009).
+    pub play_para_com_claude: bool,
 }
 
 impl ConfigMotor {
@@ -300,6 +351,8 @@ impl ConfigMotor {
             programas_claude: cfg.programas_claude.clone(),
             pastas_ignoradas: cfg.pastas_ignoradas.clone(),
             confirmar_conversa_nova: cfg.conversa_nova != CONVERSA_NOVA_REGRA,
+            um_play_por_vez: !cfg.varios_play,
+            play_para_com_claude: cfg.parar_play_claude,
         }
     }
 }
@@ -508,5 +561,20 @@ mod testes {
         assert_eq!(ConfigApp::de_json(r#"{"modo_dev":false}"#).unwrap().pausado_dock_min, 10, "config antiga");
         assert_eq!(ConfigApp::de_json(r#"{"modo_dev":false,"pausado_dock_min":0}"#).unwrap().pausado_dock_min, 0);
         assert_eq!(ConfigApp::de_json(r#"{"modo_dev":false,"pausado_dock_min":7}"#).unwrap().pausado_dock_min, 10);
+    }
+
+    /// Specs 003 e 009: a config de antes fica com os padrões (os dois, um ▶ por vez, o ▶ seu); o
+    /// total desconhecido vira o padrão.
+    #[test]
+    fn total_do_dia_e_o_play_vem_com_os_padroes() {
+        let c = ConfigApp::de_json(r#"{"modo_dev":false}"#).unwrap();
+        assert_eq!((c.total_topo.as_str(), c.varios_play, c.parar_play_claude), (TOTAL_OS_DOIS, false, false));
+        let m = ConfigMotor::de(&c, 0);
+        assert!(m.um_play_por_vez && !m.play_para_com_claude);
+        assert_eq!(ConfigApp::de_json(r#"{"modo_dev":false,"total_topo":"x"}"#).unwrap().total_topo, TOTAL_OS_DOIS);
+        assert_eq!(ConfigApp::de_json(r#"{"modo_dev":false,"total_topo":"real"}"#).unwrap().total_topo, TOTAL_REAL);
+        let c = ConfigApp::de_json(r#"{"modo_dev":false,"varios_play":true,"parar_play_claude":true}"#).unwrap();
+        let m = ConfigMotor::de(&c, 0);
+        assert!(!m.um_play_por_vez && m.play_para_com_claude);
     }
 }

@@ -263,6 +263,7 @@ pub fn fechar_com(app: &AppHandle, modo: AoFechar) {
 
 /// Encerra o app (o "Sair" da bandeja e o "sair" do X).
 pub fn sair(app: &AppHandle) {
+    guardar_lugar_principal(app);
     app.exit(0);
 }
 /// Argumento que o "Iniciar com o Windows" põe na linha de comando: abre só o dock e a bandeja
@@ -287,78 +288,8 @@ pub const EXPANDIDO_MIN: (f64, f64) = (280.0, 240.0);
 pub const RECOLHIDO_INICIAL: (f64, f64) = (240.0, 46.0);
 /// Distância da borda da tela quando não há posição salva (lógica).
 pub const MARGEM: f64 = 16.0;
-/// Quanto do dock precisa aparecer num monitor para a posição salva valer (físico).
-const VISIVEL_MIN: i32 = 32;
-
-/// Retângulo em pixels físicos.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Ret {
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-}
-
-/// Lado da tela em que o dock está: o conteúdo se alinha a ele e o tamanho cresce para longe dele.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct Lado {
-    pub direita: bool,
-    pub embaixo: bool,
-}
-
-fn limitar(v: i32, min: i32, max: i32) -> i32 {
-    if max < min {
-        min
-    } else {
-        v.clamp(min, max)
-    }
-}
-
-/// Posição de uma janela `w`×`h` em (x, y), empurrada para dentro da área.
-pub fn dentro(x: i32, y: i32, w: i32, h: i32, area: Ret) -> (i32, i32) {
-    (limitar(x, area.x, area.x + area.w - w), limitar(y, area.y, area.y + area.h - h))
-}
-
-/// Pelo centro da janela: está na metade direita? na de baixo?
-pub fn lado(r: Ret, area: Ret) -> Lado {
-    Lado { direita: 2 * r.x + r.w > 2 * area.x + area.w, embaixo: 2 * r.y + r.h > 2 * area.y + area.h }
-}
-
-/// Nova posição ao trocar o tamanho para `w`×`h`: segura a borda do lado em que o dock está
-/// (direita e/ou de baixo) e não deixa sair da área.
-pub fn ancorar(r: Ret, w: i32, h: i32, area: Ret) -> (i32, i32) {
-    let l = lado(r, area);
-    let x = if l.direita { r.x + r.w - w } else { r.x };
-    let y = if l.embaixo { r.y + r.h - h } else { r.y };
-    dentro(x, y, w, h, area)
-}
-
-fn intersecao(a: Ret, b: Ret) -> (i32, i32) {
-    let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
-    let h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
-    (w.max(0), h.max(0))
-}
-
-/// A área (monitor) que mais contém a janela; nenhuma se ela aparece menos de 32×32 px.
-pub fn area_de(r: Ret, areas: &[Ret]) -> Option<Ret> {
-    areas
-        .iter()
-        .map(|a| (*a, intersecao(r, *a)))
-        .filter(|(_, (w, h))| *w >= VISIVEL_MIN.min(r.w) && *h >= VISIVEL_MIN.min(r.h))
-        .max_by_key(|(_, (w, h))| w * h)
-        .map(|(a, _)| a)
-}
-
-/// Posição ao abrir: a salva, se o dock ainda aparece num monitor (empurrada para dentro dele);
-/// senão o canto de cima à direita da área principal, com margem.
-pub fn posicao_inicial(salva: Option<(i32, i32)>, w: i32, h: i32, areas: &[Ret], principal: Ret, margem: i32) -> (i32, i32) {
-    if let Some((x, y)) = salva {
-        if let Some(a) = area_de(Ret { x, y, w, h }, areas) {
-            return dentro(x, y, w, h, a);
-        }
-    }
-    dentro(principal.x + principal.w - w - margem, principal.y + margem, w, h, principal)
-}
+pub use crate::lugar_dock::{dentro, Lado, Ret};
+use crate::lugar_dock::{self as lugar, Monitor};
 
 /// Título da janela do dock (não aparece na tela; o Windows mostra em listas de janelas).
 pub fn titulo_dock() -> String {
@@ -377,34 +308,42 @@ pub fn titulo_principal(rodando: usize) -> String {
 
 // ---- com Tauri ----
 
-/// O primeiro ajuste do recolhido depois de restaurar uma posição salva não ancora:
-/// o canto salvo é o de cima à esquerda do dock como ele estava.
-static PRIMEIRO_SEM_ANCORA: AtomicBool = AtomicBool::new(false);
-
 fn ret_de(j: &WebviewWindow) -> Option<Ret> {
     let p = j.outer_position().ok()?;
     let s = j.outer_size().ok()?;
     Some(Ret { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32 })
 }
 
-fn area_monitor(m: &tauri::Monitor) -> Ret {
-    let a = m.work_area();
-    Ret { x: a.position.x, y: a.position.y, w: a.size.width as i32, h: a.size.height as i32 }
+/// Os monitores agora, com a tela inteira, a área útil e a escala (spec 005). No Windows, direto
+/// do Win32: não passa pela thread principal, e o laço também usa.
+pub fn monitores(app: &AppHandle) -> Vec<Monitor> {
+    #[cfg(windows)]
+    {
+        let _ = app;
+        win::monitores()
+    }
+    #[cfg(not(windows))]
+    {
+        let ret = |p: tauri::PhysicalPosition<i32>, s: tauri::PhysicalSize<u32>| Ret { x: p.x, y: p.y, w: s.width as i32, h: s.height as i32 };
+        let principal = app.primary_monitor().ok().flatten().map(|m| *m.position());
+        app.available_monitors()
+            .map(|v| {
+                v.iter()
+                    .map(|m| Monitor {
+                        tela: ret(*m.position(), *m.size()),
+                        util: ret(m.work_area().position, m.work_area().size),
+                        escala: m.scale_factor(),
+                        principal: principal == Some(*m.position()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
-fn areas(app: &AppHandle) -> Vec<Ret> {
-    app.available_monitors().map(|v| v.iter().map(area_monitor).collect()).unwrap_or_default()
-}
-
-/// Área de trabalho e escala do monitor principal (o primeiro, se não houver principal).
-fn principal(app: &AppHandle) -> Option<(Ret, f64)> {
-    let m = app.primary_monitor().ok().flatten().or_else(|| app.available_monitors().ok()?.into_iter().next())?;
-    Some((area_monitor(&m), m.scale_factor()))
-}
-
-/// Área onde a janela está (ou a principal).
-fn area_da_janela(app: &AppHandle, r: Ret) -> Option<Ret> {
-    area_de(r, &areas(app)).or_else(|| principal(app).map(|(a, _)| a))
+/// Um tamanho lógico em pixels físicos, na escala dada.
+fn fisico(t: (f64, f64), escala: f64) -> (i32, i32) {
+    ((t.0 * escala).round() as i32, (t.1 * escala).round() as i32)
 }
 
 pub fn dock(app: &AppHandle) -> Option<WebviewWindow> {
@@ -415,19 +354,26 @@ pub fn dock(app: &AppHandle) -> Option<WebviewWindow> {
 /// não se esconde de novo depois de um diálogo do dock.
 pub fn mostrar_principal(app: &AppHandle) {
     serie_do_dock().zerar();
-    abrir_principal(app, None);
+    abrir_principal(app, None, false);
 }
 
-/// Mostra a janela principal nos Ajustes (recria se preciso).
+/// O duplo clique no dock: como `mostrar_principal`, mas a janela vem para o monitor do dock
+/// (spec 005, US 005.4).
+pub fn mostrar_principal_pelo_dock(app: &AppHandle) {
+    serie_do_dock().zerar();
+    abrir_principal(app, None, true);
+}
+
+/// Mostra a janela principal nos Ajustes (recria se preciso): o ⚙ do dock, no monitor dele.
 pub fn mostrar_ajustes(app: &AppHandle) {
     serie_do_dock().zerar();
-    abrir_principal(app, Some(PEDIDO_AJUSTES));
+    abrir_principal(app, Some(PEDIDO_AJUSTES), true);
 }
 
 /// O "Sobre o …" da bandeja (rodada 18): a janela principal em Ajustes → Sobre.
 pub fn mostrar_sobre(app: &AppHandle) {
     serie_do_dock().zerar();
-    abrir_principal(app, Some(PEDIDO_SOBRE));
+    abrir_principal(app, Some(PEDIDO_SOBRE), false);
 }
 
 /// Uma recriação por vez (dois cliques rápidos na bandeja não criam duas).
@@ -456,9 +402,13 @@ static NOVO_TIMER: Mutex<Option<PedidoNovoTimer>> = Mutex::new(None);
 
 /// Guarda o pedido, mostra (ou recria) a janela principal e avisa a página.
 pub fn pedir_novo_timer(app: &AppHandle, pedido: PedidoNovoTimer) {
-    *NOVO_TIMER.lock().unwrap_or_else(|p| p.into_inner()) = Some(pedido);
-    lembrar_antes_do_dialogo(app);
-    abrir_principal(app, None);
+    // o pedido repetido (dois cliques) troca o anterior sem contar outro diálogo: a página avisa
+    // o fim uma vez só (o A10 da revisão de 25/11; re-revisão, R7)
+    let repetido = NOVO_TIMER.lock().unwrap_or_else(|p| p.into_inner()).replace(pedido).is_some();
+    if !repetido {
+        lembrar_antes_do_dialogo(app);
+    }
+    abrir_principal(app, None, true);
     let _ = app.emit_to(PRINCIPAL, EVENTO_NOVO_TIMER, ());
 }
 
@@ -489,9 +439,12 @@ static LIGAR: Mutex<Option<PedidoLigar>> = Mutex::new(None);
 
 /// Guarda o pedido do dock, mostra (ou recria) a janela principal na frente e avisa a página.
 pub fn pedir_ligar_sessao(app: &AppHandle, pedido: PedidoLigar) {
-    *LIGAR.lock().unwrap_or_else(|p| p.into_inner()) = Some(pedido);
-    lembrar_antes_do_dialogo(app);
-    abrir_principal(app, None);
+    // o pedido repetido troca o anterior sem contar outro diálogo (o A10; re-revisão, R7)
+    let repetido = LIGAR.lock().unwrap_or_else(|p| p.into_inner()).replace(pedido).is_some();
+    if !repetido {
+        lembrar_antes_do_dialogo(app);
+    }
+    abrir_principal(app, None, true);
     let _ = app.emit_to(PRINCIPAL, EVENTO_LIGAR_SESSAO, ());
 }
 
@@ -590,6 +543,7 @@ pub fn dialogo_do_dock_fechou(app: &AppHandle) {
     let depois = serie_do_dock().fechou();
     match depois {
         DepoisDoDialogo::Nada => {}
+        // a janela estava emprestada ao diálogo: o lugar dela não é gravado (revisão, I3)
         DepoisDoDialogo::Esconder => {
             if let Some(j) = app.get_webview_window(PRINCIPAL) {
                 let _ = j.hide();
@@ -597,7 +551,7 @@ pub fn dialogo_do_dock_fechou(app: &AppHandle) {
             // escondida, ela não segura a vez das dicas
             crate::comandos::liberar_dicas_da_janela(app, PRINCIPAL);
         }
-        DepoisDoDialogo::Fechar => fechar_principal(app),
+        DepoisDoDialogo::Fechar => fechar_principal_e(app, false),
     }
 }
 
@@ -606,12 +560,20 @@ pub fn novo_timer_pedido() -> Option<PedidoNovoTimer> {
     NOVO_TIMER.lock().unwrap_or_else(|p| p.into_inner()).take()
 }
 
-fn abrir_principal(app: &AppHandle, pedido: Option<u8>) {
+/// `pelo_dock`: o pedido veio do dock; a janela que está noutro monitor vem para o dele (US 005.4).
+fn abrir_principal(app: &AppHandle, pedido: Option<u8>, pelo_dock: bool) {
     let ajustes = pedido.is_some();
     if let Some(p) = pedido {
         AJUSTES_PEDIDOS.store(p, Ordering::SeqCst);
     }
     if let Some(j) = app.get_webview_window(PRINCIPAL) {
+        // só a escondida vem para o monitor do dock: a que a pessoa já vê fica onde está (revisão,
+        // I3); maximizada ou minimizada, também fica
+        if pelo_dock && !j.is_visible().unwrap_or(true) && !j.is_maximized().unwrap_or(false) && !j.is_minimized().unwrap_or(false) {
+            if let Some(r) = ret_de(&j).and_then(|r| perto_do_dock(app, r)) {
+                por_principal(&j, r, j.scale_factor().ok());
+            }
+        }
         let _ = j.show();
         let _ = j.unminimize();
         let _ = j.set_focus();
@@ -627,7 +589,7 @@ fn abrir_principal(app: &AppHandle, pedido: Option<u8>) {
     // a criação vai numa thread própria.
     let app = app.clone();
     let r = std::thread::Builder::new().name("worktimer-janela".into()).spawn(move || {
-        if let Err(e) = criar_principal(&app) {
+        if let Err(e) = criar_principal(&app, pelo_dock) {
             log_debug!("worktimer: não consegui recriar a janela principal: {e}");
         }
         RECRIANDO.store(false, Ordering::SeqCst);
@@ -642,7 +604,9 @@ fn abrir_principal(app: &AppHandle, pedido: Option<u8>) {
 /// partida; quem cria é o setup (fora do `--bandeja`) ou `mostrar_principal`, quando precisa.
 /// Fora do setup, chamar numa thread própria (no laço de eventos o WebView2 trava).
 /// Só falha se a janela não nasce; mostrar e focar são tentados sem derrubar nada.
-pub fn criar_principal(app: &AppHandle) -> tauri::Result<()> {
+/// Ela nasce no lugar salvo (se ainda aparece num monitor); `pelo_dock`, no monitor do dock
+/// (spec 005, US 005.4).
+pub fn criar_principal(app: &AppHandle, pelo_dock: bool) -> tauri::Result<()> {
     let mut conf = app
         .config()
         .app
@@ -654,9 +618,19 @@ pub fn criar_principal(app: &AppHandle) -> tauri::Result<()> {
     // o título vem do nome de exibição (no tauri.conf.json fica vazio)
     conf.title = crate::perfil::nome_na_tela();
     let j = WebviewWindowBuilder::from_config(app, &conf)?.build()?;
+    // ainda escondida: vai para o lugar dela antes de aparecer
+    let (alvo, escala, maximizada) = lugar_ao_nascer(app, &j, pelo_dock);
     // título com a contagem de rodando, como a janela que foi fechada
     crate::laco::avisar(app);
     let _ = j.show();
+    // de novo depois de aparecer: se a troca de escala do monitor só chegou agora, o tamanho
+    // volta ao certo (revisão, I2)
+    if let Some(r) = alvo {
+        por_principal(&j, r, escala);
+    }
+    if maximizada {
+        let _ = j.maximize();
+    }
     let _ = j.set_focus();
     Ok(())
 }
@@ -664,6 +638,14 @@ pub fn criar_principal(app: &AppHandle) -> tauri::Result<()> {
 /// "Manter na bandeja": destrói a janela principal (o WebView dela sai da memória). Os diálogos
 /// do dock que estavam nela acabaram junto.
 pub fn fechar_principal(app: &AppHandle) {
+    fechar_principal_e(app, true);
+}
+
+/// `guardar`: grava o lugar antes (não, no fim de um diálogo do dock com a janela emprestada).
+fn fechar_principal_e(app: &AppHandle, guardar: bool) {
+    if guardar {
+        guardar_lugar_principal(app);
+    }
     serie_do_dock().zerar();
     crate::comandos::liberar_dicas_da_janela(app, PRINCIPAL);
     if let Some(j) = app.get_webview_window(PRINCIPAL) {
@@ -872,32 +854,87 @@ pub fn dock_mouse(app: &AppHandle, dentro: bool) {
     aplicar_dock(app);
 }
 
-/// Lado da tela em que o dock está agora.
+/// Lado da tela em que o dock está agora (no monitor dele, pela tela inteira).
 pub fn lado_do_dock(app: &AppHandle) -> Lado {
-    dock(app).and_then(|d| ret_de(&d)).and_then(|r| Some(lado(r, area_da_janela(app, r)?))).unwrap_or_default()
+    dock(app).and_then(|d| ret_de(&d)).map(|r| lugar::lado_no_monitor(r, &monitores(app))).unwrap_or_default()
 }
 
-fn tamanho_expandido(d: &WebviewWindow, cfg: &ConfigApp) -> (i32, i32) {
-    let escala = d.scale_factor().unwrap_or(1.0);
-    match (cfg.dock_larg, cfg.dock_alt) {
-        (Some(w), Some(h)) if w > 0 && h > 0 => (w, h),
-        _ => ((EXPANDIDO_PADRAO.0 * escala) as i32, (EXPANDIDO_PADRAO.1 * escala) as i32),
+/// O tamanho do expandido (físico) na escala dada: o salvo em pixels lógicos (spec 005); o de
+/// antes, já físico; ou o padrão.
+fn tamanho_expandido(cfg: &ConfigApp, escala: f64) -> (i32, i32) {
+    match (cfg.dock_larg_l, cfg.dock_alt_l, cfg.dock_larg, cfg.dock_alt) {
+        (Some(w), Some(h), _, _) if w > 0.0 && h > 0.0 => fisico((w, h), escala),
+        (_, _, Some(w), Some(h)) if w > 0 && h > 0 => (w, h),
+        _ => fisico(EXPANDIDO_PADRAO, escala),
     }
 }
 
-/// Troca o tamanho do dock segurando a borda do lado em que ele está (ou o canto de cima
-/// à esquerda, com `ancorar = false`). Devolve o lado.
-fn redimensionar(app: &AppHandle, d: &WebviewWindow, w: i32, h: i32, ancorar_borda: bool) -> Lado {
+/// O último retângulo que o app pediu ao dock: o `Moved` desse pedido não é da pessoa (US 005.3).
+static PEDIDO_RET: Mutex<Option<Ret>> = Mutex::new(None);
+/// O retângulo do arrastar da pessoa (e se o dock estava expandido nele), esperando o
+/// `dock_guardar` da página para virar a escolha.
+static ESCOLHA_PENDENTE: Mutex<Option<(Ret, bool)>> = Mutex::new(None);
+/// O dock está fora da escolha (a abertura ou o "fora dos monitores" o puseram noutro lugar):
+/// o laço tenta a escolha a cada ciclo até ela valer (revisão, I1).
+static FORA_DA_ESCOLHA: AtomicBool = AtomicBool::new(false);
+/// A última linha "movido sem pedido" do log (ms), para no máximo uma por segundo.
+static MOVIDO_LOG: AtomicU64 = AtomicU64::new(0);
+/// Quando o app mexeu no dock por último (o relógio monotônico): os `Moved` de logo depois (o 1º
+/// passo entre escalas, o ajuste de escala do tao, a volta do minimizado) não são "o Windows"
+/// (re-revisão, R8).
+static APP_MEXEU: AtomicU64 = AtomicU64::new(0);
+/// A página do dock mede de novo no próximo ciclo (depois de o dock voltar do minimizado: o tamanho
+/// pedido enquanto ele estava minimizado se perdeu; re-revisão, R4).
+static MEDIR_DEPOIS: AtomicBool = AtomicBool::new(false);
+/// Evento para o dock: medir o conteúdo de novo e mandar o tamanho, mesmo que seja o mesmo (o dock
+/// trocou de escala ou voltou do minimizado).
+pub const EVENTO_DOCK_MEDIR: &str = "dock-medir";
+
+fn travar<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Põe o dock no retângulo, numa chamada só (a posição e o tamanho juntos, sem o pulo do A11), e
+/// lembra o pedido. `assincrono`: da thread do dock (os comandos); do laço, síncrono, para um
+/// pedido velho não chegar depois de um novo da thread principal (revisão, M9). `escala`: a escala
+/// em que o tamanho foi medido, quando ele vem do monitor de antes (vai para a do destino; nulo, o
+/// tamanho já é o do destino; re-revisão, R1). Devolve se o dock trocou de escala.
+fn por_dock(d: &WebviewWindow, r: Ret, assincrono: bool, escala: Option<f64>) -> bool {
+    APP_MEXEU.store(monotonico(), Ordering::SeqCst);
+    #[cfg(windows)]
+    if let Ok(h) = d.hwnd() {
+        let h = h.0 as isize;
+        let (r, muda) = win::no_destino(h, r, escala);
+        *travar(&PEDIDO_RET) = Some(r);
+        win::por_no_lugar(h, r, assincrono, muda);
+        return muda;
+    }
+    let _ = (assincrono, escala);
+    *travar(&PEDIDO_RET) = Some(r);
+    let _ = d.set_position(PhysicalPosition::new(r.x, r.y));
+    let _ = d.set_size(PhysicalSize::new(r.w as u32, r.h as u32));
+    false
+}
+
+/// A página do dock mede o conteúdo de novo (o dock trocou de escala ou voltou do minimizado).
+fn pedir_medida(app: &AppHandle) {
+    let _ = app.emit_to(DOCK, EVENTO_DOCK_MEDIR, ());
+}
+
+/// Troca o tamanho do dock segurando a borda do lado em que ele está, dentro da tela inteira do
+/// monitor dele (pode ficar em cima da barra; sem monitor, não se move). Devolve o lado.
+fn redimensionar(app: &AppHandle, d: &WebviewWindow, w: i32, h: i32) -> Lado {
     let Some(r) = ret_de(d) else { return Lado::default() };
-    let Some(area) = area_da_janela(app, r) else { return Lado::default() };
-    let (x, y) = if ancorar_borda { ancorar(r, w, h, area) } else { dentro(r.x, r.y, w, h, area) };
-    if (x, y) != (r.x, r.y) {
-        let _ = d.set_position(PhysicalPosition::new(x, y));
+    // minimizado: o conteúdo chega quando ele voltar (revisão, M8)
+    if lugar::minimizada(r) {
+        return Lado::default();
     }
-    if (w, h) != (r.w, r.h) {
-        let _ = d.set_size(PhysicalSize::new(w as u32, h as u32));
+    let ms = monitores(app);
+    let novo = lugar::redimensionado(r, w, h, &ms);
+    if novo != r {
+        por_dock(d, novo, true, None);
     }
-    lado(Ret { x, y, w, h }, area)
+    lugar::lado_no_monitor(novo, &ms)
 }
 
 fn ajustar_limites(d: &WebviewWindow, expandido: bool) {
@@ -906,22 +943,38 @@ fn ajustar_limites(d: &WebviewWindow, expandido: bool) {
     let _ = d.set_min_size(min);
 }
 
-/// Põe o dock na posição, no tamanho e na etapa salvos e mostra (se o modo dele deixa).
+/// A escolha guardada na config (o retângulo inteiro; numa config de antes, o canto com `inicial`).
+fn escolha_da_config(cfg: &ConfigApp, inicial: (i32, i32)) -> Option<Ret> {
+    lugar::escolha_guardada(cfg.dock_x, cfg.dock_y, cfg.dock_w, cfg.dock_h, inicial)
+}
+
+/// Onde e de que tamanho o dock abre (pura): a escolha ancorada pela borda dela, no tamanho da
+/// etapa na escala do monitor dela; sem o monitor da escolha, a posição padrão do principal, na
+/// escala dele. O `bool`: o dock abriu fora da escolha (ela existe, mas o monitor dela não está).
+fn abertura(cfg: &ConfigApp, ms: &[Monitor]) -> (Ret, bool) {
+    let escala_principal = lugar::principal(ms).map_or(1.0, |m| m.escala);
+    let escolha = escolha_da_config(cfg, fisico(RECOLHIDO_INICIAL, escala_principal));
+    let da_escolha = escolha.and_then(|e| lugar::monitor_visivel(e, ms));
+    let escala = da_escolha.or_else(|| lugar::principal(ms)).map_or(1.0, |m| m.escala);
+    let (w, h) = if cfg.dock_expandido { tamanho_expandido(cfg, escala) } else { fisico(RECOLHIDO_INICIAL, escala) };
+    let (x, y) = lugar::posicao_inicial(escolha, w, h, ms, (MARGEM * escala).round() as i32);
+    (Ret { x, y, w, h }, escolha.is_some() && da_escolha.is_none())
+}
+
+/// Põe o dock na escolha (ancorada pela borda que ela segura), no tamanho e na etapa salvos, e
+/// mostra (se o modo dele deixa). Sem o monitor da escolha, a posição padrão do principal; a
+/// escolha fica guardada, e o laço a tenta a cada ciclo até o monitor chegar (US 006.4, I1).
 pub fn restaurar_dock(app: &AppHandle, cfg: &ConfigApp) {
     let Some(d) = dock(app) else { return };
-    let (area, escala) = principal(app).unwrap_or((Ret { x: 0, y: 0, w: 1920, h: 1080 }, 1.0));
-    let (w, h) = if cfg.dock_expandido {
-        tamanho_expandido(&d, cfg)
-    } else {
-        ((RECOLHIDO_INICIAL.0 * escala) as i32, (RECOLHIDO_INICIAL.1 * escala) as i32)
-    };
-    let salva = cfg.dock_x.zip(cfg.dock_y);
-    let (x, y) = posicao_inicial(salva, w, h, &areas(app), area, (MARGEM * escala) as i32);
-    let valeu_salva = salva.is_some_and(|s| area_de(Ret { x: s.0, y: s.1, w, h }, &areas(app)).is_some());
-    PRIMEIRO_SEM_ANCORA.store(valeu_salva && !cfg.dock_expandido, Ordering::SeqCst);
+    let ms = monitores(app);
+    let (r, fora) = abertura(cfg, &ms);
+    FORA_DA_ESCOLHA.store(fora, Ordering::SeqCst);
+    // a lista que a abertura usou: um monitor que chega antes do 1º ciclo do laço conta como
+    // mudança (revisão, I1)
+    travar(&VIGIA).monitores = Some(ms);
     ajustar_limites(&d, cfg.dock_expandido);
-    let _ = d.set_size(PhysicalSize::new(w as u32, h as u32));
-    let _ = d.set_position(PhysicalPosition::new(x, y));
+    por_dock(&d, r, true, None);
+    anotar(if fora { "aberto (fora da escolha: o monitor dela não está)" } else { "aberto" }, Some(r));
     // "Sempre à vista" aparece já; no modo escondido, só com uma pergunta (o "Iniciar com o
     // Windows" abre então só a bandeja)
     aplicar_dock(app);
@@ -931,11 +984,10 @@ pub fn restaurar_dock(app: &AppHandle, cfg: &ConfigApp) {
 /// depois, pelo `ajustar_recolhido`, quando a página mede o conteúdo.
 pub fn mudar_etapa(app: &AppHandle, cfg: &ConfigApp) -> Lado {
     let Some(d) = dock(app) else { return Lado::default() };
-    PRIMEIRO_SEM_ANCORA.store(false, Ordering::SeqCst);
     ajustar_limites(&d, cfg.dock_expandido);
     if cfg.dock_expandido {
-        let (w, h) = tamanho_expandido(&d, cfg);
-        redimensionar(app, &d, w, h, true)
+        let (w, h) = tamanho_expandido(cfg, d.scale_factor().unwrap_or(1.0));
+        redimensionar(app, &d, w, h)
     } else {
         lado_do_dock(app)
     }
@@ -949,8 +1001,71 @@ pub fn ajustar_recolhido(app: &AppHandle, cfg: &ConfigApp, larg: f64, alt: f64) 
     }
     let escala = d.scale_factor().unwrap_or(1.0);
     let (w, h) = ((larg * escala).ceil() as i32, (alt * escala).ceil() as i32);
-    let ancorar_borda = !PRIMEIRO_SEM_ANCORA.swap(false, Ordering::SeqCst);
-    redimensionar(app, &d, w, h, ancorar_borda)
+    redimensionar(app, &d, w, h)
+}
+
+/// O botão principal do mouse está apertado agora?
+fn botao_apertado() -> bool {
+    #[cfg(windows)]
+    {
+        win::botao_apertado()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// O dock se moveu ou mudou de tamanho (`main.rs`, na thread do dock). No laço de mover ou
+/// redimensionar do Windows (ou com o botão do mouse apertado) e fora do que o app pediu, é a
+/// pessoa arrastando (ou redimensionando o expandido): o retângulo fica como a escolha pendente,
+/// com a etapa de agora (US 005.3). Fora do pedido e sem a pessoa, o Windows mexeu: uma linha no
+/// log (revisão, M12). O aviso vai junto.
+pub fn dock_mexeu(app: &AppHandle) {
+    if let Some(d) = dock(app) {
+        if let Some(r) = ret_de(&d) {
+            let pedido = *travar(&PEDIDO_RET);
+            if lugar::e_da_pessoa(a_pessoa_mexe(&d), r, pedido) {
+                let expandido = d.is_resizable().unwrap_or(false);
+                *travar(&ESCOLHA_PENDENTE) = Some((r, expandido));
+            } else if pedido != Some(r) && monotonico().saturating_sub(APP_MEXEU.load(Ordering::SeqCst)) >= 1_000 {
+                let agora = agora_ms();
+                if agora.saturating_sub(MOVIDO_LOG.swap(agora, Ordering::SeqCst)) >= 1_000 {
+                    anotar("movido sem pedido (o Windows)", Some(r));
+                }
+            }
+        }
+    }
+    reposicionar_aviso(app);
+}
+
+/// A pessoa está movendo ou redimensionando a janela? O laço de mover do Windows desta thread
+/// (`GUI_INMOVESIZE`: vale também com "mostrar o conteúdo ao arrastar" desligado; revisão, M5) ou
+/// o botão do mouse apertado.
+fn a_pessoa_mexe(d: &WebviewWindow) -> bool {
+    #[cfg(windows)]
+    if let Ok(h) = d.hwnd() {
+        return win::em_mover(h.0 as isize) || botao_apertado();
+    }
+    let _ = d;
+    botao_apertado()
+}
+
+/// O `dock_guardar` da página (meio segundo depois do último movimento): a escolha pendente, se
+/// ela pode valer (nunca minimizada nem fora dos monitores), com a escala do monitor dela e se o
+/// dock estava expandido nela.
+pub fn tirar_escolha(app: &AppHandle) -> Option<(Ret, f64, bool)> {
+    let (r, expandido) = travar(&ESCOLHA_PENDENTE).take()?;
+    let ms = monitores(app);
+    if !lugar::pode_gravar(r, &ms) {
+        return None;
+    }
+    // o arrastar acabou: o que está na tela agora é o pedido (o `Moved` dele não é da pessoa;
+    // revisão, M6)
+    *travar(&PEDIDO_RET) = dock(app).and_then(|d| ret_de(&d)).or(Some(r));
+    FORA_DA_ESCOLHA.store(false, Ordering::SeqCst);
+    anotar("arrastado", Some(r));
+    Some((r, lugar::monitor_de(r, &ms).map_or(1.0, |m| m.escala), expandido))
 }
 
 // ---- avisos fora do dock (rodada 15) ----
@@ -1070,10 +1185,18 @@ fn posicionar_aviso(app: &AppHandle) -> bool {
     let Some((larg, alt)) = aviso_atual_trava().as_ref().and_then(|(_, t)| *t) else { return false };
     let (Some(j), Some(d)) = (app.get_webview_window(AVISO), dock(app)) else { return false };
     let Some(r) = ret_de(&d) else { return false };
-    let Some(area) = area_da_janela(app, r) else { return false };
-    let escala = d.scale_factor().unwrap_or(1.0);
-    let (w, h) = ((larg * escala).ceil() as i32, (alt * escala).ceil() as i32);
-    let (x, y) = posicao_do_aviso(r, w, h, area, (MARGEM_AVISO * escala).round() as i32);
+    // a área útil do monitor do dock (achado pela tela inteira: o dock pode estar em cima da
+    // barra) e a escala dele (spec 005)
+    let ms = monitores(app);
+    let Some(m) = lugar::monitor_de(r, &ms) else { return false };
+    let (w, h) = ((larg * m.escala).ceil() as i32, (alt * m.escala).ceil() as i32);
+    let (x, y) = posicao_do_aviso(r, w, h, m.util, (MARGEM_AVISO * m.escala).round() as i32);
+    #[cfg(windows)]
+    if let Ok(hw) = j.hwnd() {
+        let (r, muda) = win::no_destino(hw.0 as isize, Ret { x, y, w, h }, None);
+        win::por_no_lugar(hw.0 as isize, r, true, muda);
+        return true;
+    }
     let _ = j.set_size(PhysicalSize::new(w as u32, h as u32));
     let _ = j.set_position(PhysicalPosition::new(x, y));
     true
@@ -1109,6 +1232,755 @@ pub fn aviso_visivel(app: &AppHandle) -> bool {
 /// Um botão do aviso foi clicado: o dock faz o que ele faz (o "Desfazer" é dele). `qual`: 1 ou 2.
 pub fn aviso_clicado(app: &AppHandle, id: u64, qual: u8) {
     let _ = app.emit_to(DOCK, EVENTO_AVISO_CLICADO, serde_json::json!({ "id": id, "qual": qual }));
+}
+
+// ---- a janela principal no lugar dela (spec 005, US 005.4) ----
+
+/// A janela principal se moveu ou mudou de tamanho: o laço grava o lugar no próximo ciclo.
+static PRINCIPAL_MEXEU: AtomicBool = AtomicBool::new(false);
+
+/// `main.rs`: a janela principal se moveu ou mudou de tamanho.
+pub fn principal_mexeu() {
+    PRINCIPAL_MEXEU.store(true, Ordering::SeqCst);
+}
+
+/// O laço, a cada ciclo: grava o lugar da janela principal se ela mexeu (fora da thread dela).
+pub fn guardar_principal_se_mexeu(app: &AppHandle) {
+    if PRINCIPAL_MEXEU.swap(false, Ordering::SeqCst) {
+        guardar_lugar_principal(app);
+    }
+}
+
+/// A janela principal está emprestada a um diálogo do dock (estava fechada ou escondida, e o dock
+/// a trouxe): o lugar de agora não é o da pessoa (revisão, I3).
+fn emprestada() -> bool {
+    let s = serie_do_dock();
+    s.abertos > 0 && matches!(s.antes, Some(AntesDoDialogo::Fechada | AntesDoDialogo::Escondida))
+}
+
+/// Grava o lugar da janela principal: o retângulo fora de maximizada e se ela está maximizada.
+/// Minimizada, escondida ou emprestada a um diálogo do dock, fica o último. Chamar sem a trava do
+/// núcleo.
+pub fn guardar_lugar_principal(app: &AppHandle) {
+    if emprestada() {
+        return;
+    }
+    let Some(j) = app.get_webview_window(PRINCIPAL) else { return };
+    if j.is_minimized().unwrap_or(false) || !j.is_visible().unwrap_or(false) {
+        return;
+    }
+    let max = j.is_maximized().unwrap_or(false);
+    let ms = monitores(app);
+    let r = if max { normal_da_maximizada(&j, &ms) } else { ret_de(&j) };
+    let Some(r) = r.filter(|r| lugar::pode_gravar(*r, &ms)) else { return };
+    if let Some(e) = app.try_state::<Estado>() {
+        if let Err(e) = trava(&e).guardar_lugar_principal(r.x, r.y, r.w, r.h, max) {
+            log_debug!("worktimer: o lugar da janela principal: {e}");
+        }
+    }
+}
+
+/// O retângulo de antes de maximizar (o `rcNormalPosition`, que vem em coordenadas da área de
+/// trabalho do monitor da janela).
+fn normal_da_maximizada(j: &WebviewWindow, ms: &[Monitor]) -> Option<Ret> {
+    #[cfg(windows)]
+    {
+        let h = j.hwnd().ok()?;
+        let r = win::normal(h.0 as isize)?;
+        let m = lugar::monitor_de(ret_de(j)?, ms)?;
+        Some(lugar::da_area_de_trabalho(r, m))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (j, ms);
+        None
+    }
+}
+
+/// A janela principal (fora de maximizada) noutro monitor que o do dock: o centro da área útil do
+/// monitor do dock.
+fn perto_do_dock(app: &AppHandle, principal: Ret) -> Option<Ret> {
+    let d = dock(app)?;
+    if !d.is_visible().unwrap_or(false) {
+        return None;
+    }
+    lugar::principal_perto_do_dock(principal, ret_de(&d)?, &monitores(app))
+}
+
+/// Põe a janela principal no retângulo (síncrono: ela aparece logo depois, já no lugar).
+/// `escala`: a escala em que o tamanho foi medido (vai para a do destino).
+fn por_principal(j: &WebviewWindow, r: Ret, escala: Option<f64>) {
+    #[cfg(windows)]
+    if let Ok(h) = j.hwnd() {
+        let (r, muda) = win::no_destino(h.0 as isize, r, escala);
+        win::por_no_lugar(h.0 as isize, r, false, muda);
+        return;
+    }
+    let _ = escala;
+    let _ = j.set_position(PhysicalPosition::new(r.x, r.y));
+    let _ = j.set_size(PhysicalSize::new(r.w as u32, r.h as u32));
+}
+
+/// A janela principal recém-criada (ainda escondida) vai para o lugar salvo, se ele ainda aparece
+/// num monitor; pedida pelo dock, para o monitor do dock. Devolve o lugar, a escala em que o
+/// tamanho dele foi medido e se ela estava maximizada.
+fn lugar_ao_nascer(app: &AppHandle, j: &WebviewWindow, pelo_dock: bool) -> (Option<Ret>, Option<f64>, bool) {
+    let cfg = app.try_state::<Estado>().and_then(|e| trava(&e).banco.config_app().ok()).unwrap_or_default();
+    let ms = monitores(app);
+    let salvo = match (cfg.principal_x, cfg.principal_y, cfg.principal_w, cfg.principal_h) {
+        (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => Some(Ret { x, y, w, h }),
+        _ => None,
+    };
+    let mut alvo = lugar::lugar_da_principal(salvo, &ms);
+    // o tamanho salvo foi medido no monitor dele; o de agora, no da janela
+    let mut escala = alvo.and_then(|a| lugar::monitor_visivel(a, &ms)).map(|m| m.escala);
+    if pelo_dock {
+        let base = alvo.or_else(|| ret_de(j));
+        if alvo.is_none() {
+            escala = j.scale_factor().ok();
+        }
+        if let Some(p) = base.and_then(|r| perto_do_dock(app, r)) {
+            alvo = Some(p);
+        }
+    }
+    if let Some(r) = alvo {
+        por_principal(j, r, escala);
+    }
+    (alvo, escala, cfg.principal_max && alvo.is_some())
+}
+
+// ---- a saúde do dock (spec 006) ----
+
+/// O que o laço lembra entre um ciclo e outro: os monitores, a hora do ciclo e a última foto do
+/// log.
+struct Vigia {
+    monitores: Option<Vec<Monitor>>,
+    ultimo_ciclo: Option<u64>,
+    foto: Option<lugar::FotoDoDock>,
+}
+
+static VIGIA: Mutex<Vigia> = Mutex::new(Vigia { monitores: None, ultimo_ciclo: None, foto: None });
+/// O sinal de vida da página do dock (um `Mutex` só dele: o `dock_vivo` chega pela thread
+/// principal, e nenhuma trava fica presa enquanto o laço fala com o Tauri).
+static VIDA: Mutex<Option<lugar::Vida>> = Mutex::new(None);
+/// Evento para o dock: o sinal de vida (a página responde com `dock_vivo`).
+pub const EVENTO_DOCK_PING: &str = "dock-ping";
+
+/// A página do dock respondeu ao ping.
+pub fn dock_respondeu() {
+    if let Some(v) = travar(&VIDA).as_mut() {
+        v.respondeu(monotonico());
+    }
+}
+
+/// O dock está minimizado? E oculto (outra área de trabalho, `DWMWA_CLOAKED`)?
+fn minimizado_e_oculto(d: &WebviewWindow) -> (bool, bool) {
+    #[cfg(windows)]
+    if let Ok(h) = d.hwnd() {
+        let h = h.0 as isize;
+        return (win::minimizada(h), win::oculta(h));
+    }
+    let _ = d;
+    (false, false)
+}
+
+/// Põe o dock (e o aviso à vista) por cima de tudo de novo, sem ativar (US 006.1).
+fn reafirmar_por_cima(app: &AppHandle) {
+    #[cfg(windows)]
+    for label in [DOCK, AVISO] {
+        if let Some(j) = app.get_webview_window(label) {
+            if !j.is_visible().unwrap_or(false) {
+                continue;
+            }
+            if let Ok(h) = j.hwnd() {
+                win::por_cima(h.0 as isize);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+/// A volta para a escolha (US 006.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Volta {
+    /// Nunca houve um arrastar: não há para onde voltar.
+    SemEscolha,
+    /// O monitor da escolha não está (ainda): tentar de novo.
+    SemMonitor,
+    JaLa,
+    Movido(Ret),
+}
+
+/// A escolha da config, se houver (o tamanho de antes vem de `inicial`).
+fn escolha_agora(app: &AppHandle, inicial: (i32, i32)) -> Option<Ret> {
+    let cfg = app.try_state::<Estado>().and_then(|e| trava(&e).banco.config_app().ok())?;
+    escolha_da_config(&cfg, inicial)
+}
+
+/// O dock volta para a escolha, se o monitor dela está aqui, no mesmo tamanho lógico.
+fn recolocar_na_escolha(app: &AppHandle, d: &WebviewWindow, ms: &[Monitor]) -> Volta {
+    let Some(r) = ret_de(d) else { return Volta::SemMonitor };
+    let Some(escolha) = escolha_agora(app, (r.w, r.h)) else { return Volta::SemEscolha };
+    let Some((x, y)) = lugar::lugar_da_escolha(escolha, r.w, r.h, ms) else { return Volta::SemMonitor };
+    if (x, y) == (r.x, r.y) {
+        return Volta::JaLa;
+    }
+    let novo = Ret { x, y, w: r.w, h: r.h };
+    if por_dock(d, novo, false, d.scale_factor().ok()) {
+        pedir_medida(app);
+    }
+    Volta::Movido(novo)
+}
+
+/// Um relógio que só anda para a frente (ms desde a 1ª chamada), para o sinal de vida.
+fn monotonico() -> u64 {
+    static INICIO: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    INICIO.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
+/// Esconde e mostra o dock sem ativar: a janela que reaparece vem para a área de trabalho de agora
+/// (o plano B quando o `IVirtualDesktopManager` não diz qual é; revisão, M2).
+fn reaparecer(d: &WebviewWindow) {
+    APP_MEXEU.store(monotonico(), Ordering::SeqCst);
+    let _ = d.hide();
+    mostrar_sem_ativar(d);
+}
+
+/// O último `reaparecer` do laço (monotônico): no máximo um por minuto (re-revisão, R3).
+static REAPARECEU: AtomicU64 = AtomicU64::new(0);
+
+/// A cada ciclo do laço (5 s), sem a trava do núcleo: com o dock que deve estar à vista,
+/// - restaura o minimizado e traz o oculto para a área de trabalho de agora (US 006.2);
+/// - com a troca dos monitores ou o PC acordando, volta para a escolha (US 006.4);
+/// - reafirma o "sempre por cima" (US 006.1);
+/// - manda o sinal de vida e recarrega a página calada (US 006.2);
+/// - grava no log o que mudou (US 006.5).
+pub fn cuidar_do_dock(app: &AppHandle) {
+    let agora = agora_ms();
+    let Some(d) = dock(app) else { return };
+    let ms = monitores(app);
+    let visivel = d.is_visible().unwrap_or(false);
+    let (minimizado, oculto) = if visivel { minimizado_e_oculto(&d) } else { (false, false) };
+    let (mudaram, acordou) = {
+        let mut v = travar(&VIGIA);
+        let mudaram = v.monitores.as_ref().is_some_and(|a| *a != ms);
+        let acordou = lugar::acordou(v.ultimo_ciclo, agora);
+        v.monitores = Some(ms.clone());
+        v.ultimo_ciclo = Some(agora);
+        (mudaram, acordou)
+    };
+    if acordou {
+        anotar("acordou", None);
+    }
+    if mudaram {
+        anotar("monitores mudaram", None);
+    }
+    // a troca vale até a escolha ser aplicada, também se o dock estava escondido (re-revisão, R6)
+    if mudaram || acordou {
+        FORA_DA_ESCOLHA.store(true, Ordering::SeqCst);
+    }
+    // o dock voltou do minimizado no ciclo anterior: a página mede de novo (R4)
+    if visivel && !minimizado && MEDIR_DEPOIS.swap(false, Ordering::SeqCst) {
+        pedir_medida(app);
+    }
+    if visivel {
+        #[cfg(windows)]
+        if let Ok(h) = d.hwnd() {
+            let h = h.0 as isize;
+            if minimizado {
+                APP_MEXEU.store(monotonico(), Ordering::SeqCst);
+                win::restaurar_sem_ativar(h);
+                MEDIR_DEPOIS.store(true, Ordering::SeqCst);
+                anotar("restaurado (estava minimizado)", None);
+            }
+            if oculto {
+                match win::trazer_para_a_area_de_agora(h) {
+                    win::Area::Movido => anotar("trazido para a área de trabalho de agora", None),
+                    // oculto na área de agora (a nuvem do próprio app, uma animação): nada
+                    win::Area::JaAqui => {}
+                    win::Area::NaoSei => {
+                        let mono = monotonico();
+                        if mono.saturating_sub(REAPARECEU.load(Ordering::SeqCst)) >= 60_000 {
+                            REAPARECEU.store(mono, Ordering::SeqCst);
+                            reaparecer(&d);
+                            anotar("reaparecido (noutra área de trabalho, sem saber qual)", None);
+                        }
+                    }
+                }
+            }
+        }
+        if !minimizado && lugar::tentar_a_escolha(FORA_DA_ESCOLHA.load(Ordering::SeqCst), mudaram, acordou) {
+            match recolocar_na_escolha(app, &d, &ms) {
+                // sem o monitor dela: tenta de novo no próximo ciclo
+                Volta::SemMonitor => {}
+                Volta::SemEscolha | Volta::JaLa => FORA_DA_ESCOLHA.store(false, Ordering::SeqCst),
+                Volta::Movido(r) => {
+                    FORA_DA_ESCOLHA.store(false, Ordering::SeqCst);
+                    anotar("recolocado na escolha", Some(r));
+                }
+            }
+        }
+        // quase fora da tela: para dentro do monitor mais perto. Uma lasca à vista foi a pessoa (o
+        // lugar trazido para dentro vira a escolha); sem encostar em monitor nenhum, o monitor dele
+        // sumiu (a escolha fica, e ele volta quando o monitor voltar; re-revisão, R2)
+        if !minimizado {
+            if let Some(r) = ret_de(&d) {
+                if let Some((x, y)) = lugar::de_volta_a_tela(r, &ms) {
+                    let lasca = lugar::so_uma_lasca(r, &ms);
+                    let novo = Ret { x, y, ..r };
+                    if por_dock(&d, novo, false, d.scale_factor().ok()) {
+                        pedir_medida(app);
+                    }
+                    if lasca {
+                        FORA_DA_ESCOLHA.store(false, Ordering::SeqCst);
+                        if let Some(e) = app.try_state::<Estado>() {
+                            let _ = trava(&e).guardar_escolha_dock(x, y, r.w, r.h, None, false);
+                        }
+                        anotar("só uma lasca à vista: para dentro da tela (vira a escolha)", Some(novo));
+                    } else {
+                        FORA_DA_ESCOLHA.store(escolha_agora(app, (r.w, r.h)).is_some(), Ordering::SeqCst);
+                        anotar("fora dos monitores: de volta à tela", Some(novo));
+                    }
+                }
+            }
+        }
+        // só com o dock na faixa da barra: o resto das janelas "sempre por cima" (um vídeo em PiP,
+        // uma apresentação) continua por cima dele (revisão, M7)
+        if ret_de(&d).is_some_and(|r| lugar::na_faixa_da_barra(r, &ms)) {
+            reafirmar_por_cima(app);
+        }
+    }
+    // o sinal de vida: só com o dock à vista de verdade (escondido, minimizado ou noutra área, a
+    // página pode ficar parada sem estar quebrada)
+    let a_vista = visivel && !minimizado && !oculto;
+    let (recarregar, de_novo) = {
+        let mono = monotonico();
+        let mut v = travar(&VIDA);
+        let v = v.get_or_insert_with(|| lugar::Vida::nova(mono));
+        // os pings de logo antes de o PC dormir não contam
+        if acordou {
+            v.em_pausa(mono);
+        }
+        let de_novo = v.sem_resposta_desde_recarregar;
+        if a_vista {
+            (v.ping(mono), de_novo)
+        } else {
+            v.em_pausa(mono);
+            (false, de_novo)
+        }
+    };
+    if a_vista {
+        if recarregar {
+            anotar(
+                if de_novo {
+                    "recarregado de novo (o último recarregar não resolveu: o navegador do WebView2 pode ter caído)"
+                } else {
+                    "recarregado (a página não respondia)"
+                },
+                None,
+            );
+            let _ = d.reload();
+        } else {
+            let _ = app.emit_to(DOCK, EVENTO_DOCK_PING, ());
+        }
+    }
+    let foto = lugar::FotoDoDock { visivel, ret: ret_de(&d), minimizado, oculto, monitores: ms };
+    let nova = {
+        let mut v = travar(&VIGIA);
+        let nova = v.foto.as_ref() != Some(&foto);
+        if nova {
+            v.foto = Some(foto.clone());
+        }
+        nova
+    };
+    if nova {
+        escrever_no_log(&lugar::linha_da_foto(&hora_do_log(), &foto));
+    }
+}
+
+/// A janela em primeiro plano trocou (o gancho do Windows, na thread principal): com o dock à
+/// vista e encostado na faixa da barra, ele volta por cima dela (US 006.1). De novo um pouco
+/// depois: a barra às vezes sobe depois do evento.
+pub fn trocou_o_primeiro_plano(app: &AppHandle) {
+    let Some(d) = dock(app) else { return };
+    if !d.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Some(r) = ret_de(&d) else { return };
+    if !lugar::na_faixa_da_barra(r, &monitores(app)) {
+        return;
+    }
+    reafirmar_por_cima(app);
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("worktimer-por-cima".into()).spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        reafirmar_por_cima(&app);
+    });
+}
+
+/// Liga o gancho da troca de primeiro plano (no setup, na thread principal).
+pub fn vigiar_primeiro_plano(app: &AppHandle) {
+    #[cfg(windows)]
+    win::vigiar_primeiro_plano(app);
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+/// O "Trazer o dock para cá" da bandeja (US 006.3): o dock aparece no monitor do mouse (ou no
+/// principal), na posição padrão, restaurado, na área de trabalho de agora, por cima de tudo e com
+/// a página recarregada (cobre a pintura em branco). Esse lugar vira a escolha.
+pub fn trazer_dock(app: &AppHandle) {
+    let (modo, _) = modo_e_perguntas(app);
+    *pedido_dock() = match modo {
+        ModoDock::Sempre => PedidoDock::Nenhum,
+        ModoDock::SoPerguntas => PedidoDock::MostrarAgora { desde: agora_ms(), mouse_em_cima: false, clicou_fora: false },
+    };
+    let Some(d) = dock(app) else { return };
+    // o resgate é a escolha agora: um arrastar velho não a desfaz (revisão, M6)
+    *travar(&ESCOLHA_PENDENTE) = None;
+    FORA_DA_ESCOLHA.store(false, Ordering::SeqCst);
+    let ms = monitores(app);
+    let mouse = cursor();
+    let escala = mouse.and_then(|p| lugar::monitor_do_ponto(p, &ms)).or_else(|| lugar::principal(&ms)).map_or(1.0, |m| m.escala);
+    let (minimizado, _) = minimizado_e_oculto(&d);
+    #[cfg(windows)]
+    if let Ok(h) = d.hwnd() {
+        let h = h.0 as isize;
+        if minimizado {
+            APP_MEXEU.store(monotonico(), Ordering::SeqCst);
+            win::restaurar_sem_ativar(h);
+        }
+        // o primeiro plano agora é a janela da bandeja, do próprio app: sem saber a área de
+        // trabalho, o plano B (revisão, M2; re-revisão, R3)
+        if win::trazer_para_a_area_de_agora(h) == win::Area::NaoSei && win::oculta(h) {
+            reaparecer(&d);
+        }
+    }
+    // o tamanho de agora vai na escala do monitor do mouse (R1); minimizado, o inicial de lá
+    let (w, h, de) = match ret_de(&d) {
+        Some(r) if !minimizado && r.w > 0 && r.h > 0 => (r.w, r.h, d.scale_factor().ok()),
+        _ => {
+            let (w, h) = fisico(RECOLHIDO_INICIAL, escala);
+            (w, h, None)
+        }
+    };
+    let (w, h) = match de {
+        Some(de) => {
+            let r = lugar::na_escala(Ret { x: 0, y: 0, w, h }, de, escala);
+            (r.w, r.h)
+        }
+        None => (w, h),
+    };
+    let Some((x, y)) = lugar::posicao_do_resgate(mouse, w, h, &ms, (MARGEM * escala).round() as i32) else { return };
+    let novo = Ret { x, y, w, h };
+    por_dock(&d, novo, true, None);
+    aplicar_dock(app);
+    reafirmar_por_cima(app);
+    let _ = d.reload();
+    if let Some(e) = app.try_state::<Estado>() {
+        if let Err(e) = trava(&e).guardar_escolha_dock(x, y, w, h, None, false) {
+            log_debug!("worktimer: o resgate do dock: {e}");
+        }
+    }
+    anotar("resgate (bandeja)", Some(novo));
+    if modo == ModoDock::SoPerguntas {
+        let _ = d.set_focus();
+    }
+}
+
+fn cursor() -> Option<(i32, i32)> {
+    #[cfg(windows)]
+    {
+        win::cursor()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+// ---- o log do dock (US 006.5) ----
+
+static LOG: Mutex<()> = Mutex::new(());
+
+fn hora_do_log() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Uma ação no log do dock (arrastado, recolocado, resgate…): a hora e números, nunca títulos.
+fn anotar(acao: &str, ret: Option<Ret>) {
+    escrever_no_log(&lugar::linha_da_acao(&hora_do_log(), acao, ret));
+}
+
+/// `~\.worktimer\dock.log`; passou de 256 KB, vira o `dock.log.1` (um só).
+fn escrever_no_log(linha: &str) {
+    use std::io::Write;
+    let _g = travar(&LOG);
+    let base = fila::caminhos::base();
+    let arquivo = base.join("dock.log");
+    if std::fs::metadata(&arquivo).is_ok_and(|m| m.len() > lugar::LOG_MAX_BYTES) {
+        let _ = std::fs::rename(&arquivo, base.join("dock.log.1"));
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&arquivo) {
+        let _ = writeln!(f, "{linha}");
+    }
+}
+
+// ---- Win32 ----
+
+/// As chamadas do Windows do dock e da janela principal. Os HWND andam como `isize` (o tipo do
+/// Tauri é de outra versão do crate `windows`).
+#[cfg(windows)]
+mod win {
+    use super::{Monitor, Ret};
+    use std::sync::OnceLock;
+    use tauri::AppHandle;
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromRect, HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+    use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetWindowPlacement, GetWindowThreadProcessId,
+        IsIconic, SetWindowPos, ShowWindowAsync, GUITHREADINFO, GUI_INMOVESIZE,
+        EVENT_SYSTEM_FOREGROUND, HWND_TOPMOST, MONITORINFOF_PRIMARY, SM_SWAPBUTTON, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINEVENT_OUTOFCONTEXT,
+        WINEVENT_SKIPOWNPROCESS,
+    };
+
+    fn hwnd(h: isize) -> HWND {
+        HWND(h as *mut core::ffi::c_void)
+    }
+
+    fn ret(r: RECT) -> Ret {
+        Ret { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top }
+    }
+
+    unsafe extern "system" fn um_monitor(m: HMONITOR, _: HDC, _: *mut RECT, dados: LPARAM) -> BOOL {
+        // SAFETY: `dados` é o `&mut Vec` de `monitores`, vivo durante o EnumDisplayMonitors
+        let v = unsafe { &mut *(dados.0 as *mut Vec<Monitor>) };
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        // SAFETY: `m` veio do Windows agora; `mi` é nosso, do tamanho certo
+        if unsafe { GetMonitorInfoW(m, &mut mi) }.as_bool() {
+            let (mut dx, mut dy) = (96u32, 96u32);
+            // SAFETY: idem
+            let escala = if unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) }.is_ok() && dx > 0 {
+                dx as f64 / 96.0
+            } else {
+                1.0
+            };
+            v.push(Monitor { tela: ret(mi.rcMonitor), util: ret(mi.rcWork), escala, principal: mi.dwFlags & MONITORINFOF_PRIMARY != 0 });
+        }
+        BOOL(1)
+    }
+
+    /// Os monitores agora (o app é "per monitor": os retângulos vêm em pixels físicos).
+    pub fn monitores() -> Vec<Monitor> {
+        let mut v: Vec<Monitor> = Vec::new();
+        // SAFETY: o callback só usa o `v` desta pilha, durante a chamada
+        unsafe {
+            let _ = EnumDisplayMonitors(None, None, Some(um_monitor), LPARAM(&mut v as *mut Vec<Monitor> as isize));
+        }
+        v
+    }
+
+    /// O DPI do monitor em que o retângulo cai e o da janela agora (0: desconhecido).
+    fn dpis(h: isize, r: Ret) -> (u32, u32) {
+        let rc = RECT { left: r.x, top: r.y, right: r.x + r.w, bottom: r.y + r.h };
+        // SAFETY: só leituras
+        unsafe {
+            let m = MonitorFromRect(&rc, MONITOR_DEFAULTTONEAREST);
+            let (mut dx, mut dy) = (0u32, 0u32);
+            let destino = if GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() { dx } else { 0 };
+            (destino, GetDpiForWindow(hwnd(h)))
+        }
+    }
+
+    /// O retângulo no tamanho do destino: com `escala` (a escala em que o tamanho foi medido), o
+    /// mesmo tamanho lógico na escala do monitor de destino (re-revisão, R1). E se a janela muda
+    /// de escala indo para lá.
+    pub fn no_destino(h: isize, r: Ret, escala: Option<f64>) -> (Ret, bool) {
+        let (destino, agora) = dpis(h, r);
+        let r = match escala {
+            Some(e) if destino != 0 => super::lugar::na_escala(r, e, destino as f64 / 96.0),
+            _ => r,
+        };
+        (r, destino != 0 && agora != 0 && destino != agora)
+    }
+
+    /// Posição e tamanho numa chamada só, sem mexer na ordem nem ativar. `assincrono`: o pedido
+    /// vai para a fila da thread da janela (os comandos não esperam por ela).
+    ///
+    /// Indo para um monitor de outra escala (`muda`, do `no_destino`), duas chamadas: a 1ª só move
+    /// (é nela que o Windows manda o `WM_DPICHANGED`, e o tao refaz o tamanho), e a 2ª põe o
+    /// tamanho final, já em pixels do destino. Numa chamada só, ele seria escalado de novo
+    /// (revisão, I2).
+    pub fn por_no_lugar(h: isize, r: Ret, assincrono: bool, muda: bool) {
+        let mut f = SWP_NOZORDER | SWP_NOACTIVATE;
+        if assincrono {
+            f |= SWP_ASYNCWINDOWPOS;
+        }
+        // SAFETY: a janela é do próprio app
+        unsafe {
+            if muda {
+                let _ = SetWindowPos(hwnd(h), None, r.x, r.y, 0, 0, f | SWP_NOSIZE);
+            }
+            let _ = SetWindowPos(hwnd(h), None, r.x, r.y, r.w, r.h, f);
+        }
+    }
+
+    /// A thread da janela está no laço de mover ou redimensionar do Windows (a pessoa arrastando)?
+    pub fn em_mover(h: isize) -> bool {
+        let mut gi = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+        // SAFETY: só leituras; `gi` é nosso, com o tamanho certo
+        unsafe {
+            let t = GetWindowThreadProcessId(hwnd(h), None);
+            t != 0 && GetGUIThreadInfo(t, &mut gi).is_ok() && (gi.flags & GUI_INMOVESIZE).0 != 0
+        }
+    }
+
+    /// De novo por cima de tudo ("sempre por cima"), sem ativar, sem mover e sem esperar.
+    pub fn por_cima(h: isize) {
+        // SAFETY: a janela é do próprio app
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd(h),
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
+            );
+        }
+    }
+
+    /// O botão principal do mouse (o esquerdo, ou o direito com os botões trocados) está apertado.
+    pub fn botao_apertado() -> bool {
+        // SAFETY: só leituras do estado do mouse
+        unsafe {
+            let vk = if GetSystemMetrics(SM_SWAPBUTTON) != 0 { VK_RBUTTON } else { VK_LBUTTON };
+            (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0
+        }
+    }
+
+    pub fn minimizada(h: isize) -> bool {
+        // SAFETY: só leitura
+        unsafe { IsIconic(hwnd(h)) }.as_bool()
+    }
+
+    pub fn restaurar_sem_ativar(h: isize) {
+        // SAFETY: a janela é do próprio app; assíncrono, não espera a thread dela
+        unsafe {
+            let _ = ShowWindowAsync(hwnd(h), SW_SHOWNOACTIVATE);
+        }
+    }
+
+    /// Oculta pelo Windows (outra área de trabalho virtual, `DWMWA_CLOAKED`).
+    pub fn oculta(h: isize) -> bool {
+        let mut c: u32 = 0;
+        // SAFETY: `c` é um u32, do tamanho que o atributo pede
+        let ok = unsafe { DwmGetWindowAttribute(hwnd(h), DWMWA_CLOAKED, &mut c as *mut u32 as *mut core::ffi::c_void, 4) }.is_ok();
+        ok && c != 0
+    }
+
+    /// A janela e a área de trabalho de agora (re-revisão, R3).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Area {
+        JaAqui,
+        Movido,
+        /// Não deu para saber (o primeiro plano sem área, um erro) ou o mover não pegou.
+        NaoSei,
+    }
+
+    /// Fora da área de trabalho de agora: vai para a da janela em primeiro plano, e confere depois.
+    pub fn trazer_para_a_area_de_agora(h: isize) -> Area {
+        thread_local! {
+            static COM: () = {
+                // SAFETY: uma vez por thread; já iniciado noutro modo (a thread principal), segue
+                // valendo o de antes
+                let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            };
+        }
+        COM.with(|_| {});
+        // SAFETY: uma janela do próprio app, com o COM desta thread iniciado
+        unsafe {
+            let Ok(m) = CoCreateInstance::<_, IVirtualDesktopManager>(&VirtualDesktopManager, None, CLSCTX_INPROC_SERVER) else {
+                return Area::NaoSei;
+            };
+            let aqui = |m: &IVirtualDesktopManager| m.IsWindowOnCurrentVirtualDesktop(hwnd(h)).map(|b| b.as_bool());
+            match aqui(&m) {
+                Ok(true) => return Area::JaAqui,
+                Ok(false) => {}
+                Err(_) => return Area::NaoSei,
+            }
+            let fg = GetForegroundWindow();
+            if fg.is_invalid() {
+                return Area::NaoSei;
+            }
+            let Ok(id) = m.GetWindowDesktopId(fg) else { return Area::NaoSei };
+            if id == windows::core::GUID::zeroed() || m.MoveWindowToDesktop(hwnd(h), &id).is_err() {
+                return Area::NaoSei;
+            }
+            // o "deu certo" sem mover nada (a área do primeiro plano não é a de agora) não conta
+            if aqui(&m).is_ok_and(|b| b) {
+                Area::Movido
+            } else {
+                Area::NaoSei
+            }
+        }
+    }
+
+    pub fn cursor() -> Option<(i32, i32)> {
+        let mut p = POINT::default();
+        // SAFETY: `p` é nosso
+        unsafe { GetCursorPos(&mut p) }.ok()?;
+        Some((p.x, p.y))
+    }
+
+    /// O retângulo de antes de maximizar (coordenadas da área de trabalho).
+    pub fn normal(h: isize) -> Option<Ret> {
+        let mut wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+        // SAFETY: `wp` é nosso, com o tamanho certo
+        unsafe { GetWindowPlacement(hwnd(h), &mut wp) }.ok()?;
+        Some(ret(wp.rcNormalPosition))
+    }
+
+    static APP: OnceLock<AppHandle> = OnceLock::new();
+
+    unsafe extern "system" fn primeiro_plano(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
+        if let Some(app) = APP.get() {
+            // nada de pânico atravessando o Windows
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::trocou_o_primeiro_plano(app)));
+        }
+    }
+
+    /// O gancho fica até o app sair (o Windows o tira junto).
+    pub fn vigiar_primeiro_plano(app: &AppHandle) {
+        if APP.set(app.clone()).is_err() {
+            return;
+        }
+        // SAFETY: fora do processo (`WINEVENT_OUTOFCONTEXT`): o callback roda nesta thread, que tem
+        // o laço de mensagens do app
+        unsafe {
+            let _ = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                None,
+                Some(primeiro_plano),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1324,6 +2196,40 @@ mod testes {
         assert!(!minimizado_pelo_app(10_000, 9_000), "relógio voltou");
     }
 
+    fn mon(x: i32, escala: f64, principal: bool) -> Monitor {
+        Monitor { tela: Ret { x, y: 0, w: 1920, h: 1080 }, util: Ret { x, y: 0, w: 1920, h: 1032 }, escala, principal }
+    }
+
+    #[test]
+    fn abertura_na_escala_do_monitor_da_escolha() {
+        let ms = [mon(0, 1.0, true), mon(1920, 1.25, false)];
+        // a escolha em cima da barra do M2, a 125%: a pílula inicial de 240×46 lógicos vira 300×58
+        let cfg = ConfigApp { dock_x: Some(3000), dock_y: Some(1022), dock_w: Some(375), dock_h: Some(58), ..ConfigApp::default() };
+        let (r, fora) = abertura(&cfg, &ms);
+        assert!(!fora);
+        assert_eq!(r, Ret { x: 3075, y: 1022, w: 300, h: 58 }, "a borda direita e a de baixo ficam");
+        // o M2 ainda não chegou: o padrão do principal, na escala dele, e "fora da escolha" (I1)
+        let (r, fora) = abertura(&cfg, &ms[..1]);
+        assert!(fora);
+        assert_eq!(r, Ret { x: 1664, y: 16, w: 240, h: 46 });
+        // sem escolha, nunca "fora"
+        assert!(!abertura(&ConfigApp::default(), &ms).1);
+        // o expandido no M2: o tamanho lógico salvo, na escala de lá
+        let exp = ConfigApp { dock_expandido: true, dock_larg_l: Some(320.0), dock_alt_l: Some(420.0), ..cfg.clone() };
+        let r = abertura(&exp, &ms).0;
+        assert_eq!((r.w, r.h), (400, 525));
+    }
+
+    #[test]
+    fn tamanho_do_expandido_logico_ou_de_antes() {
+        let c = ConfigApp::default();
+        assert_eq!(tamanho_expandido(&c, 1.5), (480, 630), "o padrão, na escala");
+        let antes = ConfigApp { dock_larg: Some(500), dock_alt: Some(600), ..c.clone() };
+        assert_eq!(tamanho_expandido(&antes, 1.5), (500, 600), "o de antes já é físico");
+        let novo = ConfigApp { dock_larg_l: Some(330.0), dock_alt_l: Some(450.0), ..antes };
+        assert_eq!(tamanho_expandido(&novo, 1.5), (495, 675), "o lógico vale primeiro");
+    }
+
     #[test]
     fn pedido_vence_so_se_ninguem_respondeu() {
         static P: Pedido = Pedido::novo();
@@ -1336,51 +2242,5 @@ mod testes {
         assert!(!P.vencer(id), "um pedido mais novo vale");
         assert!(P.vencer(outro));
         assert!(!P.aberto());
-    }
-
-    #[test]
-    fn posicao_inicial_usa_a_salva_se_aparece() {
-        let areas = [TELA, SEGUNDA];
-        assert_eq!(posicao_inicial(Some((100, 200)), 300, 46, &areas, TELA, 16), (100, 200));
-        // no segundo monitor
-        assert_eq!(posicao_inicial(Some((2500, 10)), 300, 46, &areas, TELA, 16), (2500, 10));
-        // metade para fora: empurrada para dentro do monitor
-        assert_eq!(posicao_inicial(Some((1800, 10)), 300, 46, &[TELA], TELA, 16), (1620, 10));
-    }
-
-    #[test]
-    fn posicao_inicial_fora_da_tela_volta_ao_canto() {
-        // segundo monitor desligado
-        assert_eq!(posicao_inicial(Some((2500, 10)), 300, 46, &[TELA], TELA, 16), (1604, 16));
-        // aparece só uma lasquinha
-        assert_eq!(posicao_inicial(Some((1910, 10)), 300, 46, &[TELA], TELA, 16), (1604, 16));
-        assert_eq!(posicao_inicial(None, 300, 46, &[TELA], TELA, 16), (1604, 16));
-        // escala 150%: margem física maior
-        assert_eq!(posicao_inicial(None, 480, 69, &[TELA], TELA, 24), (1416, 24));
-    }
-
-    #[test]
-    fn ancorar_segura_a_borda_mais_perto() {
-        // em cima, à direita: cresce para a esquerda e para baixo
-        let r = Ret { x: 1604, y: 16, w: 300, h: 46 };
-        assert_eq!(lado(r, TELA), Lado { direita: true, embaixo: false });
-        assert_eq!(ancorar(r, 320, 420, TELA), (1584, 16));
-        // embaixo, à esquerda: cresce para a direita e para cima
-        let r = Ret { x: 20, y: 980, w: 300, h: 46 };
-        assert_eq!(ancorar(r, 320, 420, TELA), (20, 606));
-        // maior que o espaço até a borda: fica dentro
-        let r = Ret { x: 900, y: 0, w: 100, h: 46 };
-        assert_eq!(ancorar(r, 1100, 46, TELA), (820, 0));
-        let r = Ret { x: 0, y: 0, w: 100, h: 46 };
-        assert_eq!(ancorar(r, 400, 46, Ret { x: 0, y: 0, w: 300, h: 500 }), (0, 0));
-    }
-
-    #[test]
-    fn area_de_escolhe_o_monitor_com_mais_dock() {
-        let r = Ret { x: 1800, y: 0, w: 300, h: 46 };
-        assert_eq!(area_de(r, &[TELA, SEGUNDA]), Some(SEGUNDA));
-        let r = Ret { x: 1700, y: 0, w: 300, h: 46 };
-        assert_eq!(area_de(r, &[TELA, SEGUNDA]), Some(TELA));
-        assert_eq!(area_de(Ret { x: -500, y: 0, w: 300, h: 46 }, &[TELA]), None);
     }
 }

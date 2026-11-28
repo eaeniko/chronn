@@ -10,6 +10,7 @@ import { codigosDoLink, deltaDoAjuste, textoDoAjuste, TRABALHO, minusculas } fro
 import { NOME_APP } from './nome.js';
 import { espacosAtivos, comAbas, gruposPorEspaco, espacoPreEscolhido, ESPACO_PRIMEIRO } from './espacos.js';
 import { TEXTOS, aoTrocarIdioma } from './textos.js';
+import { arquivarTimer, apagarTimer } from './arquivados.js';
 
 // os textos que outros módulos leem daqui (`export let`), refeitos a cada troca de idioma
 aoTrocarIdioma(() => {
@@ -254,16 +255,24 @@ export function usarFaixa(fn) {
   faixaDeFora = fn;
 }
 
-/** Faixa no rodapé com um botão; some sozinha depois de `ms`. */
-export function faixa(msg, botao = null, aoClicar = null, ms = 4000) {
+/**
+ * Faixa no rodapé com um botão; some sozinha depois de `ms`. `outro` (spec 004): um segundo botão,
+ * `{ rotulo, aoClicar }`, que fecha a faixa e segue (o "Ver os arquivados").
+ */
+export function faixa(msg, botao = null, aoClicar = null, ms = 4000, outro = null) {
   if (faixaDeFora) return faixaDeFora(msg, botao, aoClicar, ms);
   faixaAtual?.remove();
   const el = document.createElement('div');
   el.className = 'faixa';
   el.setAttribute('role', 'status');
-  el.innerHTML = `<span>${esc(msg)}</span>${botao ? `<button type="button">${esc(botao)}</button>` : ''}`;
+  el.innerHTML = `<span>${esc(msg)}</span>${botao ? `<button type="button">${esc(botao)}</button>` : ''}${outro ? `<button type="button" data-outro>${esc(outro.rotulo)}</button>` : ''}`;
   const id = setTimeout(() => el.remove(), ms);
-  el.querySelector('button')?.addEventListener('click', async () => {
+  el.querySelector('[data-outro]')?.addEventListener('click', () => {
+    clearTimeout(id);
+    el.remove();
+    outro.aoClicar();
+  });
+  el.querySelector('button:not([data-outro])')?.addEventListener('click', async () => {
     clearTimeout(id);
     try {
       await aoClicar();
@@ -742,8 +751,7 @@ export function editarGrupo(snap, grupoId) {
       campoTexto('nome', TEXTOS.nome, g.nome, '', `autofocus maxlength="${GRUPO_NOME_MAX}"`) +
       campoEspaco(snap, g.espaco_id ?? ESPACO_PRIMEIRO) +
       campoCor(g.cor) +
-      camposDoGrupo(g) +
-      caixa('arquivado', TEXTOS.arquivarOGrupo, TEXTOS.arquivarOGrupoDica),
+      camposDoGrupo(g),
     aoMontar: ligarCodigos,
     async aoEnviar(form) {
       const nome = nomeObrigatorio(form);
@@ -753,25 +761,9 @@ export function editarGrupo(snap, grupoId) {
           nome,
           cor: ler(form, 'cor'),
           ...linksDoGrupo(form),
-          arquivado: marcado(form, 'arquivado'),
           espaco_id: espacoDoForm(form, g.espaco_id ?? ESPACO_PRIMEIRO),
         }),
       });
-    },
-  });
-}
-
-/** "Arquivar" do ⋯ do grupo (rodada 21): confirma e arquiva (os timers dele saem das listas). */
-export function arquivarGrupo(snap, grupoId) {
-  const g = snap.grupos.find((x) => x.id === grupoId);
-  if (!g) return;
-  abrirDialogo({
-    titulo: esc(TEXTOS.arquivarGrupoTitulo(g.nome)),
-    corpo: `<p class="dlg-p">${esc(TEXTOS.arquivarGrupoTexto)}</p>`,
-    enviar: TEXTOS.arquivar,
-    perigo: true,
-    async aoEnviar() {
-      await chamar('editar_grupo', { grupo: grupoParaSalvar({ ...g, arquivado: true }) });
     },
   });
 }
@@ -1198,7 +1190,7 @@ export function editarTimer(snap, timerId) {
   const t = todosTimers(snap).find((x) => x.id === timerId);
   if (!t) return;
   const feito = { grupo: null };
-  abrirDialogo({
+  const dlg = abrirDialogo({
     titulo: TEXTOS.tituloEditarTimer,
     corpo:
       campoTexto('nome', TEXTOS.nome, t.nome, '', 'autofocus') +
@@ -1210,7 +1202,7 @@ export function editarTimer(snap, timerId) {
           campoAtividadePadrao(t) +
           campoAtividadesNoPainel(t) +
           campoAjuste(t) +
-          caixa('arquivado', TEXTOS.arquivarOTimer, TEXTOS.arquivarOTimerDica),
+          `<div class="campo dlg-arq"><span>${esc(TEXTOS.arquivarOuApagar)}</span><div class="ses-acoes"><button type="button" class="bt" data-arquivar>${esc(TEXTOS.arquivarReticencias)}</button><button type="button" class="bt perigo-txt" data-apagar>${esc(TEXTOS.apagarReticencias)}</button></div><small>${esc(TEXTOS.arquivarOuApagarDica)}</small></div>`,
         false,
         resumoDoTimer(t),
       ),
@@ -1220,6 +1212,15 @@ export function editarTimer(snap, timerId) {
       ligarDescartar(form, snap, t, () => editarTimer(snap, t.id));
       ligarPastasDoTimer(form, t);
       ligarAtividadesNoPainel(form);
+      // spec 004: o editar fecha (sem salvar) e o arquivar ou o apagar segue; o apagar sem horas
+      // não abre diálogo (revisão M2)
+      const erro = (e) => faixa(typeof e === 'string' ? e : TEXTOS.naoDeuCerto);
+      const seguir = (f) => () => {
+        dlg.fechar();
+        f().catch(erro);
+      };
+      form.querySelector('[data-arquivar]')?.addEventListener('click', seguir(() => arquivarTimer(snap, t.id)));
+      form.querySelector('[data-apagar]')?.addEventListener('click', seguir(() => apagarTimer(snap, t)));
     },
     async aoEnviar(form) {
       const nome = nomeObrigatorio(form);
@@ -1237,7 +1238,7 @@ export function editarTimer(snap, timerId) {
           nome,
           cor: ler(form, 'cor'),
           ...cardDoTimer(form),
-          arquivado: marcado(form, 'arquivado'),
+          arquivado: Boolean(t.arquivado),
           atividade_padrao_id: form.elements.atividade_padrao ? Number(ler(form, 'atividade_padrao')) : t.atividade_padrao_id,
           espaco_id,
         });

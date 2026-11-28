@@ -111,7 +111,7 @@ test('rodada 25: Ajustes → Sobre: a versão com o canal, a busca automática l
   const a = fonte('ajustes.js');
   assert.match(a, /textoDaVersao\(dados\.info\?\.versao \?\? '\?', dados\.info\?\.canal\)/);
   assert.match(a, /htmlAtualizacao\(\{ ligada: c\.atualizar_auto !== false, ultima: c\.atualizacao_ultima \?\? null,/);
-  assert.match(a, /nome === 'painel_linha' \|\| nome === 'atualizar_auto'\) \{/);
+  assert.match(a, /nome === 'painel_linha' \|\| nome === 'atualizar_auto' \|\|/);
   assert.match(a, /if \(auto && auto !== document\.activeElement\) auto\.checked = c\.atualizar_auto !== false;/);
   const h = htmlAtualizacao({ ligada: true, ultima: null, app: 'Chronn' });
   assert.match(h, /<button type="button" class="bt" data-aj="atu-verificar">Verificar atualizações<\/button>/);

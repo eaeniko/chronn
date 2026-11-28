@@ -3,6 +3,37 @@
 Versions follow MAJOR.MINOR.PATCH. Before 1.0: MINOR goes up when something new ships, PATCH when
 there are only fixes.
 
+## [0.6.2] - 2026-11-28
+
+### Added
+- "Day total" in Settings: show the sum of the timers (what you log), the real time (an hour
+  two timers ran together counts once) or both. With "Both", the header shows the sum with the
+  real time beside it.
+- Settings → Archived: unarchive timers and groups, or delete them. Deleting a timer with hours
+  asks for its name and makes a backup first; deleting a group lets you keep its timers.
+- Archiving a timer asks what to do with what still counts in it: move it to another timer, or
+  stop counting it.
+- "Stop the ▶ when Claude finishes and you leave the conversation", off by default.
+- Settings → Claude Code shows whether reading in the Claude app is working.
+- The tray has "Bring the dock here", which brings the dock to the monitor where your mouse is.
+
+### Changed
+- One ▶ at a time: pressing ▶ on a timer pauses the ▶ on the other one (Claude keeps counting
+  in both). The manual label is now "▶ on".
+- A timer card shows "since yesterday" when its time includes earlier days.
+- The dock can sit over the taskbar, and it stays where you dragged it.
+
+### Fixed
+- An archived timer no longer receives time, and it no longer vanishes from the screen while it
+  still counted.
+- The dock no longer jumps to another monitor or up from the taskbar, and comes back when it
+  falls behind the taskbar, after the monitors sleep or on another virtual desktop.
+- The main window opens where you left it (maximized, if it was).
+- After `/exit` in a terminal, that window no longer counts as reading the closed session, and
+  reading by window stops an hour after Claude finishes.
+- Reading in the Claude app sticks to the innermost conversation and keeps the last one known
+  when the check is slow.
+
 ## [0.6.1] - 2026-11-23
 
 This release also brings 0.6.0, which wasn't released on its own: Claude Code in WSL, reading in

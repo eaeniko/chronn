@@ -32,7 +32,7 @@ test('rodada 22: a linha 1 na ordem: nome, "+ Novo", "Lançar o dia", ? e ⚙; o
 
 test('rodada 22: a área da hora tem só a data e o total', () => {
   const day = L1.slice(L1.indexOf('<div class="day">'));
-  assert.equal(day.trim(), '<div class="day"><small id="data"></small><b class="mono" id="total-dia">0min</b></div>\n    </div>'.trim());
+  assert.equal(day.trim(), '<div class="day"><small id="data"></small><b class="mono" id="total-dia">0min</b><em class="mono" id="total-sub"></em></div>\n    </div>'.trim());
   // depois do espaço que empurra, só o total
   const depois = L1.slice(L1.indexOf('<div class="sp"></div>') + '<div class="sp"></div>'.length);
   assert.doesNotMatch(depois, /<button/);

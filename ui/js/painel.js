@@ -4,7 +4,7 @@
 // andam, e as réguas da linha do tempo são redesenhadas uma vez por minuto.
 import { chamar, aoMudar, ouvir } from './api.js';
 import { estadoDoIcone, abrirAtualizar } from './atualizacao.js';
-import { curto, relogio, relogioGrande, horaMin, totalDeTimers, totalDoGrupo, dataDoDia, trocarTexto, msDeHoje, desdeTexto, dicaDoTotalDoDia, itensDoMenuZerar, temaResolvido, segueOSistema, REUNIAO } from './formato.js';
+import { curto, relogio, relogioGrande, horaMin, totalDeTimers, totalDoGrupo, dataDoDia, trocarTexto, msDeHoje, desdeTexto, desdeDeAntes, usarTotal, dicaDoTotalDoDia, itensDoMenuZerar, temaResolvido, segueOSistema, REUNIAO } from './formato.js';
 import {
   secaoGrupo,
   relogioFoco,
@@ -25,6 +25,7 @@ import {
   esc,
 } from './componentes.js';
 import { ligarRenomear, depoisDoClique } from './renomear.js';
+import { arquivarTimer, arquivarGrupo, apagarTimer, apagarGrupo, usarAbrirArquivados, usarEsquecerGrupo } from './arquivados.js';
 import { secaoLinhaDoPainel, visaoLinha, CHAVE_LINHA } from './linha.js';
 import {
   abaAtual,
@@ -33,7 +34,7 @@ import {
   timersDaAba,
   htmlAbas,
   secoesDaAba,
-  totalDaAba,
+  partesDoTotalDaAba,
   dicaDoTotalDaAba,
   textoZeradosDaAba,
   topoDaTela,
@@ -54,7 +55,6 @@ import { visaoFoco } from './foco.js';
 import {
   novoGrupo,
   novoEspaco,
-  arquivarGrupo,
   editarGrupo,
   grupoParaSalvar,
   novoTimer,
@@ -499,16 +499,21 @@ function andar() {
     desenharMinuto(agora);
   }
   const ts = todosTimers();
-  // o total do dia é o da aba (rodada 20); de onde vem o número, o geral e o de cada espaço na dica
-  const total = curto(totalDaAba(snap, abaDoTopo(snap, visao), agora));
+  // o total do dia é o da aba (rodada 20), pela escolha dos Ajustes (spec 003); de onde vem o
+  // número, a soma e o real, o geral e o de cada espaço na dica
+  const partes = partesDoTotalDaAba(snap, abaDoTopo(snap, visao), agora);
   const dicaTotal = dicaDoTotalDaAba(snap, abaDoTopo(snap, visao), agora);
   // o total mudou de largura: o cabeçalho confere de novo se cabe (rodada 22)
-  const totalAntes = $('#total-dia').textContent;
-  for (const el of [$('#total-dia'), ...document.querySelectorAll('[data-total-dia]')]) {
-    trocarTexto(el, total);
+  const antes = $('#total-dia').textContent + $('#total-sub').textContent;
+  // o topo: o número grande e, pequeno ao lado, o real ou o que ele é (spec 003); o Foco, inteiro
+  trocarTexto($('#total-dia'), partes.grande);
+  trocarTexto($('#total-sub'), partes.pequeno);
+  for (const el of [$('#total-dia'), $('#total-sub')]) trocarTitulo(el, dicaTotal);
+  for (const el of document.querySelectorAll('[data-total-dia]')) {
+    trocarTexto(el, partes.texto);
     trocarTitulo(el, dicaTotal);
   }
-  if (totalAntes.length !== total.length) ajustarCabecalho();
+  if (antes.length !== (partes.grande + partes.pequeno).length) ajustarCabecalho();
   for (const t of ts) {
     // o número do timer (o acumulado desde o zerar), com "desde …" na dica
     const ms = msDoTimer(t, agora);
@@ -518,6 +523,8 @@ function andar() {
       if (dica) trocarTitulo(el, dica);
     }
     for (const el of document.querySelectorAll(`[data-desde="${t.id}"]`)) trocarTexto(el, desdeTexto(t.zerado_em, agora, snap.config.corte_min));
+    // US 003.3: o "desde ontem" do cartão, só com dias de antes no número
+    for (const el of document.querySelectorAll(`[data-desde-k="${t.id}"]`)) trocarTexto(el, desdeDeAntes(t, agora, snap.config.corte_min));
     // a linha do tempo é do dia
     for (const el of document.querySelectorAll(`[data-hm-hoje="${t.id}"]`)) trocarTexto(el, horaMin(msDeHoje(t, agora)));
   }
@@ -928,19 +935,36 @@ function alternarMenuGrupo(botao, grupoId) {
   abrirMenu(botao, htmlDoMenuGrupo(snap, g), 'esquerda', (b) => {
     if (b.dataset.mg === 'renomear') renomearGrupo(grupoId);
     else if (b.dataset.mg === 'editar') editarGrupo(snap, grupoId);
-    else if (b.dataset.mg === 'arquivar') arquivarGrupo(snap, grupoId);
+    else if (b.dataset.mg === 'arquivar') pegarErro(arquivarGrupo(snap, grupoId));
+    else if (b.dataset.mg === 'apagar') pegarErro(apagarGrupo(g));
     else if (b.dataset.mg === 'mover') {
       abrirMenu(botao, htmlDoMenuEspacos(snap, g), 'esquerda', (e) => moverGrupo(g, Number(e.dataset.espaco)));
     }
   });
 }
 
-/** O ⋯ do cartão de um timer (rodada 21): Editar e "Mover para…" (os grupos de cada espaço). */
+/** Spec 004: o erro de um arquivar ou apagar (o núcleo recusou) vira uma faixa. */
+function pegarErro(p) {
+  p?.catch?.((e) => {
+    console.error('worktimer: arquivar ou apagar', e);
+    faixa(typeof e === 'string' ? e : TEXTOS.naoDeuCerto);
+  });
+}
+// o "Ver os arquivados" da faixa do arquivar abre os Ajustes nessa seção
+usarAbrirArquivados(() => abrirAjustes('arquivados'));
+// o grupo apagado sai do "recolhido" (o id pode voltar num grupo novo; revisão M1)
+usarEsquecerGrupo((id) => {
+  if (fechados.delete(String(id))) gravarLocal(CHAVE_FECHADOS, [...fechados]);
+});
+
+/** O ⋯ do cartão de um timer (rodada 21): Editar, "Mover para…", "Arquivar…" e "Apagar…". */
 function alternarMenuTimer(botao, timerId) {
   const t = todosTimers().find((x) => x.id === timerId);
   if (!t) return;
   abrirMenu(botao, htmlDoMenuTimer(t), 'esquerda', (b) => {
     if (b.dataset.mt === 'editar') editarTimer(snap, timerId);
+    else if (b.dataset.mt === 'arquivar') pegarErro(arquivarTimer(snap, timerId));
+    else if (b.dataset.mt === 'apagar') pegarErro(apagarTimer(snap, t));
     else if (b.dataset.mt === 'mover') {
       abrirMenu(botao, htmlDoMenuDestinos(snap, t), 'esquerda', (d) =>
         moverTimer(t, d.dataset.grupo === '' ? null : Number(d.dataset.grupo), Number(d.dataset.espaco)),
@@ -1428,6 +1452,7 @@ aoMudar((s) => {
   seguirIdioma(s);
   usarAtividades(s.atividades);
   usarCorte(s.config?.corte_min);
+  usarTotal(s.config?.total_topo);
   usarEsperaApp(s.config?.espera_app_min);
   aplicarTema();
   if (visao === null) {

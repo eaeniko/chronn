@@ -176,3 +176,7 @@ p.pu-ok { padding: 10px 12px; }
 .aj-at.arq { opacity: .6; }
 .aj-at.arq .aj-at-nome { color: var(--mu); }
 [data-bloco="atividades"] > .bt { margin-top: 8px; }
+
+/* spec 004: os arquivados (os timers de um grupo arquivado, recuados) e o Apagar */
+.aj-lista li.aj-arq-sub { margin-left: 22px; padding-top: 5px; padding-bottom: 5px; }
+.aj-lista .bt.perigo-txt { color: var(--agora); }

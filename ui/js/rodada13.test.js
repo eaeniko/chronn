@@ -30,7 +30,7 @@ const timer = (id, extra = {}) => ({
 });
 
 test('"manual" e "segundo plano": as etiquetas e quem é lembrete', () => {
-  assert.deepEqual(SITUACAO.manual, { curta: 'manual', longa: 'manual' });
+  assert.deepEqual(SITUACAO.manual, { curta: '▶ ligado', longa: 'você deu ▶' });
   assert.deepEqual(SITUACAO.segundo_plano, { curta: 'segundo plano', longa: 'segundo plano' });
   assert.equal(ehLembrete('esperando'), true);
   assert.equal(ehLembrete('segundo_plano'), true);
@@ -41,7 +41,7 @@ test('"manual" e "segundo plano": as etiquetas e quem é lembrete', () => {
 test('o cartão mostra "manual" com o ▶ rodando e "segundo plano" parado', () => {
   usarEsperaApp(0);
   const manual = timer(1, { rodando: true, situacao: 'manual', manual_atividade_id: 1, trechos: [{ inicio: 9 * H, fim: null, origem: 'manual', atividade_id: 1 }] });
-  assert.match(cartaoTimer(manual, 10 * H, false), /<div class="kx"><small class="ksit manual" title="manual"><span class="s-manual">manual<\/span><\/small><\/div>/);
+  assert.match(cartaoTimer(manual, 10 * H, false), /<div class="kx"><small class="ksit manual" title="▶ ligado"><span class="s-manual">▶ ligado<\/span><\/small><\/div>/);
   const sp = timer(2, { situacao: 'segundo_plano', espera_ultima: 9 * H });
   assert.match(cartaoTimer(sp, 15 * H, false), /<small class="ksit segundo_plano" title="segundo plano"><span class="s-segundo_plano">segundo plano<\/span><\/small>/);
   // no painel do timer, parado, o lembrete fica no lugar do motivo

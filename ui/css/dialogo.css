@@ -223,3 +223,10 @@
 /* "Ajustar hoje": "a mais 15 min de Reunião" */
 .am-linha .am-de { font-size: 11.5px; color: var(--mu); }
 .am-linha select[name="aj_atividade"] { flex: 0 1 auto; min-width: 0; }
+
+/* spec 004: o seletor do destino dentro da escolha "Mover para outro timer" */
+.esc select { margin-top: 6px; max-width: 100%; height: 30px; padding: 0 8px; border: 1px solid var(--bd); border-radius: 8px; background: var(--btn); color: var(--tx); font: inherit; font-size: 12.5px; }
+.dlg-arq .ses-acoes { margin-top: 2px; }
+/* spec 004: o apagar com horas, com os três botões numa linha */
+.dlg.dlg-apagar { width: min(500px, 100%); }
+.dlg-apagar .dlg-pe .bt { white-space: nowrap; }

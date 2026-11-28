@@ -25,6 +25,8 @@ static ICONE_ATUAL: AtomicU8 = AtomicU8::new(0);
 /// ainda, 1 = sempre à vista, 2 = só com pergunta).
 static ITEM_DOCK: OnceLock<MenuItem<tauri::Wry>> = OnceLock::new();
 static ITEM_DOCK_MODO: AtomicU8 = AtomicU8::new(0);
+/// O "Trazer o dock para cá" (spec 006), para trocar o idioma com o menu montado.
+static ITEM_TRAZER: OnceLock<MenuItem<tauri::Wry>> = OnceLock::new();
 
 /// Os itens de texto fixo (Abrir, Pausar tudo, Sobre, Sair), para trocar o idioma com o menu
 /// montado (rodada 23), e o idioma deles (0 = português, 1 = inglês).
@@ -49,6 +51,9 @@ fn atualizar_idioma() {
     }
     if let Some(item) = ITEM_DOCK.get() {
         let _ = item.set_text(texto_do_item_dock(ITEM_DOCK_MODO.load(Ordering::SeqCst) == 2));
+    }
+    if let Some(item) = ITEM_TRAZER.get() {
+        let _ = item.set_text(ta("bandeja.dock_trazer"));
     }
 }
 
@@ -93,13 +98,16 @@ pub fn criar(app: &AppHandle) -> tauri::Result<()> {
     // até um clique fora ou 30 s sem o mouse em cima
     let dock = MenuItem::with_id(app, "dock", texto_do_item_dock(false), true, None::<&str>)?;
     let _ = ITEM_DOCK.set(dock.clone());
+    // o resgate (spec 006): o dock no monitor do mouse, por cima de tudo
+    let trazer = MenuItem::with_id(app, "trazer_dock", ta("bandeja.dock_trazer"), true, None::<&str>)?;
+    let _ = ITEM_TRAZER.set(trazer.clone());
     ITEM_DOCK_MODO.store(1, Ordering::SeqCst);
     let sep = PredefinedMenuItem::separator(app)?;
     // rodada 18: a versão, os créditos e os links, em Ajustes → Sobre
     let sobre = MenuItem::with_id(app, "sobre", t_sobre, true, None::<&str>)?;
     let sair = MenuItem::with_id(app, "sair", t_sair, true, None::<&str>)?;
     let _ = ITENS.set([abrir.clone(), pausar.clone(), sobre.clone(), sair.clone()]);
-    let menu = Menu::with_items(app, &[&abrir, &pausar, &dock, &sep, &sobre, &sair])?;
+    let menu = Menu::with_items(app, &[&abrir, &pausar, &dock, &trazer, &sep, &sobre, &sair])?;
     TrayIconBuilder::with_id(ID)
         .icon(ICONE_PARADO)
         .tooltip(crate::perfil::nome_na_tela())
@@ -109,6 +117,7 @@ pub fn criar(app: &AppHandle) -> tauri::Result<()> {
             "abrir" => janelas::mostrar_principal(app),
             "pausar_tudo" => crate::comandos::pausar_tudo_agora(app),
             "dock" => janelas::item_dock(app),
+            "trazer_dock" => janelas::trazer_dock(app),
             "sobre" => janelas::mostrar_sobre(app),
             "sair" => janelas::sair(app),
             _ => {}
@@ -144,6 +153,7 @@ mod testes {
     fn item_do_dock_com_o_texto_do_modo() {
         assert_eq!(texto_do_item_dock(false), "Mostrar/esconder dock");
         assert_eq!(texto_do_item_dock(true), "Mostrar o dock agora");
+        assert_eq!(ta("bandeja.dock_trazer"), "Trazer o dock para cá");
     }
 
     #[test]

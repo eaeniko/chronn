@@ -115,7 +115,7 @@ test('divisão por atividade: só com mais de uma, na ordem da lista', () => {
 test('👥: ao lado do ▶, aceso com a reunião, some sem a atividade Reunião ou quando ela é a padrão', () => {
   const parado = cliente_a({ trechos: [] });
   assert.match(botaoReuniao(parado, 'pe'), /class="pe reu" data-acao="reuniao" data-timer="7" title="Reunião: conta este tempo como reunião neste timer"[^>]*aria-pressed="false" style="--a:#e8a23a"/);
-  assert.match(botaoReuniao(cliente_a({ rodando: true, manual_atividade_id: TRABALHO }), 'pe'), /title="Reunião: troca o play manual por reunião agora"/);
+  assert.match(botaoReuniao(cliente_a({ rodando: true, manual_atividade_id: TRABALHO }), 'pe'), /title="Reunião: troca o ▶ por reunião agora"/);
   const on = botaoReuniao(cliente_a({ rodando: true, manual_atividade_id: REUNIAO }), 'pe');
   assert.match(on, /class="pe reu on" data-acao="parar-reuniao"[^>]*aria-pressed="true"/);
   assert.equal(botaoReuniao(cliente_a({ atividade_padrao_id: REUNIAO }), 'pe'), '', 'o ▶ já é reunião');
@@ -132,12 +132,12 @@ test('linha do tempo: a faixa da atividade e a legenda só com mais de uma ativi
   const t = cliente_a();
   const b = trechosDoDia(t, 0, 12 * H, 8, 19, ATIVIDADES);
   assert.deepEqual(b.map((x) => x.atividade), [TRABALHO, REUNIAO]);
-  assert.equal(b[1].titulo, '10:00–11:10 · play manual · 1h 10min · reunião');
+  assert.equal(b[1].titulo, '10:00–11:10 · você deu ▶ · 1h 10min · reunião');
   assert.equal(b[0].titulo, '09:00–11:00 · Claude trabalhando · 2h 00min', 'a padrão não repete');
   assert.deepEqual(atividadesDosTrechos([t], ATIVIDADES).map((a) => a.id), [TRABALHO, REUNIAO]);
   const snap = { grupos: [{ id: 1, nome: 'Agendas', timers: [t] }] };
   const v = visaoLinha(snap, 0, 12 * H);
-  assert.match(v, /<b class="m at" title="10:00–11:10 · play manual · 1h 10min · reunião" style="[^"]*;--a:#e8a23a"><\/b>/);
+  assert.match(v, /<b class="m at" title="10:00–11:10 · você deu ▶ · 1h 10min · reunião" style="[^"]*;--a:#e8a23a"><\/b>/);
   assert.match(v, /<span><i class="sw at" style="--a:#e8a23a"><\/i>reunião<\/span>/);
   assert.match(linhaCompacta(snap.grupos, 0, 12 * H), /class="tl-leg"/);
   const so = { ...t, trechos: [t.trechos[0]] };

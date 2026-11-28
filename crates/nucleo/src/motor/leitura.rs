@@ -181,6 +181,12 @@ impl Motor {
         }
     }
 
+    /// A conversa que a amostra mostra no app do Claude (spec 001, o diagnóstico): `None` fora do
+    /// app (o terminal e os outros programas vão pelo título ou pela janela).
+    pub fn aberta_no_app(&self, a: &Amostra) -> Option<Aberta> {
+        matches!(a.conversa, Conversa::App(_) | Conversa::Chat { .. }).then(|| self.sessao_aberta(&JanelaEmUso::de(a)))
+    }
+
     /// A conversa aberta pelo título da janela (o nome da sessão contido nele, o mais longo vencendo).
     fn pelo_titulo(&self, j: &JanelaEmUso) -> Aberta {
         let do_code = |s: &&Sessao| !e_sessao_do_chat(&s.id);
@@ -200,12 +206,15 @@ impl Motor {
         uma_so(&mais_longas)
     }
 
-    /// Ligada a um timer nao encerrado, sem trabalhar (esperando voce ou parada, ate de dias atras)
+    /// Ligada a um timer nao encerrado nem escondido (spec 004), sem trabalhar (esperando voce ou parada, ate de dias atras)
     /// e sem a leitura pausada.
     fn pode_ser_lida(&self, id: &str) -> bool {
         !self.leitura_bloqueada.contains_key(id)
             && self.sessoes.get(id).is_some_and(|s| {
-                s.timer_id.is_some() && !self.encerrado(s.timer_id) && s.estado != EstadoSessao::Trabalhando
+                s.timer_id.is_some()
+                    && !self.encerrado(s.timer_id)
+                    && !self.escondido(s.timer_id)
+                    && s.estado != EstadoSessao::Trabalhando
             })
     }
 
@@ -239,6 +248,17 @@ impl Motor {
         self.saiu_do_app = self.neutra_desde.take();
         let j = JanelaEmUso::de(a);
         if self.no_claude(&j) { Onde::Claude(j) } else { Onde::Fora { em_foco: a.em_foco } }
+    }
+
+    /// A amostra diz onde você está (spec 009, o ▶ armado): fora do Claude, a janela do app há
+    /// mais de `NEUTRA_MAX_MS`, ou uma conversa reconhecida (ou desconhecida) no Claude. A janela do
+    /// app há pouco e o "não sei" não dizem.
+    pub(crate) fn amostra_conclusiva(&self, onde: &Onde) -> bool {
+        match onde {
+            Onde::Neutra => false,
+            Onde::NeutraVencida(_) | Onde::Fora { .. } => true,
+            Onde::Claude(j) => !matches!(self.sessao_aberta(j), Aberta::NaoSei),
+        }
     }
 
     fn aberta_em(&self, onde: &Onde) -> Option<Aberta> {
@@ -1618,5 +1638,196 @@ mod testes {
             trechos(&m.evento(&ev("UserPromptSubmit", "B", h(10, 7)))),
             vec![Mudanca::Abriu { timer_id: Some(2), sessao_id: Some("B".into()), origem: Origem::Claude, inicio: h(10, 7), atividade_id: 1 }]
         );
+    }
+    // ---- o ▶ que para com o Claude (spec 009) ----
+
+    fn manual_de(m: &Motor, timer: i64) -> bool {
+        m.abertos.iter().any(|t| t.origem == Origem::Manual && t.timer_id == Some(timer))
+    }
+    fn fechou_m(timer: i64, t: Ms, motivo: MotivoFim) -> Mudanca {
+        Mudanca::Fechou { timer_id: Some(timer), sessao_id: None, origem: Origem::Manual, fim: t, motivo }
+    }
+    /// A trabalha desde 9:55, ▶ no timer dele (1) às 9:56 e a opção ligada.
+    fn play_com_claude() -> Motor {
+        let mut m = motor();
+        m.cfg.play_para_com_claude = true;
+        m.evento(&ev("UserPromptSubmit", "A", h(9, 55)));
+        nomear(&mut m);
+        m.play(1, h(9, 56));
+        m
+    }
+    #[test] fn play_para_no_fim_do_turno_com_voce_fora_da_conversa() {
+        let mut m = play_com_claude();
+        firme(&mut m, outro_programa(h(9, 58)));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        assert!(manual_de(&m, 1), "a amostra seguinte decide");
+        // fora, confirmado pela troca suave: fecha no instante do fim do turno
+        assert_eq!(trechos(&m.amostra(&outro_programa(h(10, 0) + 2_000))), vec![]);
+        assert_eq!(trechos(&m.amostra(&outro_programa(h(10, 0) + 7_000))), vec![fechou_m(1, h(10, 0), MotivoFim::Terminou)]);
+        assert!(!manual_de(&m, 1));
+        assert_eq!(m.pausado_desde.get(&1), Some(&h(10, 0)));
+    }
+    /// A revisão (I1): no terminal (e com um alt-tab no meio), a janela diz "não sei" enquanto o
+    /// Claude trabalha e a conversa aberta fica sem saber; olhando a conversa no fim, o ▶ segue.
+    #[test] fn play_segue_quando_a_conversa_nao_era_conhecida_no_fim_mas_voce_esta_nela() {
+        let mut m = play_com_claude();
+        firme(&mut m, nao_sei(h(9, 58)));
+        assert_eq!(m.conversa_aberta, None);
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        assert_eq!(firme(&mut m, le(h(10, 0) + 2_000, "A")), vec![abriu_l(1, "A", h(10, 0) + 2_000)]);
+        assert!(manual_de(&m, 1));
+        assert_eq!(m.play_armado.get(&1), Some(&None), "armado, você na conversa");
+        // "não sei" e a janela do app não decidem nada
+        firme(&mut m, nao_sei(h(10, 2)));
+        firme(&mut m, dock(h(10, 3)));
+        assert!(manual_de(&m, 1));
+    }
+    #[test] fn play_para_quando_voce_sai_da_conversa_depois_do_fim() {
+        let mut m = play_com_claude();
+        firme(&mut m, le(h(9, 58), "A"));
+        assert_eq!(trechos(&m.evento(&ev("Stop", "A", h(10, 0)))).iter().filter(|x| matches!(x, Mudanca::Fechou { origem: Origem::Manual, .. })).count(), 0);
+        assert_eq!(firme(&mut m, le(h(10, 1), "A")), vec![abriu_l(1, "A", h(10, 1))]);
+        assert!(manual_de(&m, 1), "lendo, o ▶ segue");
+        // a saída de 3 s com a volta não conta como sair
+        let t = h(10, 3);
+        assert_eq!(trechos(&m.amostra(&outro_programa(t))), vec![]);
+        assert_eq!(trechos(&m.amostra(&le(t + 3_000, "A"))), vec![]);
+        assert_eq!(trechos(&m.amostra(&le(t + 8_000, "A"))), vec![]);
+        assert!(manual_de(&m, 1));
+        // saiu de vez: a leitura e o ▶ fecham no instante da saída
+        let t = h(10, 5);
+        assert_eq!(trechos(&m.amostra(&outro_programa(t))), vec![]);
+        let v = trechos(&m.amostra(&outro_programa(t + S5)));
+        assert_eq!(v, vec![fechou_l(1, "A", t, MotivoFim::SaiuDaJanela), fechou_m(1, t, MotivoFim::Terminou)]);
+        assert!(m.play_armado.is_empty());
+    }
+    /// A revisão (I2): ler parado por mais que o tempo de uso fecha a leitura (`SemUso`), mas você
+    /// não saiu da conversa: o ▶ segue.
+    #[test] fn ler_parado_nao_fecha_o_play_armado() {
+        let mut m = play_com_claude();
+        firme(&mut m, le(h(9, 58), "A"));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        firme(&mut m, le(h(10, 1), "A"));
+        let v = trechos(&m.amostra(&app(h(10, 6), 4 * MIN, Some("A"))));
+        assert!(v.iter().any(|x| matches!(x, Mudanca::Fechou { origem: Origem::Leitura, motivo: MotivoFim::SemUso, .. })), "{v:?}");
+        assert!(manual_de(&m, 1));
+    }
+    #[test] fn play_para_ao_sair_antes_de_a_leitura_abrir() {
+        let mut m = play_com_claude();
+        firme(&mut m, le(h(9, 58), "A"));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        // saiu antes de a leitura abrir: uma amostra fora só não basta (a troca suave)
+        let t = h(10, 0) + 2_000;
+        assert_eq!(trechos(&m.amostra(&outro_programa(t))), vec![]);
+        assert_eq!(trechos(&m.amostra(&outro_programa(t + S5))), vec![fechou_m(1, t, MotivoFim::Terminou)]);
+    }
+    #[test] fn mensagem_nova_e_o_turno_que_continua_desarmam_o_play() {
+        let mut m = play_com_claude();
+        firme(&mut m, le(h(9, 58), "A"));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        m.evento(&ev("UserPromptSubmit", "A", h(10, 1)));
+        assert!(m.play_armado.is_empty());
+        firme(&mut m, outro_programa(h(10, 2)));
+        assert!(manual_de(&m, 1), "o turno novo ainda não acabou");
+        // M7: o `Notification` (a permissão) arma; o `PostToolUse` que continua o turno desarma
+        m.evento(&ev("Notification", "A", h(10, 3)));
+        assert!(m.play_armado.contains_key(&1));
+        m.evento(&ev("PostToolUse", "A", h(10, 4)));
+        assert!(m.play_armado.is_empty());
+        firme(&mut m, outro_programa(h(10, 5)));
+        assert!(manual_de(&m, 1));
+    }
+    /// M3: com duas sessões no mesmo timer, você na conversa de uma, o fim da outra não fecha.
+    #[test] fn o_fim_de_outra_sessao_do_mesmo_timer_nao_fecha() {
+        let mut m = play_com_claude();
+        m.evento(&EventoHook { cwd: "G:\\A\\x".into(), ..ev("UserPromptSubmit", "A2", h(9, 57)) });
+        nomear(&mut m);
+        assert_eq!(m.sessoes["A2"].timer_id, Some(1));
+        firme(&mut m, le(h(9, 58), "A"));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        firme(&mut m, le(h(10, 1), "A"));
+        m.evento(&ev("Stop", "A2", h(10, 2)));
+        firme(&mut m, le(h(10, 3), "A"));
+        assert!(manual_de(&m, 1));
+        // e passar de A para A2 (mesmo timer) também não é sair
+        firme(&mut m, le(h(10, 4), "A2"));
+        assert!(manual_de(&m, 1));
+    }
+    /// M1: o ▶ armado que fecha depois da meia-noite, com a saída antes dela, não atravessa o dia.
+    #[test] fn o_play_armado_nao_atravessa_a_virada() {
+        let mut m = motor();
+        m.cfg.play_para_com_claude = true;
+        m.evento(&ev("UserPromptSubmit", "A", h(23, 50)));
+        nomear(&mut m);
+        m.play(1, h(23, 51));
+        firme(&mut m, outro_programa(h(23, 52)));
+        m.evento(&ev("Stop", "A", h(23, 59) + 58_000));
+        let v = trechos(&m.amostra(&outro_programa(ms_local(2026, 11, 18, 0, 0, F) + 5_000)));
+        assert!(v.contains(&fechou_m(1, h(23, 59) + 58_000, MotivoFim::Terminou)), "{v:?}");
+        assert!(!v.iter().any(|x| matches!(x, Mudanca::Abriu { origem: Origem::Manual, .. })), "{v:?}");
+        assert!(!manual_de(&m, 1));
+    }
+    #[test] fn a_reuniao_e_a_opcao_desligada_nao_param() {
+        let mut m = play_com_claude();
+        m.play_atividade(1, crate::modelo::ATIVIDADE_REUNIAO, h(9, 57));
+        firme(&mut m, outro_programa(h(9, 58)));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        firme(&mut m, outro_programa(h(10, 1)));
+        assert!(manual_de(&m, 1), "a reunião não para com o Claude");
+        let mut m = play_com_claude();
+        m.cfg.play_para_com_claude = false;
+        firme(&mut m, outro_programa(h(9, 58)));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        firme(&mut m, outro_programa(h(10, 1)));
+        assert!(manual_de(&m, 1), "desligada (o padrão), o ▶ é seu");
+        assert!(!ConfigMotor::de(&ConfigApp::default(), F).play_para_com_claude);
+        // M2: desligar a opção com o ▶ armado desarma
+        let mut m = play_com_claude();
+        firme(&mut m, outro_programa(h(9, 58)));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        m.cfg.play_para_com_claude = false;
+        firme(&mut m, outro_programa(h(10, 1)));
+        assert!(manual_de(&m, 1) && m.play_armado.is_empty());
+    }
+    /// A re-revisão (R1): com a decisão pendente ("não sei" depois do fim do turno), a inatividade
+    /// não põe o ▶ na pergunta de "contar": ele fecha no fim do turno, pelo Claude.
+    #[test] fn inatividade_com_o_play_armado_pendente_fecha_no_fim_do_turno() {
+        let mut m = play_com_claude();
+        firme(&mut m, nao_sei(h(9, 58)));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        firme(&mut m, nao_sei(h(10, 1)));
+        let v = m.amostra(&app(h(10, 12), 11 * MIN, None));
+        assert!(trechos(&v).contains(&fechou_m(1, h(10, 0), MotivoFim::Terminou)), "{v:?}");
+        assert!(!v.iter().any(|x| matches!(x, Mudanca::Fechou { origem: Origem::Manual, motivo: MotivoFim::Inatividade, .. })));
+        assert!(m.ausencia.is_none(), "nada para perguntar");
+    }
+    /// A re-revisão (R3): sem a leitura aberta, a janela do app por mais de `NEUTRA_MAX_MS` (2 min) conta como saída
+    /// desde quando você entrou nela.
+    #[test] fn a_janela_do_app_vencida_fecha_desde_quando_entrou() {
+        let mut m = play_com_claude();
+        firme(&mut m, le(h(9, 58), "A"));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        let t = h(10, 0) + 2_000;
+        let mut v = vec![];
+        let mut x = t;
+        while x <= t + NEUTRA_MAX_MS + 10_000 {
+            v.extend(trechos(&m.amostra(&dock(x))));
+            x += S5;
+        }
+        v.extend(trechos(&m.amostra(&dock(t + NEUTRA_MAX_MS + 15_000))));
+        assert!(v.contains(&fechou_m(1, t, MotivoFim::Terminou)), "{v:?}");
+    }
+    /// M3 (o resto): com outra sessão do timer ainda trabalhando, o ▶ espera ela terminar.
+    #[test] fn com_outra_sessao_do_timer_trabalhando_o_play_espera() {
+        let mut m = play_com_claude();
+        m.evento(&EventoHook { cwd: "G:\\A\\x".into(), ..ev("UserPromptSubmit", "A2", h(9, 57)) });
+        nomear(&mut m);
+        firme(&mut m, outro_programa(h(9, 58)));
+        m.evento(&ev("Stop", "A", h(10, 0)));
+        firme(&mut m, outro_programa(h(10, 1)));
+        assert!(manual_de(&m, 1), "A2 ainda trabalha");
+        m.evento(&ev("Stop", "A2", h(10, 5)));
+        firme(&mut m, outro_programa(h(10, 6)));
+        assert!(!manual_de(&m, 1));
     }
 }

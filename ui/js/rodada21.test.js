@@ -75,6 +75,7 @@ test('rodada 21 §1: o menu ⋯ do grupo; com um espaço só, sem "Mover para ou
     ['editar', 'Editar'],
     ['mover', 'Mover para outro espaço…'],
     ['arquivar', 'Arquivar'],
+    ['apagar', 'Apagar…'],
   ]);
   assert.match(htmlDoMenuGrupo(s, casa), /^<div class="menu-ajuda menu-grupo" role="menu" aria-label="Casa"><button type="button" role="menuitem" data-mg="renomear" data-grupo="200">Renomear<\/button><button type="button" role="menuitem" data-mg="editar" data-grupo="200">Editar<\/button><button type="button" role="menuitem" data-mg="mover" data-grupo="200">Mover para outro espaço…<\/button>/);
   // o segundo passo: os outros espaços
@@ -84,7 +85,7 @@ test('rodada 21 §1: o menu ⋯ do grupo; com um espaço só, sem "Mover para ou
   );
   // com um espaço só, a opção some
   const so = umEspaco();
-  assert.deepEqual(itensDoMenuGrupo(so, so.grupos[1]).map((i) => i.id), ['renomear', 'editar', 'arquivar']);
+  assert.deepEqual(itensDoMenuGrupo(so, so.grupos[1]).map((i) => i.id), ['renomear', 'editar', 'arquivar', 'apagar']);
   // o ⋯ fica no cabeçalho do grupo (não no "Sem grupo") e chama o menu
   assert.match(cabecalhoGrupo(casa, AGORA, true), /<button class="ge" data-acao="menu-grupo" data-grupo="200" title="Mais" aria-label="Mais: Casa" aria-haspopup="menu" aria-expanded="false">⋯<\/button>/);
   assert.doesNotMatch(cabecalhoGrupo(s.grupos[2], AGORA, true), /menu-grupo/);
@@ -96,7 +97,7 @@ test('rodada 21 §1: o menu ⋯ do grupo; com um espaço só, sem "Mover para ou
 test('rodada 21 §1: o ⋯ do cartão e o "Mover para…" do timer, por espaço; com um só, só os grupos', () => {
   const s = snapDe();
   const leitura = s.grupos[2].timers[0];
-  assert.deepEqual(ITENS_DO_MENU_TIMER.map((i) => i.rotulo), ['Editar', 'Mover para…']);
+  assert.deepEqual(ITENS_DO_MENU_TIMER.map((i) => i.rotulo), ['Editar', 'Mover para…', 'Arquivar…', 'Apagar…']);
   assert.match(htmlDoMenuTimer(leitura), /data-mt="mover" data-timer="12">Mover para…/);
   assert.match(cartaoTimer(leitura, AGORA, false), /<button class="km" data-acao="menu-timer" data-timer="12" title="Mais"[^>]*>⋯<\/button>/);
   assert.match(fonte('cartoes.js'), /\$\{botaoMenuTimer\(timer\)\}/);
@@ -220,7 +221,7 @@ test('rodada 21 §3: a linha do tempo do Painel recolhe, lembra e desliga', () =
   assert.equal(secaoLinhaDoPainel(s.grupos, 0, AGORA, { mostrar: false, aberta: true }), '');
   assert.match(htmlPainel({ painel_linha: true }), /<input type="checkbox" name="painel_linha" checked ?>/);
   assert.match(htmlPainel({}), /name="painel_linha" checked/, 'ligado por padrão');
-  assert.doesNotMatch(htmlPainel({ painel_linha: false }), /checked/);
+  assert.doesNotMatch(htmlPainel({ painel_linha: false }), /name="painel_linha" checked/);
   // lembrar: o estado fica nos grupos fechados (gravados), pela chave da linha
   assert.equal(CHAVE_LINHA, 'linha-do-tempo');
   const p = fonte('painel.js');

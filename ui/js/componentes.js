@@ -1,7 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 // Peças da interface. Cada função devolve HTML (texto); os cliques são tratados
 // por delegação em quem monta a tela, pelos atributos data-acao / data-timer / data-grupo.
-import { relogio, relogioGrande, curto, horaMin, msDoTimer, contasAcumuladas, hojeDesdeZerar, desdeTexto, totalDoGrupo, rotuloDeLink, rotuloDoDestino, textoDoAjuste, podeEncerrar, tempoPorAtividade, linhasDeAtividade, itensDoMenuZerar, trocarTexto, situacaoNaTela, etiquetaComposta, ehLembrete, SITUACAO, TRABALHO, REUNIAO, minusculas } from './formato.js';
+import { relogio, relogioGrande, curto, horaMin, msDoTimer, contasAcumuladas, hojeDesdeZerar, desdeTexto, desdeDeAntes, hojeDoNumero, totalDoGrupo, rotuloDeLink, rotuloDoDestino, textoDoAjuste, podeEncerrar, tempoPorAtividade, linhasDeAtividade, itensDoMenuZerar, trocarTexto, situacaoNaTela, etiquetaComposta, ehLembrete, SITUACAO, TRABALHO, REUNIAO, minusculas } from './formato.js';
 import { TEXTOS } from './textos.js';
 
 export { msDoTimer, rotuloDeLink, rotuloDoDestino, podeEncerrar };
@@ -48,10 +48,11 @@ export function htmlEtiqueta(e, max = Infinity, sem1 = false) {
   if (!e) return '';
   const p1 = sem1 ? '' : `<span class="s-${e.p1.k}">${esc(e.p1.texto)}</span>`;
   if (!e.p2) return p1;
-  // sem a primeira parte, só a segunda ("+ esperando você") conta no espaço
+  // sem a primeira parte, só a segunda ("· esperando você") conta no espaço
   const tamanho = sem1 ? e.p2.texto.length + 2 : e.texto.length;
   if (tamanho > max) return `${p1}<span class="pt2 s-${e.p2.k}" title="${esc(e.texto)}"></span>`;
-  return `${p1}<span class="mais">${sem1 ? '+ ' : ' + '}</span><span class="s-${e.p2.k}">${esc(e.p2.texto)}</span>`;
+  // spec 009: "▶ ligado · lendo"
+  return `${p1}<span class="mais">${sem1 ? '· ' : ' · '}</span><span class="s-${e.p2.k}">${esc(e.p2.texto)}</span>`;
 }
 
 /**
@@ -192,9 +193,15 @@ export function linhaDivisao(timer, agora, classe = 'divat') {
  * aqui; no painel do timer ela aparece embaixo do relógio grande.
  */
 export function dicaDoTempo(timer, agora, antes = '') {
-  const d = desdeTexto(timer.zerado_em, agora, corteMin);
-  return [antes, d].filter(Boolean).join(', ');
+  // sem zerar, com dias de antes no número: "inclui dias de antes" (re-revisão, I3)
+  const d = desdeTexto(timer.zerado_em, agora, corteMin) || desdeDeAntes(timer, agora, corteMin);
+  // US 003.3: com dias de antes no número, quanto dele é de hoje
+  return [antes, d, hojeDoNumero(timer, agora)].filter(Boolean).join(', ');
 }
+
+/** US 003.3: "desde ontem 09:00" à vista no cartão quando o número traz dias de antes (vazio, some). */
+export const desdeNoCartao = (timer, agora) =>
+  `<div class="desde kd" data-desde-k="${timer.id}">${esc(desdeDeAntes(timer, agora, corteMin))}</div>`;
 
 /** O atributo ` title="desde …"` do número do timer (nada sem zerar). */
 export function tituloDoTempo(timer, agora) {
@@ -322,6 +329,7 @@ export function cartaoTimer(timer, agora, selecionado) {
   <div class="h"><i></i><span class="nm">${esc(timer.nome)}</span>${botaoMenuTimer(timer)}${botaoReuniao(timer, 'pe')}</div>
   ${linhaExtra(timer, agora)}
   <div class="r"><span class="tm mono" data-tempo="${timer.id}"${tituloDoTempo(timer, agora)}>${relogio(ms)}</span><span class="bts">${botaoEncerrar(timer, 'pe')}${botaoPlay(timer, 'pl')}</span></div>
+  ${desdeNoCartao(timer, agora)}
 </div>`;
 }
 

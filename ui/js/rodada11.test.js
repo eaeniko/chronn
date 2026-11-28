@@ -82,7 +82,7 @@ test('"desde hoje/ontem" segue o dia de trabalho (o corte), não o calendário',
   // o corte do snapshot chega à dica dos cartões e do dock
   usarCorte(C);
   const t = cliente_a({ zerado_em: local(19, 1, 30) });
-  assert.match(cartaoTimer(t, local(19, 10, 0), false), /title="desde ontem 01:30"/);
+  assert.match(cartaoTimer(t, local(19, 10, 0), false), /title="desde ontem 01:30, [^"]+ hoje"/);
   const [d] = timersParaDock({ agora: local(19, 10, 0), config: { corte_min: C }, grupos: [{ id: 1, timers: [t] }] }, local(19, 10, 0));
   assert.equal(d.desde, 'desde ontem 01:30');
   usarCorte(0);
@@ -147,19 +147,22 @@ test('a soma do grupo no período e o tempo real na dica', () => {
   };
   const s = cliente_a();
   // soma: Cliente A 6h + Flow 1h; tempo real: 3h 30min antes + hoje a união de 9:00 às 11:00
-  assert.deepEqual(totalDoGrupo([s, flow], AGORA, 3 * H + 30 * M), { texto: '7h 00min', dica: 'tempo real: 5h 30min' });
+  // spec 003: "Os dois" (o padrão), a soma e o real ao lado quando é diferente
+  assert.deepEqual(totalDoGrupo([s, flow], AGORA, 3 * H + 30 * M), { texto: '7h 00min · 5h 30min real', dica: 'a lançar: 7h 00min · tempo real: 5h 30min · 1h 30min em paralelo' });
   // o tempo real de hoje conta cada timer desde o zerar dele: Cliente A zerado às 10:30 deixa 9:30–11:00
   const z = cliente_a({ zerado_em: local(18, 10, 30), acumulado_antes: [] });
-  assert.deepEqual(totalDoGrupo([z, flow], AGORA), { texto: '1h 30min', dica: 'tempo real: 1h 30min' });
+  assert.deepEqual(totalDoGrupo([z, flow], AGORA), { texto: '1h 30min', dica: 'a lançar: 1h 30min · tempo real: 1h 30min' });
   // o cabeçalho usa o `real_antes_ms` do grupo
   const g = { id: 1, nome: 'Empresa', cor: '#111', timers: [s, flow], real_antes_ms: 3 * H + 30 * M };
-  assert.match(cabecalhoGrupo(g, AGORA, true), /title="tempo real: 5h 30min">7h 00min</);
+  assert.match(cabecalhoGrupo(g, AGORA, true), /title="a lançar: 7h 00min · tempo real: 5h 30min · 1h 30min em paralelo">7h 00min · 5h 30min real</);
 });
 
 test('"desde …" no painel do timer, na dica dos cartões e do dock', () => {
   const t = cliente_a();
   assert.match(relogioFoco(t, AGORA), /<div class="clk mono" data-relogio="7">06:00<span>:00<\/span><\/div>\n<div class="desde" data-desde="7">desde ontem 14:20<\/div>/);
-  assert.match(cartaoTimer(t, AGORA, false), /<span class="tm mono" data-tempo="7" title="desde ontem 14:20">6:00:00<\/span>/);
+  assert.match(cartaoTimer(t, AGORA, false), /<span class="tm mono" data-tempo="7" title="desde ontem 14:20, [^"]+ hoje">6:00:00<\/span>/);
+  // US 003.3: o "desde ontem" à vista no cartão, com dias de antes no número
+  assert.match(cartaoTimer(t, AGORA, false), /<div class="desde kd" data-desde-k="7">desde ontem 14:20<\/div>/);
   const [d] = timersParaDock({ agora: AGORA, grupos: [{ id: 1, timers: [t] }] }, AGORA);
   assert.deepEqual([d.ms, d.desde], [6 * H, 'desde ontem 14:20']);
   // sem zerar: sem a etiqueta nem a dica

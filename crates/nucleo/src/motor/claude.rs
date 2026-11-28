@@ -172,7 +172,7 @@ impl Motor {
     }
 
     /// Fecha os abertos da sessao (so os do Claude, ou todos).
-    fn fechar_sessao(&mut self, sessao_id: &str, fim: Ms, motivo: MotivoFim, so_claude: bool) -> Vec<Mudanca> {
+    pub(super) fn fechar_sessao(&mut self, sessao_id: &str, fim: Ms, motivo: MotivoFim, so_claude: bool) -> Vec<Mudanca> {
         self.fechar_se(fim, motivo, |t| {
             t.sessao_id.as_deref() == Some(sessao_id) && (!so_claude || t.origem == Origem::Claude)
         })
@@ -189,7 +189,8 @@ impl Motor {
         out.extend(self.corte_do_dia(t));
 
         if !self.sessoes.contains_key(&ev.sessao) {
-            let timer_id = regra_para(&self.regras_pasta, &ev.cwd);
+            // a regra de um timer escondido não vale (spec 004)
+            let timer_id = self.regra_viva(&ev.cwd);
             self.sessoes.insert(
                 ev.sessao.clone(),
                 Sessao {
@@ -210,6 +211,11 @@ impl Motor {
             );
         } else if t < self.sessoes[&ev.sessao].ultimo_evento {
             return out;
+        }
+        // ligada a um timer escondido (spec 004; o `esconder` já soltou, isto é a defesa): fica sem
+        // timer, e a próxima atividade pergunta
+        if self.escondido(self.sessoes[&ev.sessao].timer_id) {
+            out.extend(self.soltar_do_escondido(&ev.sessao, t));
         }
 
         // A conversa que ia passar a ser lida (troca suave) teve evento: a leitura dela, se valer,
@@ -259,6 +265,10 @@ impl Motor {
                 // Escrever na sessao que voce lia encerra a leitura; em outra sessao, nao.
                 out.extend(self.fechar_leitura_de(&ev.sessao, t, MotivoFim::NovaMensagem));
                 out.extend(self.abrir_claude(&ev.sessao, timer, t));
+                // um turno novo: o ▶ armado do timer não para mais (spec 009)
+                if let Some(t) = timer {
+                    self.play_armado.remove(&t);
+                }
             }
             "PostToolUse" => {
                 // Pausada ou com o timer encerrado: so a proxima mensagem religa.
@@ -267,6 +277,10 @@ impl Motor {
                     // Retomou sem novo prompt (ex.: permissao respondida): a leitura acaba aqui.
                     out.extend(self.fechar_leitura_de(&ev.sessao, t, MotivoFim::NovaMensagem));
                     out.extend(self.abrir_claude(&ev.sessao, timer, t));
+                    // o turno continua: o ▶ armado pelo `Notification` não para mais (spec 009)
+                    if let Some(timer) = timer {
+                        self.play_armado.remove(&timer);
+                    }
                 }
             }
             "Stop" | "Notification" => {
@@ -274,11 +288,15 @@ impl Motor {
                     s.estado = EstadoSessao::EsperandoVoce;
                     s.terminou_em = Some(t);
                     out.extend(self.fechar_sessao(&ev.sessao, t, MotivoFim::Terminou, true));
+                    // o ▶ que para com o Claude (spec 009)
+                    out.extend(self.play_no_fim_do_turno(&ev.sessao, t));
                 }
             }
             "SessionEnd" => {
                 s.estado = EstadoSessao::Parada;
                 out.extend(self.fechar_sessao(&ev.sessao, t, MotivoFim::SessaoParou, false));
+                // spec 002: depois do `/exit`, o tempo naquela janela não é mais desta sessão
+                self.soltar_janela(&ev.sessao);
             }
             // SessionStart so atualiza ultimo_evento/transcript: nao muda o estado.
             _ => {}
@@ -290,18 +308,7 @@ impl Motor {
             match (s.timer_id, s.ligacao) {
                 // sem timer: a pergunta. Também a desligada à mão (o ✎ ou o X da sessão), que volta a
                 // perguntar na próxima atividade (rodada 15); o "Não contar" já está em `perguntadas`.
-                (None, None | Some(Ligacao::Mao)) => {
-                    let raiz = raiz_do_projeto(&ev.cwd);
-                    // a pasta-mae e conferida aqui, uma vez (o disco so nas subpastas diretas); sem
-                    // pasta (o Chat), nada
-                    let pasta_mae = !raiz.trim().is_empty() && crate::pastas::pasta_mae(raiz, &self.regras_pasta);
-                    out.push(self.nova_pergunta(Pergunta::SessaoNova {
-                        sessao_id: ev.sessao.clone(),
-                        cwd: ev.cwd.clone(),
-                        sugestao: sugestao_de_pasta(raiz),
-                        pasta_mae,
-                    }))
-                }
+                (None, None | Some(Ligacao::Mao)) => out.push(self.pergunta_sessao_nova(&ev.sessao, &ev.cwd)),
                 // a conversa nova numa pasta com regra conta no timer dela e pergunta se está certo
                 // (rodada 15); com "Usar a regra direto", só o aviso
                 (Some(timer_id), Some(Ligacao::Regra)) if self.cfg.confirmar_conversa_nova => {
@@ -342,6 +349,8 @@ impl Motor {
         s.terminou_em = Some(em);
         s.ultimo_evento = em;
         out.push(Mudanca::Sessao(s.clone()));
+        // o ▶ que para com o Claude (spec 009)
+        out.extend(self.play_no_fim_do_turno(sessao_id, em));
         out
     }
 
@@ -378,6 +387,21 @@ impl Motor {
         out
     }
 
+    /// A pergunta "Em qual timer contar?" da sessão sem timer, na pasta `cwd`.
+    pub(super) fn pergunta_sessao_nova(&mut self, sessao_id: &str, cwd: &str) -> Mudanca {
+        let raiz = raiz_do_projeto(cwd);
+        // a pasta-mae e conferida aqui, uma vez (o disco so nas subpastas diretas); sem pasta (o
+        // Chat), nada
+        // só as regras que valem (spec 004: a de um escondido fica inerte)
+        let pasta_mae = !raiz.trim().is_empty() && crate::pastas::pasta_mae(raiz, &self.regras_vivas());
+        self.nova_pergunta(Pergunta::SessaoNova {
+            sessao_id: sessao_id.to_string(),
+            cwd: cwd.to_string(),
+            sugestao: sugestao_de_pasta(raiz),
+            pasta_mae,
+        })
+    }
+
     /// Liga a sessao ao timer a mao (pela pergunta, pelo "Ligar", ao mover): vence a regra de
     /// pasta e passa para a conversa continuada. "Desde o inicio" move todos os trechos dela,
     /// menos os de antes de um "Desligar" (rodada 15: esses ficam onde estavam).
@@ -394,6 +418,10 @@ impl Motor {
     }
 
     fn ligar_com(&mut self, sessao_id: &str, timer_id: i64, mover: Mover, agora: Ms, como: Ligacao) -> Vec<Mudanca> {
+        // nunca a um escondido (spec 004)
+        if self.escondido(Some(timer_id)) {
+            return vec![];
+        }
         let mut out = self.corte_do_dia(agora);
         let dia_ini = inicio_do_dia(self.dia, self.cfg.corte_min, self.cfg.fuso_min);
         let Some(s) = self.sessoes.get_mut(sessao_id) else {
@@ -494,6 +522,7 @@ impl Motor {
                     && o.criada_em <= s.criada_em
                     && o.ultimo_evento >= agora - HERANCA_MS
                     && o.timer_id.is_some_and(&vale)
+                    && !self.escondido(o.timer_id)
                     && chave_de_nome(o.nome.as_deref()).as_deref() == Some(nome.as_str())
                     && chave_de_pasta(&o.cwd) == pasta
             })

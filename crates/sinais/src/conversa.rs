@@ -30,6 +30,10 @@ pub const CLASSE_DO_ITEM: &str = "w-full shrink-0 border-none";
 pub const LIMITE_CONSULTA: Duration = Duration::from_millis(300);
 /// Consulta pendente há mais que isto: a thread travou; o leitor abandona ela e começa outra.
 pub const LIMITE_TRAVADA: Duration = Duration::from_secs(30);
+/// Spec 001: uma consulta que passa do limite (ou ainda pendente) devolve a última conversa lida
+/// da mesma janela por até isto, em vez de "não sei" (numa conversa longa, a busca inteira pode
+/// passar dos 300 ms de vez em quando, e a leitura caía).
+pub const SEGURAR_ULTIMA: Duration = Duration::from_secs(15);
 
 /// Um `Document` da janela e se o elemento com foco está dentro dele.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -293,7 +297,9 @@ pub fn sinais_do_chat(pecas: &[PecaDoChat]) -> SinaisChat {
 }
 
 /// Índice (em `docs`) da conversa aberta: a única conversa à vista; com várias (vista dividida),
-/// a que contém o elemento com foco; sem foco dentro de nenhuma, nenhuma.
+/// a que contém o elemento com foco; sem foco dentro de nenhuma, nenhuma. Com duas que contêm o
+/// foco (um documento dentro do outro), a mais interna: a busca devolve a árvore em pré-ordem, e
+/// a de dentro vem depois da que a contém (spec 001).
 fn indice_da_conversa(docs: &[Documento]) -> Option<usize> {
     let conversas: Vec<(usize, bool)> = docs
         .iter()
@@ -304,7 +310,7 @@ fn indice_da_conversa(docs: &[Documento]) -> Option<usize> {
     match conversas.as_slice() {
         [] => None,
         [(i, _)] => Some(*i),
-        varias => varias.iter().find(|(_, foco)| *foco).map(|(i, _)| *i),
+        varias => varias.iter().rev().find(|(_, foco)| *foco).map(|(i, _)| *i),
     }
 }
 
@@ -369,20 +375,28 @@ struct Canais<T> {
 /// consulta atrasada não volta, as próximas amostras nem perguntam (e ficam sem conversa). Se ela
 /// não volta em `limite_travada`, a thread é abandonada e outra começa (sem reiniciar o app). No
 /// máximo uma abandonada fica viva: enquanto ela não volta, não nasce outra e a amostra é "não sei".
+/// Atrasada ou pendente, a amostra devolve a última conversa lida da mesma janela (no mesmo estado
+/// de foco) por até `segurar` (spec 001); uma consulta que respondeu "sem conversa" não segura nada.
 pub struct LeitorConversa<T = ConversaLida> {
     iniciar: Box<dyn Fn() -> Option<Canais<T>> + Send>,
     canais: Option<Canais<T>>,
     abandonada: Option<JoinHandle<()>>,
     prox: u64,
-    pendente: Option<(u64, Instant)>,
+    /// A consulta atrasada: o id, desde quando, a janela e se estava em foco.
+    pendente: Option<(u64, Instant, isize, bool)>,
     pub limite_travada: Duration,
     /// Quantas vezes a thread da consulta foi trocada (travou ou caiu).
     pub recomecos: u32,
-    /// Quantas consultas passaram do limite (viraram "não sei").
+    /// Quantas consultas passaram do limite.
     pub atrasadas: u64,
+    /// A última resposta com conversa: (janela, em foco, a conversa, quando).
+    ultima: Option<(isize, bool, T, Instant)>,
+    pub segurar: Duration,
+    /// Quantas amostras devolveram a última conversa no lugar de uma consulta lenta.
+    pub seguradas: u64,
 }
 
-impl<T: Send + 'static> LeitorConversa<T> {
+impl<T: Clone + Send + 'static> LeitorConversa<T> {
     /// `fabrica` roda na thread da consulta (ex.: inicia o COM e o cliente de UI Automation)
     /// e devolve a função que acha a conversa aberta na janela `hwnd`. Uma thread nova chama de novo.
     pub fn com<F, C>(fabrica: F) -> LeitorConversa<T>
@@ -418,7 +432,21 @@ impl<T: Send + 'static> LeitorConversa<T> {
             limite_travada: LIMITE_TRAVADA,
             recomecos: 0,
             atrasadas: 0,
+            ultima: None,
+            segurar: SEGURAR_ULTIMA,
+            seguradas: 0,
         }
+    }
+
+    /// A última conversa lida desta janela, no mesmo estado de foco, se é de até `segurar` atrás.
+    fn segurada(&mut self, hwnd: isize, em_foco: bool) -> Option<T> {
+        let (h, f, v, quando) = self.ultima.as_ref()?;
+        if *h != hwnd || *f != em_foco || quando.elapsed() > self.segurar {
+            return None;
+        }
+        let v = v.clone();
+        self.seguradas += 1;
+        Some(v)
     }
 
     /// Troca a thread da consulta. A antiga fica como a abandonada: se um dia voltar, sai sozinha
@@ -440,18 +468,21 @@ impl<T: Send + 'static> LeitorConversa<T> {
     /// Conversa aberta na janela, ou `None` (não reconhecida, falhou ou passou do `limite`).
     /// `em_foco`: a janela é a que tem o foco (só então o elemento com foco é consultado).
     pub fn ler(&mut self, hwnd: isize, em_foco: bool, limite: Duration) -> Option<T> {
-        if let Some((p, desde)) = self.pendente {
-            // resposta atrasada de uma amostra anterior: só libera a thread
+        if let Some((p, desde, h, f)) = self.pendente {
+            // resposta atrasada de uma amostra anterior: libera a thread e passa a ser a última
+            // lida daquela janela (revisão I2: "sem conversa" apaga a guardada, e outra conversa
+            // toma o lugar dela)
             if let Some(c) = &self.canais {
-                while let Ok((id, _)) = c.respostas.try_recv() {
+                while let Ok((id, r)) = c.respostas.try_recv() {
                     if id == p {
                         self.pendente = None;
+                        self.ultima = r.map(|v| (h, f, v, Instant::now()));
                     }
                 }
             }
             if self.pendente.is_some() {
                 if desde.elapsed() < self.limite_travada || self.abandonada_viva() {
-                    return None;
+                    return self.segurada(hwnd, em_foco);
                 }
                 self.recomecar();
             }
@@ -467,12 +498,15 @@ impl<T: Send + 'static> LeitorConversa<T> {
             return None;
         }
         match c.respostas.recv_timeout(limite) {
-            Ok((rid, r)) if rid == id => r,
+            Ok((rid, r)) if rid == id => {
+                self.ultima = r.as_ref().map(|v| (hwnd, em_foco, v.clone(), Instant::now()));
+                r
+            }
             Ok(_) => None,
             Err(RecvTimeoutError::Timeout) => {
-                self.pendente = Some((id, Instant::now()));
+                self.pendente = Some((id, Instant::now(), hwnd, em_foco));
                 self.atrasadas += 1;
-                None
+                self.segurada(hwnd, em_foco)
             }
             Err(RecvTimeoutError::Disconnected) => {
                 self.canais = None;
@@ -863,6 +897,126 @@ mod tests {
         std::thread::sleep(Duration::from_millis(25));
         assert_eq!(l.ler(1, true, curto), None);
         assert_eq!(l.recomecos, 2);
+        drop(tx);
+    }
+
+    #[test]
+    fn documento_dentro_de_documento_vale_o_mais_interno() {
+        // a busca em pré-ordem: a mãe (que contém o foco) antes da filha (que também contém)
+        let docs = [doc("", true), doc("Mãe - Claude Code", true), doc("Filha - Claude Code", true)];
+        assert_eq!(conversa_aberta(&docs), Some("Filha".into()));
+        // a filha sem o foco: a mãe
+        let docs = [doc("Mãe - Claude Code", true), doc("Filha - Claude Code", false)];
+        assert_eq!(conversa_aberta(&docs), Some("Mãe".into()));
+    }
+
+    #[test]
+    fn foco_num_painel_da_conversa_conta_para_ela() {
+        // medido em 26/11: o `Document` da conversa é a página inteira (RootWebArea, com o título
+        // da sessão à vista); o terminal, o navegador e a prévia do lado ficam dentro dele
+        let a = |doc: bool, nome: &str| (doc, nome.to_string(), String::new());
+        let terminal = [a(false, ""), a(false, ""), a(true, "Saída do terminal"), a(false, ""), a(true, "Sessão aninhada - Claude Code")];
+        assert_eq!(conversa_acima(&terminal), Some((None, "Sessão aninhada")));
+        let previa = [a(true, "notas.md"), a(false, ""), a(true, "Plano - Claude Code")];
+        assert_eq!(conversa_acima(&previa), Some((None, "Plano")));
+    }
+
+    #[test]
+    fn consulta_lenta_segura_a_ultima_conversa_por_pouco_tempo() {
+        // a 1ª consulta responde; as seguintes esperam uma liberação
+        let (tx, rx) = mpsc::channel::<()>();
+        let rx = Arc::new(std::sync::Mutex::new(rx));
+        let n = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let n2 = Arc::clone(&n);
+        let mut l = LeitorConversa::com(move || {
+            let rx = Arc::clone(&rx);
+            let n = Arc::clone(&n2);
+            move |_: isize, _: bool| {
+                if n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+                    let _ = rx.lock().unwrap().recv();
+                }
+                Some("A".to_string())
+            }
+        });
+        l.segurar = Duration::from_millis(300);
+        let curto = Duration::from_millis(10);
+        assert_eq!(l.ler(1, true, Duration::from_secs(5)), Some("A".into()));
+        // passou do limite: a última da mesma janela
+        assert_eq!(l.ler(1, true, curto), Some("A".into()));
+        // ainda pendente: também
+        assert_eq!(l.ler(1, true, curto), Some("A".into()));
+        // outra janela ou outro estado de foco: nada
+        assert_eq!(l.ler(2, true, curto), None);
+        assert_eq!(l.ler(1, false, curto), None);
+        assert_eq!(l.seguradas, 2);
+        // passado o tempo de segurar: "não sei"
+        std::thread::sleep(Duration::from_millis(350));
+        assert_eq!(l.ler(1, true, curto), None);
+        drop(tx);
+    }
+
+    #[test]
+    fn a_resposta_atrasada_troca_a_guardada() {
+        // revisão I2: a 1ª responde "A"; a 2ª atrasa e diz "sem conversa"; a 3ª atrasa de novo
+        let (tx, rx) = mpsc::channel::<()>();
+        let rx = Arc::new(std::sync::Mutex::new(rx));
+        let n = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let n2 = Arc::clone(&n);
+        let mut l = LeitorConversa::com(move || {
+            let rx = Arc::clone(&rx);
+            let n = Arc::clone(&n2);
+            move |_: isize, _: bool| match n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => Some("A".to_string()),
+                1 => {
+                    let _ = rx.lock().unwrap().recv();
+                    None
+                }
+                _ => {
+                    let _ = rx.lock().unwrap().recv();
+                    Some("B".to_string())
+                }
+            }
+        });
+        let curto = Duration::from_millis(10);
+        assert_eq!(l.ler(1, true, Duration::from_secs(5)), Some("A".into()));
+        assert_eq!(l.ler(1, true, curto), Some("A".into()), "atrasou: segura a A");
+        // a atrasada volta com "sem conversa"; a próxima consulta atrasa: nada de A
+        tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(l.ler(1, true, curto), None);
+        // a que atrasou volta com B: a próxima lenta segura a B
+        tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let r = l.ler(1, true, curto);
+        assert!(r == Some("B".into()) || r.is_none(), "{r:?}");
+        assert_ne!(r, Some("A".into()));
+        drop(tx);
+    }
+
+    #[test]
+    fn sem_conversa_na_resposta_nao_segura_nada() {
+        let n = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let n2 = Arc::clone(&n);
+        let (tx, rx) = mpsc::channel::<()>();
+        let rx = Arc::new(std::sync::Mutex::new(rx));
+        let mut l = LeitorConversa::com(move || {
+            let n = Arc::clone(&n2);
+            let rx = Arc::clone(&rx);
+            move |_: isize, _: bool| match n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                0 => Some("A".to_string()),
+                1 => None,
+                _ => {
+                    let _ = rx.lock().unwrap().recv();
+                    Some("A".to_string())
+                }
+            }
+        });
+        let curto = Duration::from_millis(10);
+        assert_eq!(l.ler(1, true, Duration::from_secs(5)), Some("A".into()));
+        // a página trocou e a consulta disse "sem conversa": a próxima lenta não devolve a velha
+        assert_eq!(l.ler(1, true, Duration::from_secs(5)), None);
+        assert_eq!(l.ler(1, true, curto), None);
+        assert_eq!(l.seguradas, 0);
         drop(tx);
     }
 

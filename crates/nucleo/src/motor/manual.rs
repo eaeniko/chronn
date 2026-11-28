@@ -1,8 +1,8 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 use super::chat::SinaisDoChat;
-use super::leitura::Conversa;
+use super::leitura::{Conversa, Onde, TROCA_SUAVE_MS};
 use super::Motor;
-use crate::modelo::{EstadoSessao, MotivoFim, Mudanca, Origem, Pergunta, TrechoAberto};
+use crate::modelo::{EstadoSessao, MotivoFim, Mudanca, Origem, Pergunta, TrechoAberto, ATIVIDADE_REUNIAO};
 use crate::tempo::Ms;
 
 /// O "Desfazer" do ■ vale por isto (a faixa da tela fica 10 s).
@@ -54,12 +54,19 @@ impl Motor {
     /// O play manual numa atividade (👥 e a reuniao manual; o ▶ e a padrao). O manual e um por vez
     /// por timer: com o de outra atividade aberto, ele fecha e o novo abre no mesmo instante (e o
     /// substituido fica guardado para voltar em `parar_atividade`). O Claude trabalhando e a
-    /// leitura do timer seguem: podem se sobrepor ao manual.
+    /// leitura do timer seguem: podem se sobrepor ao manual. Com um ▶ por vez (spec 003), o play
+    /// manual dos outros timers fecha no mesmo instante (`pausar_outros_manuais`).
     pub fn play_atividade(&mut self, timer_id: i64, atividade_id: i64, agora: Ms) -> Vec<Mudanca> {
+        // o escondido (spec 004) nunca recebe tempo
+        if self.escondido(Some(timer_id)) {
+            return vec![];
+        }
         let mut out = self.corte_do_dia(agora);
         self.tirar_da_ausencia(timer_id);
         out.extend(self.tirar_das_perguntas(Some(timer_id)));
         out.extend(self.desencerrar(Some(timer_id)));
+        out.extend(self.pausar_outros_manuais(timer_id, agora));
+        self.play_armado.remove(&timer_id);
         match self.manual_aberto(timer_id).map(|t| t.atividade_id) {
             Some(a) if a == atividade_id => return out,
             Some(antes) => {
@@ -158,6 +165,13 @@ impl Motor {
         for t in d.fechados {
             match (t.origem, t.sessao_id) {
                 // na atividade em que estava (a reuniao volta como reuniao)
+                // um ▶ por vez (spec 003): com o ▶ noutro timer desde o ■, este não volta
+                (Origem::Manual, _)
+                    if self.cfg.um_play_por_vez
+                        && self.abertos.iter().any(|a| a.origem == Origem::Manual && a.timer_id != Some(timer_id)) =>
+                {
+                    self.pausado_desde.insert(timer_id, d.em);
+                }
                 (Origem::Manual, _) => out.extend(self.abrir_manual(timer_id, t.atividade_id, d.em)),
                 (Origem::Claude, Some(sessao)) => {
                     let trabalha = self
@@ -177,6 +191,7 @@ impl Motor {
 
     pub fn pausar(&mut self, timer_id: i64, agora: Ms) -> Vec<Mudanca> {
         let mut out = self.corte_do_dia(agora);
+        self.play_armado.remove(&timer_id);
         // o ⏸ do play manual: o pausado fica no dock recolhido a partir do clique
         if self.manual_aberto(timer_id).is_some() {
             self.pausado_desde.insert(timer_id, agora);
@@ -184,6 +199,144 @@ impl Motor {
         out.extend(self.pausar_trechos(timer_id, None, agora));
         self.tirar_da_ausencia(timer_id);
         out.extend(self.tirar_das_perguntas(Some(timer_id)));
+        out
+    }
+
+    /// Um ▶ por vez (spec 003, `um_play_por_vez`): fecha em `agora` o play manual dos outros
+    /// timers, de qualquer atividade (a reunião também: é o mesmo cronômetro seu). Eles ficam
+    /// pausados no dock e saem das perguntas de "contar"; o Claude e a leitura deles seguem, sem as
+    /// travas do ⏸.
+    pub(crate) fn pausar_outros_manuais(&mut self, timer_id: i64, agora: Ms) -> Vec<Mudanca> {
+        if !self.cfg.um_play_por_vez {
+            return vec![];
+        }
+        let outro = |t: &TrechoAberto| t.origem == Origem::Manual && t.timer_id.is_some_and(|id| id != timer_id);
+        let ids: Vec<i64> = self.abertos.iter().filter(|t| outro(t)).filter_map(|t| t.timer_id).collect();
+        if ids.is_empty() {
+            return vec![];
+        }
+        let mut out = self.fechar_se(agora, MotivoFim::Pausa, outro);
+        for id in ids {
+            self.pausado_desde.insert(id, agora);
+            self.voltar_para.remove(&id);
+            self.play_armado.remove(&id);
+            self.tirar_da_ausencia(id);
+            out.extend(self.tirar_das_perguntas(Some(id)));
+        }
+        out
+    }
+
+    /// O fim do turno de `sessao_id` em `em` (spec 009, `play_para_com_claude`; o `Stop`, o
+    /// `Notification` ou o stop na conversa): o ▶ do timer dela (não a reunião) fica armado e para
+    /// quando você sai das conversas do timer (`play_armado_na_amostra`). Com uma conversa do
+    /// timer aberta agora, você está nela; sem (ou sem saber: no terminal, a janela diz "não sei"
+    /// enquanto o Claude trabalha), a saída conta desde o fim do turno e a amostra seguinte decide:
+    /// de volta numa conversa do timer, segue; fora dela, o ▶ fecha no instante do fim.
+    pub(crate) fn play_no_fim_do_turno(&mut self, sessao_id: &str, em: Ms) -> Vec<Mudanca> {
+        if !self.cfg.play_para_com_claude {
+            return vec![];
+        }
+        let Some(timer_id) = self.sessoes.get(sessao_id).and_then(|s| s.timer_id) else { return vec![] };
+        if self.manual_aberto(timer_id).is_none_or(|t| t.atividade_id == ATIVIDADE_REUNIAO) {
+            return vec![];
+        }
+        // já armado (outra sessão do mesmo timer): fica como está
+        if self.play_armado.contains_key(&timer_id) {
+            return vec![];
+        }
+        let saiu = (!self.no_timer_agora(timer_id)).then_some(em);
+        self.play_armado.insert(timer_id, saiu);
+        vec![]
+    }
+
+    /// Você está numa conversa do timer: lendo uma sessão dele, com a conversa aberta de uma sessão
+    /// dele, ou com a troca suave entrando numa.
+    fn no_timer_agora(&self, timer_id: i64) -> bool {
+        let do_timer = |id: &str| self.sessoes.get(id).is_some_and(|s| s.timer_id == Some(timer_id));
+        self.lendo_agora().is_some_and(do_timer)
+            || self.conversa_aberta.as_deref().is_some_and(do_timer)
+            || self.troca.as_ref().and_then(|tr| tr.alvo.as_deref()).is_some_and(do_timer)
+    }
+
+    /// Fecha em `fim` o ▶ do timer pelo fim do Claude (motivo `Terminou`): fica pausado no dock.
+    /// Antes, a virada do dia que caiu antes de `fim` (o ▶ não atravessa o dia).
+    fn fechar_play_pelo_claude(&mut self, timer_id: i64, fim: Ms) -> Vec<Mudanca> {
+        self.play_armado.remove(&timer_id);
+        self.voltar_para.remove(&timer_id);
+        let mut out = self.corte_do_dia(fim);
+        let fechou = self.fechar_se(fim, MotivoFim::Terminou, |t| t.origem == Origem::Manual && t.timer_id == Some(timer_id));
+        if !fechou.is_empty() {
+            self.pausado_desde.insert(timer_id, fim);
+        }
+        out.extend(fechou);
+        out
+    }
+
+    /// Na amostra, depois da leitura (spec 009): o ▶ armado fecha quando você saiu das conversas do
+    /// timer, com a troca suave. Só as amostras que dizem onde você está contam (`conclusiva`: a
+    /// janela do app e o "não sei" não mudam nada).
+    /// - A leitura de uma sessão do timer fechou nesta amostra (a saída da troca suave já
+    ///   confirmada) e você não está noutra do timer: fecha no instante dela. A leitura que fecha por
+    ///   falta de uso (`SemUso`: lendo parado) não é saída.
+    /// - Fora das conversas do timer sem a leitura: a saída fica anotada e, mantida por
+    ///   `TROCA_SUAVE_MS`, o ▶ fecha no instante dela; de volta antes, nada.
+    /// Uma mensagem nova (ou o turno que continua) numa sessão do timer desarma (`evento`).
+    fn play_armado_na_amostra(&mut self, fechadas: &[Mudanca], conclusiva: bool, saida: Ms, agora: Ms) -> Vec<Mudanca> {
+        if !self.cfg.play_para_com_claude {
+            self.play_armado.clear();
+            return vec![];
+        }
+        let mut out = vec![];
+        for (timer_id, saiu) in self.play_armado.clone() {
+            if self.manual_aberto(timer_id).is_none_or(|t| t.atividade_id == ATIVIDADE_REUNIAO) {
+                self.play_armado.remove(&timer_id);
+                continue;
+            }
+            // outra sessão do timer ainda trabalha: o Claude não terminou neste timer (M3)
+            let trabalha = self.sessoes.values().any(|s| s.timer_id == Some(timer_id) && s.estado == EstadoSessao::Trabalhando);
+            if !conclusiva || trabalha {
+                continue;
+            }
+            if self.no_timer_agora(timer_id) {
+                self.play_armado.insert(timer_id, None);
+                continue;
+            }
+            let leitura_fechou = fechadas.iter().find_map(|m| match m {
+                Mudanca::Fechou { timer_id: Some(t), origem: Origem::Leitura, fim, motivo, .. }
+                    if *t == timer_id && !matches!(motivo, MotivoFim::CorteDoDia | MotivoFim::SemUso) =>
+                {
+                    Some(*fim)
+                }
+                _ => None,
+            });
+            if let Some(f) = leitura_fechou {
+                out.extend(self.fechar_play_pelo_claude(timer_id, f));
+                continue;
+            }
+            // a janela do app há mais de `NEUTRA_MAX_MS`: a saída foi quando você entrou nela (R3)
+            let desde = saiu.unwrap_or(saida);
+            if agora - desde >= TROCA_SUAVE_MS {
+                out.extend(self.fechar_play_pelo_claude(timer_id, desde));
+            } else {
+                self.play_armado.insert(timer_id, Some(desde));
+            }
+        }
+        out
+    }
+
+    /// A re-revisão (R1): antes de a inatividade ou o sono fecharem os manuais em `ate`, o ▶ armado
+    /// com a saída anotada até lá (fora das conversas do timer, ou sem saber, desde o fim do turno)
+    /// fecha no instante dela, como o fim do Claude, e não entra na pergunta de "contar".
+    fn fechar_armados_fora(&mut self, ate: Ms) -> Vec<Mudanca> {
+        if !self.cfg.play_para_com_claude {
+            return vec![];
+        }
+        let fora: Vec<(i64, Ms)> =
+            self.play_armado.iter().filter_map(|(t, s)| s.filter(|d| *d <= ate).map(|d| (*t, d))).collect();
+        let mut out = vec![];
+        for (timer_id, desde) in fora {
+            out.extend(self.fechar_play_pelo_claude(timer_id, desde));
+        }
         out
     }
 
@@ -274,7 +427,7 @@ impl Motor {
         out
     }
 
-    fn tirar_da_ausencia(&mut self, timer_id: i64) {
+    pub(super) fn tirar_da_ausencia(&mut self, timer_id: i64) {
         if let Some((_, ids, _)) = &mut self.ausencia {
             ids.retain(|i| *i != timer_id);
             if ids.is_empty() {
@@ -285,7 +438,7 @@ impl Motor {
 
     /// Mexer no timer (play ou pause) responde por ele: sai das perguntas de "contar o tempo fora"
     /// (volta da inatividade, app fechado). `None` tira todos. Pergunta que fica vazia e resolvida.
-    fn tirar_das_perguntas(&mut self, timer_id: Option<i64>) -> Vec<Mudanca> {
+    pub(super) fn tirar_das_perguntas(&mut self, timer_id: Option<i64>) -> Vec<Mudanca> {
         let mut out = vec![];
         self.perguntas.retain_mut(|(id, p)| match p {
             Pergunta::VoltaInatividade { timer_ids, .. } | Pergunta::AppFechado { timer_ids, .. } => {
@@ -351,6 +504,8 @@ impl Motor {
         if self.ausencia.is_none() && !a.reuniao_ativa {
             if let Some(p) = anterior {
                 if ultimo_uso - p > inat {
+                    // o ▶ armado com a saída anotada fecha nela, e não vira tempo fora (spec 009)
+                    out.extend(self.fechar_armados_fora(p));
                     out.extend(self.pausar_manuais_por_inatividade(p, true));
                 }
             }
@@ -358,6 +513,7 @@ impl Motor {
         // Inatividade comum.
         if a.ocioso_ms >= inat {
             if self.ausencia.is_none() && !a.reuniao_ativa {
+                out.extend(self.fechar_armados_fora(ultimo_uso));
                 out.extend(self.pausar_manuais_por_inatividade(ultimo_uso, false));
             }
         } else if let Some((de, timer_ids, atividades)) = self.ausencia.take() {
@@ -370,7 +526,16 @@ impl Motor {
         // Ordem: inatividade/sono -> leitura -> corte do dia.
         // A leitura fecha e abre nos instantes dela (a troca suave vale desde quando aconteceu), cada
         // um com o corte que veio antes dele; o que segue aberto e dividido no corte depois.
-        out.extend(self.leitura_na_amostra(a, &onde));
+        let conclusiva = self.amostra_conclusiva(&onde);
+        let leitura = self.leitura_na_amostra(a, &onde);
+        // o ▶ armado para parar com o Claude (spec 009): fecha quando você saiu da conversa
+        let saida = match onde {
+            Onde::NeutraVencida(desde) => desde,
+            _ => a.t,
+        };
+        let play = self.play_armado_na_amostra(&leitura, conclusiva, saida, a.t);
+        out.extend(leitura);
+        out.extend(play);
         // a sessão lida nesta amostra (0.6.1): o lembrete dela conta desde aqui
         if let Some(id) = self.lendo_agora().map(str::to_string) {
             self.lida_em.insert(id, a.t);
@@ -473,6 +638,8 @@ mod testes {
     // I2: timer ligado logo depois de o PC acordar nao e fechado pela regra do sono.
     #[test] fn sono_nao_fecha_timer_ligado_depois_de_acordar() {
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003)
+        m.cfg.um_play_por_vez = false;
         m.play(1, h(9, 0));
         m.amostra(&am(h(9, 5), 0));
         m.play(2, h(11, 0) - 2_000);
@@ -500,6 +667,8 @@ mod testes {
     }
     #[test] fn pausar_um_dos_timers_deixa_a_pergunta_so_com_o_outro() {
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003)
+        m.cfg.um_play_por_vez = false;
         m.play(1, h(9, 0));
         m.play(2, h(9, 0));
         m.amostra(&am(h(9, 5), 0));
@@ -624,6 +793,8 @@ mod testes {
 
     #[test] fn play_usa_a_atividade_padrao_do_timer() {
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003)
+        m.cfg.um_play_por_vez = false;
         m.atividades_padrao.insert(2, ATIVIDADE_ESTUDO);
         assert_eq!(trechos(&m.play(1, h(9, 0))), vec![abriu_em(1, h(9, 0), W)]);
         assert_eq!(trechos(&m.play(2, h(9, 0))), vec![abriu_em(2, h(9, 0), ATIVIDADE_ESTUDO)]);
@@ -691,6 +862,8 @@ mod testes {
     }
     #[test] fn inatividade_pergunta_e_contar_reabre_a_reuniao() {
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003)
+        m.cfg.um_play_por_vez = false;
         m.play(2, h(9, 0));
         m.play_atividade(1, R, h(9, 0));
         m.amostra(&am(h(9, 5), 0));
@@ -882,6 +1055,8 @@ mod testes {
 
     #[test] fn retomar_agora_religa_os_mesmos_timers_e_atividades_sem_o_tempo_fora() {
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003)
+        m.cfg.um_play_por_vez = false;
         m.play(2, h(9, 0));
         m.play_atividade(1, R, h(9, 0));
         m.amostra(&am(h(9, 5), 0));
@@ -926,6 +1101,8 @@ mod testes {
     }
     #[test] fn retomar_agora_atrasado_nao_faz_nada_e_respeita_quem_ja_mexeu() {
         let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003)
+        m.cfg.um_play_por_vez = false;
         m.play(1, h(9, 0));
         m.play(2, h(9, 0));
         m.amostra(&am(h(9, 5), 0));
@@ -973,5 +1150,118 @@ mod testes {
         let id = pergunta_de(&m.ao_reabrir(vec![ab], h(23, 0), None, h(23, 30)));
         assert_eq!(trechos(&m.responder(id, Resposta::Contar, ms_local(2026, 11, 18, 8, 10, F))), vec![]);
         assert!(m.abertos.is_empty());
+    }
+    // ---- um ▶ por vez (spec 003) ----
+
+    #[test] fn um_play_por_vez_pausa_o_play_dos_outros_no_mesmo_instante() {
+        let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        assert!(m.cfg.um_play_por_vez, "o padrão é um ▶ por vez");
+        m.play(1, h(9, 0));
+        assert_eq!(trechos(&m.play(2, h(10, 0))), vec![fechou_manual(1, h(10, 0), MotivoFim::Pausa), abriu_manual(2, h(10, 0))]);
+        assert_eq!(m.pausado_desde.get(&1), Some(&h(10, 0)), "o outro fica pausado no dock");
+        // a reunião de outro timer também é o seu cronômetro
+        assert_eq!(trechos(&m.play_atividade(1, R, h(10, 30))), vec![fechou_manual(2, h(10, 30), MotivoFim::Pausa), abriu_em(1, h(10, 30), R)]);
+        assert_eq!(trechos(&m.play(2, h(11, 0))), vec![fechou_manual(1, h(11, 0), MotivoFim::Pausa), abriu_manual(2, h(11, 0))]);
+        // o ▶ de novo no mesmo timer não mexe em nada
+        assert_eq!(m.play(2, h(11, 5)), vec![]);
+    }
+    #[test] fn um_play_por_vez_deixa_o_claude_do_outro_timer_rodando() {
+        let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        com_sessao(&mut m, 1);
+        prompt(&mut m, h(9, 0));
+        m.play(1, h(9, 0));
+        let v = trechos(&m.play(2, h(9, 30)));
+        assert_eq!(v, vec![fechou_manual(1, h(9, 30), MotivoFim::Pausa), abriu_manual(2, h(9, 30))]);
+        assert!(m.abertos.iter().any(|t| t.origem == Origem::Claude && t.timer_id == Some(1)), "o Claude segue no 1");
+        assert!(!m.bloqueadas.contains_key("s1"), "sem a trava do ⏸");
+    }
+    #[test] fn um_play_por_vez_com_varios_play_ligado_nao_pausa() {
+        let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        m.cfg.um_play_por_vez = false;
+        m.play(1, h(9, 0));
+        assert_eq!(trechos(&m.play(2, h(10, 0))), vec![abriu_manual(2, h(10, 0))]);
+    }
+    #[test] fn a_volta_da_inatividade_religa_so_o_ultimo_play() {
+        // dois ▶ de antes (com "Vários ▶", ou da versão de antes) e a opção agora em um por vez
+        let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        m.cfg.um_play_por_vez = false;
+        m.play(1, h(9, 0));
+        m.play(2, h(9, 2));
+        m.amostra(&am(h(9, 5), 0));
+        m.amostra(&am(h(9, 20), 11 * MIN));
+        let id = pergunta_de(&m.amostra(&am(h(9, 35), 0)));
+        m.cfg.um_play_por_vez = true;
+        assert_eq!(trechos(&m.responder(id, Resposta::Contar, h(9, 36))), vec![abriu_manual(2, h(9, 9))]);
+        assert_eq!(m.abertos.iter().map(|t| t.timer_id).collect::<Vec<_>>(), [Some(2)]);
+    }
+    #[test] fn contar_com_o_play_ja_noutro_timer_conta_o_tempo_fora_fechado() {
+        let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        let id = pergunta_de(&volta(&mut m));
+        // voltou e deu ▶ noutro timer antes de responder
+        m.play(2, h(9, 36));
+        let r = trechos(&m.responder(id, Resposta::Contar, h(9, 37)));
+        assert_eq!(r, vec![abriu_manual(1, h(9, 9)), fechou_manual(1, h(9, 35), MotivoFim::Pausa)]);
+        assert_eq!(m.abertos.iter().map(|t| t.timer_id).collect::<Vec<_>>(), [Some(2)]);
+        // o "Retomar agora" é como o ▶: o outro pausa
+        let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        let id = pergunta_de(&volta(&mut m));
+        m.play(2, h(9, 36));
+        let r = trechos(&m.responder(id, Resposta::RetomarAgora, h(9, 37)));
+        assert_eq!(r, vec![fechou_manual(2, h(9, 37), MotivoFim::Pausa), abriu_manual(1, h(9, 37))]);
+    }
+    #[test] fn ao_reabrir_em_menos_de_2_min_retoma_so_o_play_mais_recente() {
+        let ab = |id, inicio| TrechoAberto { timer_id: Some(id), sessao_id: None, origem: Origem::Manual, inicio, atividade_id: W };
+        let mut m = Motor::novo(cfg_teste(), h(10, 1));
+        let v = m.ao_reabrir(vec![ab(2, h(9, 30)), ab(1, h(9, 0))], h(10, 0), None, h(10, 1));
+        assert_eq!(trechos(&v), vec![fechou_manual(1, h(10, 0), MotivoFim::AppFechado)]);
+        assert!(v.iter().any(|x| matches!(x, Mudanca::Pergunta(_, Pergunta::AppFechado { timer_ids, .. }) if timer_ids == &vec![1])));
+        assert_eq!(m.abertos.iter().map(|t| t.timer_id).collect::<Vec<_>>(), [Some(2)]);
+    }
+    #[test] fn desfazer_o_encerrar_nao_religa_o_play_com_outro_ja_rodando() {
+        let mut m = Motor::novo(cfg_teste(), h(8, 0));
+        m.play(1, h(9, 0));
+        m.encerrar(1, h(9, 30));
+        m.play(2, h(9, 31));
+        let v = trechos(&m.desfazer_encerrar(1, h(9, 32)));
+        assert_eq!(v, vec![]);
+        assert_eq!(m.abertos.iter().map(|t| t.timer_id).collect::<Vec<_>>(), [Some(2)]);
+    }
+    /// A revisão (M4): o app reaberto em menos de 2 min com dois ▶ (de antes da 0.6.2): o "Contar"
+    /// do que fechou não conta junto com o que seguiu.
+    #[test] fn contar_no_app_reaberto_nao_conta_junto_com_o_play_que_seguiu() {
+        let ab = |id, inicio| TrechoAberto { timer_id: Some(id), sessao_id: None, origem: Origem::Manual, inicio, atividade_id: W };
+        let mut m = Motor::novo(cfg_teste(), h(10, 1));
+        let v = m.ao_reabrir(vec![ab(1, h(9, 0)), ab(2, h(9, 30))], h(10, 0), None, h(10, 1));
+        let id = pergunta_de(&v);
+        assert_eq!(trechos(&m.responder(id, Resposta::Contar, h(10, 2))), vec![]);
+        assert_eq!(m.abertos.iter().map(|t| t.timer_id).collect::<Vec<_>>(), [Some(2)]);
+        assert!(m.pausado_desde.contains_key(&1));
+    }
+    /// A revisão (M5): a ausência que atravessa a virada, com dois ▶ de antes: o "Contar" de 00:00
+    /// em diante vale só para o último ▶.
+    #[test] fn contar_depois_da_virada_com_um_play_por_vez_conta_so_o_ultimo() {
+        let mut m = Motor::novo(cfg_teste(), h(22, 0));
+        m.cfg.um_play_por_vez = false;
+        m.play(1, h(23, 0));
+        m.play(2, h(23, 1));
+        m.amostra(&am(h(23, 20), 0));
+        m.amostra(&am(h(23, 40), 10 * MIN));
+        let id = pergunta_de(&m.amostra(&am(ms_local(2026, 11, 18, 0, 30, F), 0)));
+        m.cfg.um_play_por_vez = true;
+        let zero = ms_local(2026, 11, 18, 0, 0, F);
+        let r = trechos(&m.responder(id, Resposta::Contar, ms_local(2026, 11, 18, 0, 31, F)));
+        assert_eq!(r, vec![abriu_manual(2, zero), fechou_manual(2, ms_local(2026, 11, 18, 0, 30, F), MotivoFim::Pausa)]);
+    }
+    /// A re-revisão (R4): depois da virada, o "Contar" com o ▶ já noutro timer acaba no início dele.
+    #[test] fn contar_depois_da_virada_acaba_no_inicio_do_outro_play() {
+        let mut m = Motor::novo(cfg_teste(), h(22, 0));
+        m.play(1, h(23, 0));
+        m.amostra(&am(h(23, 20), 0));
+        m.amostra(&am(h(23, 40), 10 * MIN));
+        let id = pergunta_de(&m.amostra(&am(ms_local(2026, 11, 18, 0, 30, F), 0)));
+        let zero = ms_local(2026, 11, 18, 0, 0, F);
+        m.play(2, zero + 10 * MIN);
+        let r = trechos(&m.responder(id, Resposta::Contar, ms_local(2026, 11, 18, 0, 31, F)));
+        assert_eq!(r, vec![abriu_manual(1, zero), fechou_manual(1, zero + 10 * MIN, MotivoFim::Pausa)]);
     }
 }

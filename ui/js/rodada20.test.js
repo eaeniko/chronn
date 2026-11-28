@@ -128,7 +128,7 @@ test('rodada 20 §1: "Todos" mostra tudo, com o nome do espaço como cabeçalho 
     /^<section class="esp" data-espaco="1"><div class="esp-h" style="--e:#5b8def">.*<b>Trabalho<\/b>.*<\/div><g:100><g:sem-1><\/section><section class="esp" data-espaco="2"><div class="esp-h" style="--e:#e86bd0">.*<b>Pessoal<\/b>.*<\/div><g:200><g:sem-2><\/section>$/,
   );
   // o cabeçalho do espaço: a soma dos timers dele (Pessoal: 2h da Leitura), o tempo real na dica
-  assert.match(h, /data-total-espaco="2" title="tempo real: 2h 00min">2h 00min</);
+  assert.match(h, /data-total-espaco="2" title="a lançar: 2h 00min · tempo real: 2h 00min">2h 00min</);
   // na aba de um espaço: só os grupos dele, sem cabeçalho
   assert.equal(secoesDaAba(s, 2, (g) => `<g:${g.id}>`, AGORA), '<g:200><g:null>');
   assert.deepEqual(gruposDaAba(s, 1).map((g) => g.id), [100, null]);
@@ -152,9 +152,10 @@ test('rodada 20 §1: o total do dia é o da aba; a dica traz o geral e o de cada
   assert.equal(totalDaAba(s, 1, AGORA), 2 * H);
   assert.equal(totalDaAba(s, 2, AGORA), 2 * H);
   assert.equal(totalDaAba(s, null, AGORA), 3 * H, 'a união de hoje: 9h às 12h');
-  assert.equal(dicaDoTotalDaAba(s, 2, AGORA), 'tempo contado 2h 00min\nTotal geral 3h 00min · Trabalho 2h 00min · Pessoal 2h 00min');
+  // spec 003: a soma e o real; o geral e os espaços no número que vale sozinho (a soma, em "Os dois")
+  assert.equal(dicaDoTotalDaAba(s, 2, AGORA), 'a lançar: 2h 00min · tempo real: 2h 00min\nTotal geral 4h 00min · Trabalho 2h 00min · Pessoal 2h 00min');
   // com um espaço só, a dica de antes
-  assert.equal(dicaDoTotalDaAba(umEspaco(), null, AGORA), 'tempo contado 2h 00min');
+  assert.equal(dicaDoTotalDaAba(umEspaco(), null, AGORA), 'a lançar: 2h 00min · tempo real: 2h 00min');
   // o "Zerar todos" e o "Pausar tudo" dizem a aba
   assert.equal(textoZerarTodos(s, 2), 'Zerar todos (Pessoal)');
   assert.equal(textoZerarTodos(s, null), 'Zerar todos');

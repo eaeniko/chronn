@@ -15,6 +15,7 @@ use crate::tempo::{dia_de, inicio_do_dia, proximo_corte, Ms, MIN};
 /// App reaberto em menos que isto (reinicio, atualizacao): os manuais seguem sem perguntar.
 pub const RETOMADA_MS: Ms = 2 * MIN;
 
+mod arquivo;
 mod chat;
 mod claude;
 mod janela;
@@ -114,6 +115,14 @@ pub struct Motor {
     /// conta o tempo dele desde a sua última leitura, e não só desde o fim do turno do Claude (sem
     /// isto, a conversa que você acabou de ler sumia do dock ao passar para outra). Só em memória.
     pub lida_em: BTreeMap<String, Ms>,
+    /// O ▶ armado para parar quando você sai da conversa (spec 009, `play_para_com_claude`): o
+    /// timer em que o turno de uma sessão acabou e desde quando você está fora das conversas dele
+    /// (`None`: numa delas). Só em memória.
+    pub play_armado: BTreeMap<i64, Option<Ms>>,
+    /// Os timers escondidos (spec 004): arquivados, ou de grupo ou espaço arquivado. Não recebem
+    /// tempo: a regra de pasta deles não vale e a sessão ligada a um deles fica sem timer. O app
+    /// passa pelo `esconder` (ao abrir e a cada arquivar, desarquivar ou apagar).
+    pub escondidos: BTreeSet<i64>,
 }
 
 impl Motor {
@@ -150,6 +159,8 @@ impl Motor {
             conta_do_app: None,
             janelas: janela::Janelas::default(),
             lida_em: BTreeMap::new(),
+            play_armado: BTreeMap::new(),
+            escondidos: BTreeSet::new(),
         }
     }
 
@@ -361,13 +372,30 @@ impl Motor {
                     // so resolve a pergunta
                 } else if de < dia_ini {
                     if r == Resposta::Contar && ate > dia_ini {
-                        for id in timer_ids {
+                        // um ▶ por vez (spec 003): só o último ▶ da pergunta conta
+                        let ids: Vec<i64> =
+                            if self.cfg.um_play_por_vez { timer_ids.last().copied().into_iter().collect() } else { timer_ids };
+                        for id in ids {
                             if self.manual_aberto(id).is_some() {
+                                continue;
+                            }
+                            // com o ▶ já noutro timer, acaba no início dele (um ▶ por vez, R4)
+                            let fim = match self.cfg.um_play_por_vez {
+                                true => self
+                                    .abertos
+                                    .iter()
+                                    .filter(|t| t.origem == Origem::Manual && t.timer_id != Some(id))
+                                    .map(|t| t.inicio)
+                                    .min()
+                                    .map_or(ate, |o| ate.min(o)),
+                                false => ate,
+                            };
+                            if fim <= dia_ini {
                                 continue;
                             }
                             let atividade_id = atividade_de(self, id);
                             out.push(Mudanca::Abriu { timer_id: Some(id), sessao_id: None, origem: Origem::Manual, inicio: dia_ini, atividade_id });
-                            out.push(Mudanca::Fechou { timer_id: Some(id), sessao_id: None, origem: Origem::Manual, fim: ate, motivo: MotivoFim::Pausa });
+                            out.push(Mudanca::Fechou { timer_id: Some(id), sessao_id: None, origem: Origem::Manual, fim, motivo: MotivoFim::Pausa });
                         }
                     }
                 } else {
@@ -377,10 +405,36 @@ impl Motor {
                         _ => None,
                     };
                     if let Some(desde) = desde {
-                        for id in timer_ids {
-                            out.extend(self.desencerrar(Some(id)));
+                        // um ▶ por vez (spec 003): só o último ▶ da pergunta volta
+                        let ids: Vec<i64> =
+                            if self.cfg.um_play_por_vez { timer_ids.last().copied().into_iter().collect() } else { timer_ids };
+                        for id in ids {
                             // na atividade em que estava (a reuniao volta como reuniao)
                             let atividade = atividade_de(self, id);
+                            let outro_aberto = self.cfg.um_play_por_vez
+                                && self.abertos.iter().any(|t| t.origem == Origem::Manual && t.timer_id != Some(id));
+                            if outro_aberto && r == Resposta::Contar {
+                                // o ▶ já está noutro timer: o tempo fora conta aqui, num trecho
+                                // fechado que acaba quando o outro ▶ começou (nunca os dois juntos),
+                                // e o ▶ de agora continua o outro
+                                let outro_desde = self
+                                    .abertos
+                                    .iter()
+                                    .filter(|t| t.origem == Origem::Manual && t.timer_id != Some(id))
+                                    .map(|t| t.inicio)
+                                    .min()
+                                    .unwrap_or(ate);
+                                let fim = ate.min(outro_desde);
+                                if self.manual_aberto(id).is_none() && fim > de {
+                                    out.extend(self.desencerrar(Some(id)));
+                                    out.push(Mudanca::Abriu { timer_id: Some(id), sessao_id: None, origem: Origem::Manual, inicio: de, atividade_id: atividade });
+                                    out.push(Mudanca::Fechou { timer_id: Some(id), sessao_id: None, origem: Origem::Manual, fim, motivo: MotivoFim::Pausa });
+                                }
+                                self.pausado_desde.insert(id, agora);
+                                continue;
+                            }
+                            out.extend(self.desencerrar(Some(id)));
+                            out.extend(self.pausar_outros_manuais(id, agora));
                             out.extend(self.abrir_manual(id, atividade, desde));
                         }
                     }
@@ -431,8 +485,14 @@ impl Motor {
         let mut out = vec![];
         let retoma = agora - ultimo_tique < RETOMADA_MS
             && dia_de(ultimo_tique, self.cfg.corte_min, self.cfg.fuso_min) == self.dia;
-        for t in abertos_no_banco {
-            if retoma && t.origem == Origem::Manual {
+        // um ▶ por vez (spec 003): na retomada, só o manual mais recente segue; os outros fecham
+        // no último tique e entram na pergunta, na ordem em que abriram
+        let mut abertos_no_banco = abertos_no_banco;
+        abertos_no_banco.sort_by_key(|t| t.inicio);
+        let mais_recente = abertos_no_banco.iter().rposition(|t| t.origem == Origem::Manual);
+        for (i, t) in abertos_no_banco.into_iter().enumerate() {
+            let segue = !self.cfg.um_play_por_vez || Some(i) == mais_recente;
+            if retoma && t.origem == Origem::Manual && segue {
                 if !self.abertos.iter().any(|a| a.origem == Origem::Manual && a.timer_id == t.timer_id) {
                     self.abertos.push(t);
                 }

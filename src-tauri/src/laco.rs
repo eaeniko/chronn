@@ -6,6 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use nucleo::claude_registros::registro_da_sessao;
+use nucleo::diagnostico_leitura::Lentas;
 use nucleo::motor::{Amostra, ChatAberto, Conversa, SinaisDoChat};
 use nucleo::tempo::Ms;
 use sinais::conversa::{e_app_do_claude, ConversaLida, LeitorConversa, SinaisChat, LIMITE_CONSULTA};
@@ -174,6 +175,25 @@ pub fn ciclo_com_wsl(estado: &Estado, fila: &Path, filas_wsl: &[(String, std::pa
     Ok(mudou || !mud.is_empty() || esperas || etiqueta || zerou || etiqueta_fim)
 }
 
+/// Spec 001: a amostra (já aplicada no motor) e as consultas lentas dela vão para o diagnóstico
+/// da leitura no app do Claude; o arquivo `diagnostico-leitura.json` é gravado fora da trava, no
+/// máximo uma vez por minuto (ou na hora, se o estado mudou). Devolve se o estado mudou.
+pub fn diagnosticar(estado: &Estado, a: &Amostra, lentas: Lentas, arquivo: &Path) -> bool {
+    let (mudou, texto) = {
+        let mut n = trava(estado);
+        let mudou = n.registrar_leitura_app(a, lentas);
+        (mudou, n.diag_leitura.para_gravar(a.t, mudou))
+    };
+    if let Some(t) = texto {
+        // grava ao lado e troca, para nunca deixar o arquivo pela metade
+        let tmp = arquivo.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, t).and_then(|_| std::fs::rename(&tmp, arquivo)) {
+            log_debug!("worktimer: diagnóstico da leitura: {e}");
+        }
+    }
+    mudou
+}
+
 /// Avisa as janelas e atualiza a bandeja e o título. Chamar sem a trava.
 pub fn avisar(app: &AppHandle) {
     let rodando = match app.try_state::<Estado>() {
@@ -205,6 +225,11 @@ pub fn iniciar(app: AppHandle) {
         let mut rotulos = crate::wsl_app::LeitorDeRotulos::default();
         let mut rotulos_em: Option<std::time::Instant> = None;
         let claude_json = fila::caminhos::pasta_do_usuario().join(".claude.json");
+        let arquivo_diag = fila::caminhos::base().join("diagnostico-leitura.json");
+        // as horas gravadas antes (revisão I3): o PC é religado quase todo dia
+        if let Ok(texto) = std::fs::read_to_string(&arquivo_diag) {
+            trava(&app.state::<Estado>()).diag_leitura.carregar(&texto, agora_ms());
+        }
         loop {
             if hook_conferido.elapsed() >= CONFERIR_HOOK {
                 hook_conferido = std::time::Instant::now();
@@ -220,11 +245,16 @@ pub fn iniciar(app: AppHandle) {
                 trava(&estado).atualizar_fuso(fuso, dia);
                 let agora = agora_ms();
                 let (ocioso, janela) = amostrador.amostrar(agora);
-                let atrasadas = conversa.atrasadas;
+                let (atrasadas, seguradas, recomecos) = (conversa.atrasadas, conversa.seguradas, conversa.recomecos);
                 let mut a = amostra_de(agora, ocioso, janela, |hwnd, em_foco| conversa.ler(hwnd, em_foco, LIMITE_CONSULTA));
                 if conversa.atrasadas != atrasadas {
                     log_debug!("worktimer: a consulta da conversa passou de 300 ms ({} vezes até agora)", conversa.atrasadas);
                 }
+                let lentas = Lentas {
+                    atrasadas: conversa.atrasadas.saturating_sub(atrasadas) as u32,
+                    seguradas: conversa.seguradas.saturating_sub(seguradas) as u32,
+                    recomecos: conversa.recomecos.saturating_sub(recomecos),
+                };
                 let atrasadas = chat.atrasadas;
                 a.chat = sinais::win::janela_do_app_do_claude()
                     .and_then(|hwnd| chat.ler(hwnd, false, LIMITE_CONSULTA))
@@ -232,7 +262,10 @@ pub fn iniciar(app: AppHandle) {
                 if chat.atrasadas != atrasadas {
                     log_debug!("worktimer: os sinais do Chat passaram de 300 ms ({} vezes até agora)", chat.atrasadas);
                 }
+                let a_diag = a.clone();
                 let r = ciclo_com_wsl(&estado, &fila, &[], a);
+                let diag = diagnosticar(&estado, &a_diag, lentas, &arquivo_diag);
+                let r = r.map(|x| x || diag);
                 // os rótulos das contas, fora da trava (o arquivo tem uns 200 KB; só relido quando
                 // muda; revisão M2)
                 let r = if rotulos_em.is_none_or(|u| u.elapsed() >= crate::wsl_app::ROTULOS_A_CADA) {
@@ -261,6 +294,14 @@ pub fn iniciar(app: AppHandle) {
                 Ok(Ok(false)) => janelas::aplicar_dock(&app),
                 Ok(Err(e)) => log_debug!("worktimer: erro no laço: {e}"),
                 Err(_) => log_debug!("worktimer: pânico no laço; seguindo"),
+            }
+            // a saúde do dock e o lugar da janela principal (specs 005 e 006), sem a trava
+            let r = catch_unwind(AssertUnwindSafe(|| {
+                janelas::cuidar_do_dock(&app);
+                janelas::guardar_principal_se_mexeu(&app);
+            }));
+            if r.is_err() {
+                log_debug!("worktimer: pânico ao cuidar do dock; seguindo");
             }
             std::thread::sleep(INTERVALO);
         }
@@ -516,6 +557,57 @@ mod testes {
         assert!(s.escrevendo);
         assert_eq!(s.grupos[0].timers[0].situacao.as_deref(), Some("escrevendo"));
         assert_eq!(n.banco.trechos_entre(h(0, 0), h(23, 0)).unwrap().iter().filter(|x| x.origem == Origem::Leitura).count(), 1);
+    }
+
+    /// Spec 001: 30 min de uso do app do Claude sem achar conversa, com uma sessão do app
+    /// trabalhando, deixa a leitura "falhando"; a conversa achada volta a "ok". O arquivo tem só
+    /// contagens.
+    #[test]
+    fn diagnostico_da_leitura_no_app_avisa_a_falha() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("eventos.jsonl");
+        let tr = d.path().join("s.jsonl");
+        let arquivo = d.path().join("diagnostico-leitura.json");
+        titulo(&tr, "Plano do app");
+        let e = estado(h(9, 0));
+        let t = trava(&e).banco.criar_timer(None, "Projeto A", "#a00").unwrap();
+        trava(&e).criar_regra("C:\\p", t).unwrap();
+        let app = |t: Ms, conversa: Option<&str>| Amostra {
+            t,
+            ocioso_ms: 1_000,
+            processo: Some("claude".into()),
+            titulo: Some("Claude".into()),
+            conversa: Conversa::App(conversa.map(str::to_string)),
+            em_foco: true,
+            ..Default::default()
+        };
+        assert_eq!(trava(&e).snapshot(h(9, 0)).unwrap().leitura_app.estado, "sem_uso");
+        linha(&f, serde_json::json!({"t": h(9, 0), "evento": "UserPromptSubmit", "sessao": "s1", "cwd": "C:\\p", "transcript": tr, "origem": "claude-desktop"}));
+        ciclo(&e, &f, am(h(9, 0) + 1_000, 0)).unwrap();
+        let mut a = app(h(9, 1), Some("Plano do app"));
+        assert!(!diagnosticar(&e, &a, Lentas::default(), &arquivo));
+        assert_eq!(trava(&e).snapshot(h(9, 1)).unwrap().leitura_app.estado, "ok");
+        // o Claude segue trabalhando na sessão do app, e a conversa some da consulta
+        let mut mudou = false;
+        let mut ms = h(9, 2);
+        while ms <= h(9, 40) {
+            if ms % (5 * 60_000) == 0 {
+                linha(&f, serde_json::json!({"t": ms, "evento": "PostToolUse", "sessao": "s1", "cwd": "C:\\p", "transcript": tr, "origem": "claude-desktop"}));
+                ciclo(&e, &f, am(ms, 0)).unwrap();
+            }
+            a = app(ms, None);
+            mudou |= diagnosticar(&e, &a, Lentas { atrasadas: 1, ..Default::default() }, &arquivo);
+            ms += 5_000;
+        }
+        assert!(mudou, "o estado mudou: a tela precisa saber");
+        let s = trava(&e).snapshot(h(9, 40)).unwrap().leitura_app;
+        assert_eq!((s.estado.as_str(), s.desde), ("falhando", Some(h(9, 2))));
+        let texto = std::fs::read_to_string(&arquivo).unwrap();
+        assert!(texto.contains("\"falhando\"") && !texto.contains("Plano") && !texto.contains("s1"), "{texto}");
+        // duas conversas reconhecidas seguidas voltam a "ok" (revisão M4)
+        assert!(!diagnosticar(&e, &app(h(9, 41), Some("plano do app")), Lentas::default(), &arquivo));
+        assert!(diagnosticar(&e, &app(h(9, 41) + 5_000, Some("plano do app")), Lentas::default(), &arquivo));
+        assert_eq!(trava(&e).snapshot(h(9, 41)).unwrap().leitura_app.estado, "ok");
     }
 
     #[test]

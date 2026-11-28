@@ -5,11 +5,12 @@
 // Também mora aqui o "Conectar o Claude Code" (prévia exata → Conectar), usado no primeiro uso.
 import { chamar, iniciarComWindows } from './api.js';
 import { esc, cor } from './componentes.js';
-import { abrirDialogo, faixa, textoDoErro, grupoParaSalvar, PALETA, novoEspaco } from './editar.js';
-import { linhas, minutosDeSegundos, segundosDeMinutos, tamanho, abreviarCaminho, dataDoBackup } from './formato.js';
+import { abrirDialogo, faixa, textoDoErro, PALETA, novoEspaco } from './editar.js';
+import { linhas, minutosDeSegundos, segundosDeMinutos, tamanho, abreviarCaminho, dataDoBackup, horaDoDia } from './formato.js';
 import { NOME_APP, PERFIL_TESTE } from './nome.js';
 import { TEXTOS, aoTrocarIdioma, IDIOMAS, IDIOMA_SISTEMA, resolverIdioma } from './textos.js';
 import { podeApagarEspaco, textoAoApagar } from './espacos.js';
+import { htmlArquivados, cliqueNosArquivados, arquivarGrupo } from './arquivados.js';
 import { htmlAtualizacao, textoDaVersao, linhaDaVerificacao, textoDaUltima, abrirAtualizar } from './atualizacao.js';
 
 // Os textos fixos que outros módulos (e os testes) leem daqui, no idioma de agora: refeitos a cada
@@ -57,7 +58,7 @@ function textosDoModulo() {
   // a frase do cartão do Claude Code (rodada 18)
   FRASE_CLAUDE = TEXTOS.fraseClaude;
   DICA_PASTAS = TEXTOS.dicaPastas;
-  SECOES = ['idioma', 'aparencia', 'painel', 'dock', 'espera', 'sistema', 'claude', 'pastas', 'dia', 'tempos', 'arredondamento', 'atividades', 'grupos', 'backups', 'ajuda', 'sobre'].map(
+  SECOES = ['idioma', 'aparencia', 'painel', 'dock', 'espera', 'sistema', 'claude', 'pastas', 'dia', 'play', 'tempos', 'arredondamento', 'atividades', 'grupos', 'arquivados', 'backups', 'ajuda', 'sobre'].map(
     (id) => [id, TEXTOS.secoes[id]],
   );
 }
@@ -450,6 +451,29 @@ export function htmlConexaoClaude(h, encontrado = true, settings = '', comBotao 
 </div>`;
 }
 
+/**
+ * Ajustes → Claude Code (spec 001): "Leitura no app do Claude: ok", "falhando desde 09:12" ou
+ * "ainda sem uso", do diagnóstico do laço (`snap.leitura_app`). Falhando, a ajuda diz o que é e
+ * onde ficam os números.
+ */
+export function htmlLeituraApp(l, diaInicio) {
+  const e = l?.estado === 'ok' || l?.estado === 'falhando' ? l.estado : 'sem_uso';
+  const falhando = e === 'falhando' && l.desde !== null && l.desde !== undefined;
+  const [rotulo, classe] =
+    e === 'ok' ? [TEXTOS.leituraAppOk, 'on'] : falhando ? [TEXTOS.leituraAppFalhando(horaDoDia(l.desde, diaInicio)), 'antigo'] : [TEXTOS.leituraAppSemUso, ''];
+  return `<div class="aj-linha" data-leitura-app="${e}"><b>${TEXTOS.leituraApp}</b><span class="aj-estado ${classe}"><i></i>${esc(rotulo)}</span></div>${
+    falhando ? `<small class="aj-dica">${TEXTOS.leituraAppDica}</small>` : ''
+  }`;
+}
+
+function desenharLeituraApp() {
+  const b = raiz?.querySelector('[data-bloco="leitura-app"]');
+  const snap = lerSnap();
+  if (!b || !snap) return;
+  const novo = htmlLeituraApp(snap.leitura_app, snap.dia_inicio);
+  if (b.innerHTML !== novo) b.innerHTML = novo;
+}
+
 /** "21/11 14:05" (ou "Nov 21 14:05"): quando a conta foi vista por último. */
 const quandoVista = (ms) => dataDoBackup(new Date(ms - new Date(ms).getTimezoneOffset() * 60_000).toISOString());
 
@@ -616,7 +640,18 @@ export const htmlIdioma = (escolha, efetivo = null, sistema = globalThis.navigat
 };
 
 /** Ajustes → Painel (rodada 21): mostrar a linha do tempo no Painel (ligado por padrão). */
-export const htmlPainel = (c) => caixa('painel_linha', TEXTOS.mostrarLinhaNoPainel, TEXTOS.mostrarLinhaNoPainelDica, c?.painel_linha !== false);
+export const htmlPainel = (c) =>
+  caixa('painel_linha', TEXTOS.mostrarLinhaNoPainel, TEXTOS.mostrarLinhaNoPainelDica, c?.painel_linha !== false) + campoTotalTopo(c?.total_topo);
+
+/** "Total do dia" (spec 003): a soma, o tempo real ou os dois, no topo, nos espaços e nos grupos. */
+export const campoTotalTopo = (atual) => `<div class="campo"><span id="aj-total-topo">${TEXTOS.totalTopoRotulo}</span>
+<div class="seg" role="radiogroup" aria-labelledby="aj-total-topo">${TEXTOS.totalTopoOpcoes.map(([v, r]) => radio('total_topo', v, r, atual ?? 'os_dois')).join('')}</div>
+<small>${TEXTOS.totalTopoDica}</small></div>`;
+
+/** A seção do ▶ (specs 003 e 009): vários ▶ ao mesmo tempo e o ▶ que para com o Claude. */
+export const htmlPlay = (c) =>
+  caixa('varios_play', TEXTOS.variosPlay, TEXTOS.variosPlayDica, Boolean(c?.varios_play)) +
+  caixa('parar_play_claude', TEXTOS.playParaComClaude, TEXTOS.playParaComClaudeDica, Boolean(c?.parar_play_claude));
 
 /** O nome de um espaço vai até isto de letras (o núcleo confere também). */
 export const ESPACO_NOME_MAX = 24;
@@ -666,7 +701,7 @@ function htmlGrupos(snap) {
   const lr = dados.regras.length
     ? dados.regras
         .map(
-          (r) => `<li><span class="aj-n mono" title="${esc(r.pasta)}">${esc(r.pasta)}</span><small>→ ${esc(r.timer_nome || TEXTOS.timerApagado)}</small><button type="button" class="bt mini" data-aj="remover-regra" data-id="${r.id}">${TEXTOS.remover}</button></li>`,
+          (r) => `<li><span class="aj-n mono" title="${esc(r.pasta)}">${esc(r.pasta)}</span><small>→ ${esc(r.timer_nome || TEXTOS.timerApagado)}${r.arquivado ? ` (${esc(TEXTOS.regraNaoVale)})` : ''}</small><button type="button" class="bt mini" data-aj="remover-regra" data-id="${r.id}">${TEXTOS.remover}</button></li>`,
         )
         .join('')
     : `<li class="aj-vazio">${TEXTOS.nenhumaRegra}</li>`;
@@ -745,6 +780,7 @@ ${campoDockEspaco(c.dock_espaco)}`,
     'claude',
     TEXTOS.secoes.claude,
     `<div data-bloco="hooks">${htmlConexaoClaude(dados.hooks, dados.encontrado !== false, dados.info?.settings)}</div>
+<div data-bloco="leitura-app">${htmlLeituraApp(snap.leitura_app, snap.dia_inicio)}</div>
 <div data-bloco="wsl">${htmlWsl(dados.wsl)}</div>
 <div data-bloco="contas">${htmlContas(snap.contas, snap.espacos)}</div>
 <label class="campo"><span>${TEXTOS.programasClaude}</span><textarea name="programas_claude" rows="4" spellcheck="false">${esc(c.programas_claude.join('\n'))}</textarea><small>${TEXTOS.programasClaudeDica}</small></label>`,
@@ -758,6 +794,7 @@ ${campoDockEspaco(c.dock_espaco)}`,
 </div>
 ${caixa('zerar_na_virada', TEXTOS.zerarNaVirada, TEXTOS.zerarNaViradaDica, c.zerar_na_virada)}`,
   )}
+  ${secao('play', TEXTOS.secoes.play, htmlPlay(c))}
   ${secao('tempos', TEXTOS.secoes.tempos, `<p class="aj-risco" role="note">${AVISO_TEMPOS}</p><div class="aj-grade">${tempos}</div>`, TEXTOS.temposSecaoDica)}
   ${secao(
     'arredondamento',
@@ -772,6 +809,7 @@ ${caixa('zerar_na_virada', TEXTOS.zerarNaVirada, TEXTOS.zerarNaViradaDica, c.zer
     TEXTOS.atividadesSecaoDica,
   )}
   ${secao('grupos', TEXTOS.gruposERegras, `${campoConversaNova(c.conversa_nova)}<div data-bloco="grupos">${htmlGrupos(snap)}</div>`)}
+  ${secao('arquivados', TEXTOS.secoes.arquivados, `<div data-bloco="arquivados">${htmlArquivados(dados.arquivados, snap.espacos ?? [])}</div>`, TEXTOS.arquivadosDica)}
   ${secao(
     'backups',
     TEXTOS.secoes.backups,
@@ -819,12 +857,14 @@ async function verificarAtualizacoes() {
 }
 
 async function carregar() {
-  const [info, conexao, regras, autostart, backups] = await Promise.allSettled([
+  const [info, conexao, regras, autostart, backups, arquivados] = await Promise.allSettled([
     chamar('ajustes_info'),
     chamar('conexao_claude'),
     chamar('regras_pasta'),
     iniciarComWindows.ligado(),
     chamar('backups_listar'),
+    // spec 004: os timers e grupos arquivados, com o tempo guardado
+    chamar('arquivados'),
   ]);
   const val = (r, padrao) => {
     if (r.status === 'fulfilled') return r.value;
@@ -838,6 +878,7 @@ async function carregar() {
     regras: val(regras, []),
     autostart: val(autostart, null),
     backups: val(backups, []),
+    arquivados: val(arquivados, { erro: true }),
     // o WSL chega depois (`atualizarWsl`), sem prender os Ajustes (revisão I2)
     wsl: undefined,
   };
@@ -909,6 +950,18 @@ async function atualizarHooks() {
   if (b) b.innerHTML = htmlConexaoClaude(dados.hooks, dados.encontrado !== false, dados.info?.settings);
   // a faixa da janela principal acompanha
   document.dispatchEvent(new CustomEvent('hooks-mudaram', { detail: dados.hooks }));
+}
+
+/** Spec 004: lê de novo os arquivados e redesenha a lista (depois de arquivar, desarquivar ou apagar). */
+async function recarregarArquivados() {
+  try {
+    dados.arquivados = await chamar('arquivados');
+  } catch (e) {
+    console.error('worktimer: arquivados', e);
+    dados.arquivados = { erro: true };
+  }
+  const b = raiz?.querySelector('[data-bloco="arquivados"]');
+  if (b) b.innerHTML = htmlArquivados(dados.arquivados, lerSnap()?.espacos ?? []);
 }
 
 function desenharGrupos() {
@@ -1083,7 +1136,7 @@ async function aoMudar(ev) {
     return salvarAtividade(a, nome === 'at_nome' ? { nome: v } : { cor: v });
   }
   // os valores são lidos agora, não quando a gravação sair da fila
-  if (nome === 'tema' || nome === 'idioma' || nome === 'dock_botoes' || nome === 'dock_espaco' || nome === 'ao_fechar' || nome === 'ao_minimizar' || nome === 'conversa_nova') {
+  if (nome === 'tema' || nome === 'idioma' || nome === 'dock_botoes' || nome === 'dock_espaco' || nome === 'ao_fechar' || nome === 'ao_minimizar' || nome === 'conversa_nova' || nome === 'total_topo') {
     const v = el.value;
     return salvar((c) => (c[nome] = v));
   }
@@ -1105,7 +1158,7 @@ async function aoMudar(ev) {
     const v = el.checked;
     return chamar('dicas_ligar', { ligadas: v });
   }
-  if (nome === 'dock_situacao' || nome === 'zerar_na_virada' || nome === 'painel_linha' || nome === 'atualizar_auto') {
+  if (nome === 'dock_situacao' || nome === 'zerar_na_virada' || nome === 'painel_linha' || nome === 'atualizar_auto' || nome === 'varios_play' || nome === 'parar_play_claude') {
     const v = el.checked;
     return salvar((c) => (c[nome] = v));
   }
@@ -1195,22 +1248,6 @@ function confirmarRestaurar(nome) {
       gruposDesenhados = '';
       desenharGrupos();
       faixa(TEXTOS.backupRestaurado(dataDoBackup(b.quando)));
-    },
-  });
-}
-
-function confirmarArquivar(id) {
-  const g = lerSnap()?.grupos.find((x) => x.id === id);
-  if (!g) return;
-  abrirDialogo({
-    titulo: esc(TEXTOS.arquivarGrupoTitulo(g.nome)),
-    corpo: `<p class="dlg-p">${TEXTOS.arquivarGrupoTexto2}</p>`,
-    enviar: TEXTOS.arquivar,
-    perigo: true,
-    async aoEnviar() {
-      await chamar('editar_grupo', {
-        grupo: { ...grupoParaSalvar(g), arquivado: true },
-      });
     },
   });
 }
@@ -1334,7 +1371,22 @@ async function aoClicar(ev) {
       faixa(TEXTOS.dicasDeNovoFeito);
       break;
     case 'arquivar-grupo':
-      confirmarArquivar(id);
+      try {
+        await arquivarGrupo(lerSnap(), id, recarregarArquivados);
+      } catch (e) {
+        faixa(textoDoErro(e));
+      }
+      break;
+    // spec 004: a lista dos arquivados
+    case 'desarquivar-timer':
+    case 'desarquivar-grupo':
+    case 'apagar-timer':
+    case 'apagar-grupo':
+      try {
+        await cliqueNosArquivados(alvo.dataset.aj, id, dados.arquivados, recarregarArquivados);
+      } catch (e) {
+        faixa(textoDoErro(e));
+      }
       break;
     case 'remover-regra':
       confirmarRemoverRegra(id);
@@ -1417,6 +1469,7 @@ export function atualizarAjustes(snap) {
   desenharGrupos();
   desenharAtividades();
   desenharContas();
+  desenharLeituraApp();
   if (pendentes > 0) return;
   const c = snap.config;
   for (const [nome, valor] of [
@@ -1428,6 +1481,7 @@ export function atualizarAjustes(snap) {
     ['ao_minimizar', c.ao_minimizar],
     ['dock_modo', c.dock_modo ?? 'sempre'],
     ['conversa_nova', c.conversa_nova ?? 'confirmar'],
+    ['total_topo', c.total_topo ?? 'os_dois'],
     ['espera_dock_min', c.espera_dock_min ?? 30],
     ['espera_app_min', c.espera_app_min ?? 0],
     ['pausado_dock_min', c.pausado_dock_min ?? 10],
@@ -1436,7 +1490,7 @@ export function atualizarAjustes(snap) {
     const r = raiz.querySelector(`input[name="${nome}"][value="${valor}"]`);
     if (r && !r.checked) r.checked = true;
   }
-  for (const nome of ['dock_situacao', 'modo_dev', 'zerar_na_virada', 'painel_linha']) {
+  for (const nome of ['dock_situacao', 'modo_dev', 'zerar_na_virada', 'painel_linha', 'varios_play', 'parar_play_claude']) {
     const cx = raiz.querySelector(`input[name="${nome}"]`);
     if (cx && cx !== document.activeElement) cx.checked = Boolean(c[nome]);
   }

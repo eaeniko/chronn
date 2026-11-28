@@ -177,9 +177,9 @@ test('rodada 23: as datas e os dias da semana pelo Intl, nos dois idiomas', () =
 
 test('rodada 23: as etiquetas do dock e a dica do trecho nos dois idiomas', () => {
   const t = { manual_atividade_id: 1, situacao_claude: 'esperando', espera_ultima: 0 };
-  assert.equal(etiquetaComposta(t, 1000, 0).texto, 'manual + esperando você');
+  assert.equal(etiquetaComposta(t, 1000, 0).texto, '▶ ligado · esperando você');
   em('en', () => {
-    assert.equal(etiquetaComposta(t, 1000, 0).texto, 'manual + waiting for you');
+    assert.equal(etiquetaComposta(t, 1000, 0).texto, '▶ on · waiting for you');
     assert.equal(etiquetaComposta({ pausado: true }, 1000, 0).texto, 'paused');
     assert.equal(tituloDoTrecho({ inicio: 9 * 3_600_000, fim: null, origem: 'claude' }, 0, 10 * 3_600_000), '09:00–now · Claude working · 1h 00m');
   });

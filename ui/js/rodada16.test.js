@@ -211,7 +211,7 @@ test('rodada 16: cada dica dispara uma vez só, uma por vez, e nunca com o tour 
   // uma dica que não existe não entra
   j.fila.oferecer('nada');
   assert.deepEqual(j.fila.fila, []);
-  assert.equal(Object.keys(DICAS).length, 7);
+  assert.equal(Object.keys(DICAS).length, 8, 'com a total_dois (spec 003)');
 });
 
 test('revisão da rodada 16: uma dica por vez no app inteiro; a interrompida volta sem ficar vista', async () => {

@@ -11,6 +11,9 @@ use crate::motor::{chave_de_pasta, raiz_do_projeto, regra_para};
 use crate::relatorio::{acumulado, Acumulado, Zerados};
 use crate::tempo::{dia_de, inicio_do_dia, Ms};
 
+mod arquivo;
+pub use arquivo::{lugar_ocupado, Apagado, Linhas, TempoGuardado};
+
 /// Esquema da versão 1 (o banco novo passa por ele e depois pelas migrações).
 pub(crate) const ESQUEMA_V1: &str = "
 CREATE TABLE grupos (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, cor TEXT NOT NULL, link_projeto TEXT, card_padrao TEXT, ordem INTEGER NOT NULL DEFAULT 0, arquivado INTEGER NOT NULL DEFAULT 0);
@@ -581,11 +584,16 @@ impl Banco {
 
     /// Grupos nao arquivados, por `ordem`, `id`.
     pub fn grupos(&self) -> Result<Vec<Grupo>> {
+        self.grupos_com(false)
+    }
+
+    /// Os grupos, com `arquivados` também os arquivados (spec 004), por `ordem`, `id`.
+    pub fn grupos_com(&self, arquivados: bool) -> Result<Vec<Grupo>> {
         let mut st = self.conn.prepare(
             "SELECT id, nome, cor, link_projeto, card_padrao, ordem, arquivado, link_projeto_nome, card_padrao_nome, espaco_id
-             FROM grupos WHERE arquivado=0 ORDER BY ordem, id",
+             FROM grupos WHERE arquivado=0 OR ?1 ORDER BY ordem, id",
         )?;
-        let v = st.query_map([], |r| {
+        let v = st.query_map(params![arquivados], |r| {
             Ok(Grupo {
                 id: r.get(0)?,
                 nome: r.get(1)?,
@@ -812,7 +820,7 @@ impl Banco {
 
     /// Algo mudou nos trechos ou nos ajustes a partir de `instante` (`None`: não se sabe quando):
     /// antes do início de hoje do acumulado guardado, ele é jogado fora.
-    fn mexeu_no_passado(&self, instante: Option<Ms>) {
+    pub(crate) fn mexeu_no_passado(&self, instante: Option<Ms>) {
         let mut c = self.cache.borrow_mut();
         if c.as_ref().is_some_and(|c| instante.is_none_or(|i| i < c.chave.inicio_hoje)) {
             *c = None;
@@ -861,11 +869,16 @@ impl Banco {
 
     /// Timers nao arquivados, por `ordem`, `id`.
     pub fn timers(&self) -> Result<Vec<Timer>> {
+        self.timers_com(false)
+    }
+
+    /// Os timers, com `arquivados` também os arquivados (spec 004), por `ordem`, `id`.
+    pub fn timers_com(&self, arquivados: bool) -> Result<Vec<Timer>> {
         let mut st = self.conn.prepare(
             "SELECT id, grupo_id, nome, cor, link_card, ordem, arquivado, link_card_nome, atividade_padrao_id, espaco_id
-             FROM timers WHERE arquivado=0 ORDER BY ordem, id",
+             FROM timers WHERE arquivado=0 OR ?1 ORDER BY ordem, id",
         )?;
-        let v = st.query_map([], |r| {
+        let v = st.query_map(params![arquivados], |r| {
             Ok(Timer {
                 id: r.get(0)?,
                 grupo_id: r.get(1)?,

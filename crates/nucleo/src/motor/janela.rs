@@ -6,12 +6,18 @@
 //! com essa janela em uso e o título sem nome de sessão, a conversa aberta é a sessão ligada a ela
 //! que terminou por último.
 //!
+//! Spec 002: pela janela, só a sessão que espera você, até `ESPERA_RECENTE_MS` depois do fim do
+//! turno (o `Stop`), e o `/exit` (`SessionEnd`) solta a janela. Sem isso, a mesma janela usada
+//! horas depois para outra coisa (outra aba, um `npm run dev`) contava como leitura.
+//!
 //! Privacidade: o identificador da janela (o HWND) fica só em memória. Ele nunca vai para o banco,
 //! para log, para arquivo nem para mensagem de erro (`Sessao` não tem o campo).
 use std::collections::VecDeque;
 
+use super::leitura::ESPERA_RECENTE_MS;
 use super::manual::Amostra;
 use super::{e_sessao_do_chat, Motor, ORIGEM_APP_DO_CLAUDE, ORIGEM_CHAT};
+use crate::modelo::EstadoSessao;
 use crate::tempo::{Ms, MIN};
 
 /// A amostra que liga a sessão à janela fica a até isto do `UserPromptSubmit`, antes ou depois.
@@ -118,17 +124,31 @@ impl Motor {
         }
     }
 
-    /// A conversa aberta pela janela: entre as sessões ligadas a `janela`, a que terminou por
-    /// último (sem `terminou_em`, a do último evento). Nunca uma do app do Claude ou do Chat.
+    /// A conversa aberta pela janela: entre as sessões ligadas a `janela` (sem as paradas), a do
+    /// evento mais recente; ela só é lida se espera você há menos de `ESPERA_RECENTE_MS` (contados
+    /// do fim do turno até a amostra de agora). Nunca uma do app do Claude ou do Chat, uma parada
+    /// (`/exit`) ou uma trabalhando (spec 002). Com duas abas na mesma janela, a que trabalha (o
+    /// evento mais recente) vence e nada é lido: não dá para saber qual aba está à vista (revisão
+    /// I1: melhor faltar do que sobrar).
     pub(crate) fn sessao_pela_janela(&self, janela: Option<isize>) -> Option<String> {
         let janela = janela?;
-        self.janelas
+        let agora = self.ultima_amostra;
+        let s = self
+            .janelas
             .ligadas
             .iter()
             .filter(|(id, (j, _))| *j == janela && self.pode_ler_pela_janela(id))
             .filter_map(|(id, _)| self.sessoes.get(id))
-            .max_by_key(|s| (s.terminou_em.unwrap_or(s.ultimo_evento), s.ultimo_evento))
-            .map(|s| s.id.clone())
+            .filter(|s| s.estado != EstadoSessao::Parada)
+            .max_by_key(|s| (s.ultimo_evento, s.terminou_em))?;
+        let fim = s.terminou_em.filter(|_| s.estado == EstadoSessao::EsperandoVoce)?;
+        agora.is_none_or(|a| a < fim + ESPERA_RECENTE_MS).then(|| s.id.clone())
+    }
+
+    /// O `/exit` (`SessionEnd`): a sessão solta a janela (spec 002).
+    pub(crate) fn soltar_janela(&mut self, sessao_id: &str) {
+        self.janelas.ligadas.remove(sessao_id);
+        self.janelas.pendentes.retain(|(s, _)| s != sessao_id);
     }
 
     /// As ligações de sessões que saíram da memória caem, e as de mais de 24 h sem evento novo
@@ -333,6 +353,102 @@ mod testes {
         m.sessoes.remove("s1");
         m.tique(h(9, 3));
         assert!(m.janelas.ligadas.is_empty(), "a sessão saiu da memória");
+    }
+
+    /// Spec 002: 9h00 o pedido no Windows Terminal, 9h01 o fim, 9h02 o `/exit`; das 10h às 12h a
+    /// mesma janela para outra coisa. Nada de leitura.
+    #[test]
+    fn terminal_nao_conta_leitura_depois_do_exit() {
+        let mut m = motor();
+        let mut mud = vec![];
+        mud.extend(m.amostra(&terminal(h(9, 0) - S, JANELA)));
+        mud.extend(m.evento(&ev("UserPromptSubmit", "s1", h(9, 0), Some("cli"))));
+        mud.extend(m.amostra(&terminal(h(9, 0) + 4 * S, JANELA)));
+        mud.extend(m.evento(&ev("Stop", "s1", h(9, 1), Some("cli"))));
+        mud.extend(m.evento(&ev("SessionEnd", "s1", h(9, 2), Some("cli"))));
+        assert!(m.janelas.ligadas.is_empty(), "o /exit solta a janela");
+        // dentro da hora do Stop: só o /exit impede a leitura (revisão M8)
+        let mut t = h(9, 3);
+        while t <= h(9, 55) {
+            mud.extend(m.amostra(&terminal(t, JANELA)));
+            t += 5 * S;
+        }
+        assert_eq!(m.lendo_agora(), None, "nada de leitura logo depois do /exit");
+        let mut t = h(10, 0);
+        while t <= h(12, 0) {
+            mud.extend(m.amostra(&terminal(t, JANELA)));
+            mud.extend(m.tique(t));
+            t += 5 * S;
+        }
+        assert_eq!(m.lendo_agora(), None);
+        assert!(
+            !mud.iter().any(|x| matches!(x, Mudanca::Abriu { origem: crate::modelo::Origem::Leitura, .. })),
+            "nenhuma leitura aberta"
+        );
+        // mesmo com a ligação de pé (vinda de antes da correção), a sessão parada não é lida
+        m.janelas.ligadas.insert("s1".into(), (JANELA, h(9, 0)));
+        assert_eq!(aberta(&m, JANELA, "claude"), Aberta::NaoSei);
+    }
+
+    /// Revisão I1: duas abas do Windows Terminal (uma janela só). A aba 1 termina; a aba 2 recebe
+    /// um pedido e trabalha: olhando a janela, nada é lido (não dá para saber qual aba está à vista).
+    #[test]
+    fn duas_abas_com_uma_trabalhando_nao_le_a_outra() {
+        let mut m = motor();
+        m.amostra(&terminal(h(9, 0) - S, JANELA));
+        m.evento(&ev("UserPromptSubmit", "aba1", h(9, 0), Some("cli")));
+        m.amostra(&terminal(h(9, 0) + 4 * S, JANELA));
+        m.evento(&ev("Stop", "aba1", h(9, 1), Some("cli")));
+        m.amostra(&terminal(h(9, 2) - S, JANELA));
+        m.evento(&ev("UserPromptSubmit", "aba2", h(9, 2), Some("cli")));
+        m.amostra(&terminal(h(9, 2) + 4 * S, JANELA));
+        assert_eq!(aberta(&m, JANELA, "claude"), Aberta::NaoSei, "a aba 2 trabalha");
+        let mut t = h(9, 3);
+        while t <= h(9, 10) {
+            m.amostra(&terminal(t, JANELA));
+            t += 5 * S;
+        }
+        assert_eq!(m.lendo_agora(), None);
+        // a aba 2 termina: ela é a lida
+        m.evento(&ev("Stop", "aba2", h(9, 11), Some("cli")));
+        assert_eq!(aberta(&m, JANELA, "claude"), Aberta::Sessao("aba2".into()));
+    }
+
+    /// Spec 002: sem o `/exit`, a janela vale só por `ESPERA_RECENTE_MS` depois do fim do turno.
+    #[test]
+    fn pela_janela_so_ate_uma_hora_depois_do_stop() {
+        let mut m = motor();
+        m.amostra(&terminal(h(9, 0) - S, JANELA));
+        m.evento(&ev("UserPromptSubmit", "s1", h(9, 0), Some("cli")));
+        m.amostra(&terminal(h(9, 0) + 4 * S, JANELA));
+        assert_eq!(aberta(&m, JANELA, "claude"), Aberta::NaoSei, "trabalhando: não é lida pela janela");
+        m.evento(&ev("Stop", "s1", h(9, 1), Some("cli")));
+        m.amostra(&navegador(h(9, 30)));
+        assert_eq!(aberta(&m, JANELA, "claude"), Aberta::Sessao("s1".into()), "29 min depois do fim");
+        m.amostra(&navegador(h(10, 0) + 59 * S));
+        assert_eq!(aberta(&m, JANELA, "claude"), Aberta::Sessao("s1".into()), "um segundo antes da hora");
+        m.amostra(&navegador(h(10, 1)));
+        assert_eq!(aberta(&m, JANELA, "claude"), Aberta::NaoSei, "uma hora depois do fim");
+        // lendo no terminal quando a hora vence: a leitura fecha
+        let mut m = motor();
+        m.amostra(&terminal(h(9, 0) - S, JANELA));
+        m.evento(&ev("UserPromptSubmit", "s1", h(9, 0), Some("cli")));
+        m.amostra(&terminal(h(9, 0) + 4 * S, JANELA));
+        m.evento(&ev("Stop", "s1", h(9, 1), Some("cli")));
+        let mut t = h(9, 50);
+        while t <= h(10, 10) {
+            m.amostra(&terminal(t, JANELA));
+            t += 5 * S;
+        }
+        assert_eq!(m.lendo_agora(), None, "a leitura pela janela para uma hora depois do Stop");
+        // uma mensagem nova liga de novo
+        m.amostra(&terminal(h(10, 11) - S, JANELA));
+        m.evento(&ev("UserPromptSubmit", "s1", h(10, 11), Some("cli")));
+        m.amostra(&terminal(h(10, 11) + 4 * S, JANELA));
+        m.evento(&ev("Stop", "s1", h(10, 12), Some("cli")));
+        m.amostra(&terminal(h(10, 13), JANELA));
+        m.amostra(&terminal(h(10, 13) + 5 * S, JANELA));
+        assert_eq!(m.lendo_agora(), Some("s1"));
     }
 
     #[test]

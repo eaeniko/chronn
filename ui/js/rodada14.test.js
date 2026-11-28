@@ -37,21 +37,21 @@ const manual = (claude, extra = {}) =>
 
 test('o manual junto com cada estado do Claude', () => {
   const texto = (claude) => etiquetaComposta(manual(claude), 9 * H + M, 0)?.texto;
-  assert.equal(texto(null), 'manual');
-  assert.equal(texto('trabalhando'), 'manual + Claude');
-  assert.equal(texto('esperando'), 'manual + esperando você');
-  assert.equal(texto('segundo_plano'), 'manual + segundo plano');
-  assert.equal(texto('lendo'), 'manual + lendo');
-  assert.equal(texto('escrevendo'), 'manual + escrevendo');
+  assert.equal(texto(null), '▶ ligado');
+  assert.equal(texto('trabalhando'), '▶ ligado · Claude');
+  assert.equal(texto('esperando'), '▶ ligado · esperando você');
+  assert.equal(texto('segundo_plano'), '▶ ligado · segundo plano');
+  assert.equal(texto('lendo'), '▶ ligado · lendo');
+  assert.equal(texto('escrevendo'), '▶ ligado · escrevendo');
   // a reunião manual: o mesmo padrão
   const reu = (claude) => etiquetaComposta(manual(claude, { manual_atividade_id: REUNIAO, situacao: 'reuniao' }), 9 * H + M, 0)?.texto;
   assert.equal(reu(null), 'reunião');
-  assert.equal(reu('trabalhando'), 'reunião + Claude');
-  assert.equal(reu('esperando'), 'reunião + esperando você');
-  assert.equal(reu('segundo_plano'), 'reunião + segundo plano');
-  assert.equal(reu('lendo'), 'reunião + lendo');
+  assert.equal(reu('trabalhando'), 'reunião · Claude');
+  assert.equal(reu('esperando'), 'reunião · esperando você');
+  assert.equal(reu('segundo_plano'), 'reunião · segundo plano');
+  assert.equal(reu('lendo'), 'reunião · lendo');
   // as partes, para a cor de cada uma
-  assert.deepEqual(etiquetaComposta(manual('esperando'), 9 * H, 0), { p1: { k: 'manual', texto: 'manual' }, p2: { k: 'esperando', texto: 'esperando você' }, texto: 'manual + esperando você' });
+  assert.deepEqual(etiquetaComposta(manual('esperando'), 9 * H, 0), { p1: { k: 'manual', texto: '▶ ligado' }, p2: { k: 'esperando', texto: 'esperando você' }, texto: '▶ ligado · esperando você' });
   // sem o manual, a etiqueta de sempre, numa parte
   assert.equal(etiquetaComposta(timer(2, { situacao: 'esperando', situacao_claude: 'esperando', espera_ultima: 9 * H }), 9 * H, 0).texto, 'esperando você');
   assert.equal(etiquetaComposta(timer(2, { situacao: 'trabalhando', situacao_claude: 'trabalhando' }), 9 * H, 0, 'longa').texto, 'Claude trabalhando');
@@ -60,26 +60,27 @@ test('o manual junto com cada estado do Claude', () => {
 
 test('o "esperando você" junto do manual some no tempo de cada lugar', () => {
   const t = manual('esperando'); // terminou às 9:00
-  assert.equal(etiquetaComposta(t, 9 * H + 29 * M, 30).texto, 'manual + esperando você');
-  assert.equal(etiquetaComposta(t, 9 * H + 30 * M, 30).texto, 'manual', 'venceu: fica só o manual');
-  assert.equal(etiquetaComposta(t, 23 * H, 0).texto, 'manual + esperando você', 'até a virada');
+  assert.equal(etiquetaComposta(t, 9 * H + 29 * M, 30).texto, '▶ ligado · esperando você');
+  assert.equal(etiquetaComposta(t, 9 * H + 30 * M, 30).texto, '▶ ligado', 'venceu: fica só o manual');
+  assert.equal(etiquetaComposta(t, 23 * H, 0).texto, '▶ ligado · esperando você', 'até a virada');
 });
 
 test('cada parte na cor dela e, sem espaço, a segunda vira um ponto com a dica', () => {
   const e = etiquetaComposta(manual('esperando'), 9 * H, 0);
-  assert.equal(htmlEtiqueta(e), '<span class="s-manual">manual</span><span class="mais"> + </span><span class="s-esperando">esperando você</span>');
-  assert.equal(htmlEtiqueta(e, 16), '<span class="s-manual">manual</span><span class="pt2 s-esperando" title="manual + esperando você"></span>');
+  assert.equal(htmlEtiqueta(e), '<span class="s-manual">▶ ligado</span><span class="mais"> · </span><span class="s-esperando">esperando você</span>');
+  assert.equal(htmlEtiqueta(e, 16), '<span class="s-manual">▶ ligado</span><span class="pt2 s-esperando" title="▶ ligado · esperando você"></span>');
   // cabe: as duas partes
-  assert.match(htmlEtiqueta(etiquetaComposta(manual('trabalhando'), 9 * H, 0), 16), /manual<\/span><span class="mais"> \+ <\/span><span class="s-trabalhando">Claude/);
+  // "▶ ligado · Claude" tem 17 letras
+  assert.match(htmlEtiqueta(etiquetaComposta(manual('trabalhando'), 9 * H, 0), 17), /▶ ligado<\/span><span class="mais"> · <\/span><span class="s-trabalhando">Claude/);
   // no cartão: estreito, o ponto
   usarEsperaApp(0);
-  assert.match(cartaoTimer(manual('esperando'), 9 * H, false), /<small class="ksit manual_esperando" title="manual \+ esperando você"><span class="s-manual">manual<\/span><span class="pt2 s-esperando"/);
+  assert.match(cartaoTimer(manual('esperando'), 9 * H, false), /<small class="ksit manual_esperando" title="▶ ligado · esperando você"><span class="s-manual">▶ ligado<\/span><span class="pt2 s-esperando"/);
   // na visão Cartões (sem limite) e no painel do timer, por extenso
   assert.match(etiquetaSituacao(manual('segundo_plano'), 9 * H), /<span class="s-segundo_plano">segundo plano<\/span>/);
-  assert.match(relogioFoco({ ...manual('esperando'), motivo: 'play manual' }, 9 * H), /<div class="why"><span class="etq"><span class="s-manual">manual<\/span><span class="mais"> \+ <\/span><span class="s-esperando">esperando você<\/span><\/span><\/div>/);
+  assert.match(relogioFoco({ ...manual('esperando'), motivo: 'play manual' }, 9 * H), /<div class="why"><span class="etq"><span class="s-manual">▶ ligado<\/span><span class="mais"> · <\/span><span class="s-esperando">esperando você<\/span><\/span><\/div>/);
   // a reunião no cartão: a etiqueta dela e a segunda parte depois
   const reu = manual('esperando', { manual_atividade_id: REUNIAO, situacao: 'reuniao' });
-  assert.match(cartaoTimer(reu, 9 * H, false), /<div class="kreu"[^]*<\/div><small class="ksit reuniao_esperando" title="reunião \+ esperando você"><span class="mais">\+ <\/span><span class="s-esperando">esperando você<\/span><\/small>/);
+  assert.match(cartaoTimer(reu, 9 * H, false), /<div class="kreu"[^]*<\/div><small class="ksit reuniao_esperando" title="reunião · esperando você"><span class="mais">· <\/span><span class="s-esperando">esperando você<\/span><\/small>/);
 });
 
 test('o pausado fica no dock recolhido 10 min, depois dos rodando e antes dos lembretes', () => {
@@ -94,11 +95,11 @@ test('o pausado fica no dock recolhido 10 min, depois dos rodando e antes dos le
   // pausado com uma sessão esperando você: as duas partes, e o lembrete não repete (revisão)
   const comEspera = timer(7, { pausado_em: 9 * H + 57 * M, situacao: 'esperando', situacao_claude: 'esperando', espera_desde: 9 * H + 56 * M, espera_ultima: 9 * H + 56 * M });
   const r2 = timersParaDock(snap([comEspera]), 10 * H, true);
-  assert.deepEqual(r2.map((x) => [x.id, x.pausado, x.etiqueta.texto]), [[7, true, 'pausado + esperando você']]);
+  assert.deepEqual(r2.map((x) => [x.id, x.pausado, x.etiqueta.texto]), [[7, true, 'pausado · esperando você']]);
   assert.deepEqual(r2[0].etiqueta.p2, { k: 'esperando', texto: 'esperando você' });
   // "segundo plano" também; o lembrete vencido (30 min do recolhido) sai, e fica só "pausado"
   const sp = timer(8, { pausado_em: 9 * H + 57 * M, situacao: 'segundo_plano', situacao_claude: 'segundo_plano', espera_ultima: 9 * H + 50 * M });
-  assert.equal(timersParaDock(snap([sp]), 10 * H, true)[0].etiqueta.texto, 'pausado + segundo plano');
+  assert.equal(timersParaDock(snap([sp]), 10 * H, true)[0].etiqueta.texto, 'pausado · segundo plano');
   const velho = timer(8, { pausado_em: 9 * H + 57 * M, situacao: 'esperando', situacao_claude: 'esperando', espera_ultima: 9 * H + 20 * M });
   assert.equal(timersParaDock(snap([velho]), 10 * H, true)[0].etiqueta.texto, 'pausado');
   assert.equal(dicaDoLembrete(r[1]), 'T4: pausado. ▶ para retomar.');

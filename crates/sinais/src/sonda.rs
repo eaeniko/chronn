@@ -618,13 +618,30 @@ mod medir {
                     linhas.extend(amostra_claude(&cl, h.0 as isize, &mut caixa));
                     // o que o app leria (regra A): sem conversa, lendo ou escrevendo
                     let em_foco = fg.as_ref().is_some_and(|j| j.hwnd == h.0 as isize);
+                    let antes = uia.as_ref().map(|u| u.por_caminho).unwrap_or_default();
+                    let t_ler = Instant::now();
                     let lida = uia.as_mut().and_then(|u| u.ler(h.0 as isize, em_foco));
+                    let ms = t_ler.elapsed().as_millis();
+                    let depois = uia.as_ref().map(|u| u.por_caminho).unwrap_or_default();
+                    // spec 001: por qual caminho, quanto demorou (em faixas, para não mudar a cada
+                    // amostra) e o tamanho do título achado (nunca o título)
+                    let caminho = ["pelo foco", "guardados", "busca inteira"]
+                        .iter()
+                        .zip(antes.iter().zip(depois.iter()))
+                        .find(|(_, (a, d))| d > a)
+                        .map(|(n, _)| *n)
+                        .unwrap_or("?");
+                    let faixa = match ms {
+                        0..=99 => "<100 ms",
+                        100..=299 => "100-299 ms",
+                        _ => ">=300 ms (seria \"não sei\")",
+                    };
                     linhas.push(format!(
-                        "Uia::ler: {}",
-                        match lida {
-                            None => "sem conversa",
-                            Some(c) if c.escrevendo => "ESCREVENDO",
-                            Some(_) => "lendo",
+                        "Uia::ler: {} | {caminho} | {faixa}",
+                        match &lida {
+                            None => "sem conversa".to_string(),
+                            Some(c) if c.escrevendo => format!("ESCREVENDO <{} car.>", c.titulo.chars().count()),
+                            Some(c) => format!("lendo <{} car.>", c.titulo.chars().count()),
                         }
                     ));
                 }
@@ -632,7 +649,10 @@ mod medir {
             }
             tempos.push(t.elapsed().as_millis());
             if linhas != anterior {
-                let _ = writeln!(saida, "--- {:>4} s", inicio.elapsed().as_secs());
+                // a hora local (UTC-3), para cruzar com o que o usuário fez
+                let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let l = (s + 86_400 - 3 * 3_600) % 86_400;
+                let _ = writeln!(saida, "--- {:>4} s ({:02}:{:02}:{:02})", inicio.elapsed().as_secs(), l / 3_600, l / 60 % 60, l % 60);
                 for l in &linhas {
                     let _ = writeln!(saida, "{l}");
                 }
@@ -809,13 +829,30 @@ mod medir {
                 Ok(h) if !h.0.is_null() => {
                     linhas.extend(amostra_chat(&cl, h.0 as isize));
                     let em_foco = fg.as_ref().is_some_and(|j| j.hwnd == h.0 as isize);
+                    let antes = uia.as_ref().map(|u| u.por_caminho).unwrap_or_default();
+                    let t_ler = Instant::now();
                     let lida = uia.as_mut().and_then(|u| u.ler(h.0 as isize, em_foco));
+                    let ms = t_ler.elapsed().as_millis();
+                    let depois = uia.as_ref().map(|u| u.por_caminho).unwrap_or_default();
+                    // spec 001: por qual caminho, quanto demorou (em faixas, para não mudar a cada
+                    // amostra) e o tamanho do título achado (nunca o título)
+                    let caminho = ["pelo foco", "guardados", "busca inteira"]
+                        .iter()
+                        .zip(antes.iter().zip(depois.iter()))
+                        .find(|(_, (a, d))| d > a)
+                        .map(|(n, _)| *n)
+                        .unwrap_or("?");
+                    let faixa = match ms {
+                        0..=99 => "<100 ms",
+                        100..=299 => "100-299 ms",
+                        _ => ">=300 ms (seria \"não sei\")",
+                    };
                     linhas.push(format!(
-                        "Uia::ler: {}",
-                        match lida {
-                            None => "sem conversa",
-                            Some(c) if c.escrevendo => "ESCREVENDO",
-                            Some(_) => "lendo",
+                        "Uia::ler: {} | {caminho} | {faixa}",
+                        match &lida {
+                            None => "sem conversa".to_string(),
+                            Some(c) if c.escrevendo => format!("ESCREVENDO <{} car.>", c.titulo.chars().count()),
+                            Some(c) => format!("lendo <{} car.>", c.titulo.chars().count()),
                         }
                     ));
                 }

@@ -123,8 +123,8 @@ test('total do grupo: a soma dos timers (horas a lançar), com o tempo real na d
   const agora = 12 * H;
   assert.equal(somaDosTimers([s, flow], agora), 250 * M, '3h 10min + 1h');
   assert.equal(totalDeTimers([s, flow], agora), 150 * M, 'o tempo real: 9:00–11:30');
-  assert.deepEqual(totalDoGrupo([s, flow], agora), { texto: '4h 10min', dica: 'tempo real: 2h 30min' });
+  assert.deepEqual(totalDoGrupo([s, flow], agora), { texto: '4h 10min · 2h 30min real', dica: 'a lançar: 4h 10min · tempo real: 2h 30min · 1h 40min em paralelo' });
   const h = cabecalhoGrupo({ id: 1, nome: 'Empresa', timers: [s, flow] }, agora, true);
-  assert.match(h, /<span class="tt mono" data-total-grupo="1" title="tempo real: 2h 30min">4h 10min<\/span>/);
-  assert.deepEqual(totalDoGrupo([], 0), { texto: '0min', dica: 'tempo real: 0min' });
+  assert.match(h, /<span class="tt mono" data-total-grupo="1" title="a lançar: 4h 10min · tempo real: 2h 30min · 1h 40min em paralelo">4h 10min · 2h 30min real<\/span>/);
+  assert.deepEqual(totalDoGrupo([], 0), { texto: '0min', dica: 'a lançar: 0min · tempo real: 0min' });
 });

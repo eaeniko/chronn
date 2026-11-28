@@ -84,6 +84,9 @@ pub struct Nucleo {
     /// As distros ligadas cujos hooks saíram do `settings.json` de lá, pela última conferência do
     /// laço do WSL (0.6.1). Só em memória; a distro parada fica como estava.
     pub wsl_sem_hooks: BTreeSet<String>,
+    /// O diagnóstico da leitura no app do Claude (spec 001): contadores por hora e "falhando
+    /// desde", sem títulos. Em memória e num arquivo pequeno (`laco::diagnosticar`).
+    pub diag_leitura: nucleo::diagnostico_leitura::DiagnosticoLeitura,
 }
 
 /// A chave do banco com até onde a fila da distro foi lida (rodada 28).
@@ -260,6 +263,9 @@ pub struct RegraDto {
     pub pasta: String,
     pub timer_id: i64,
     pub timer_nome: String,
+    /// O timer dela está arquivado (ou num grupo ou espaço arquivado): a regra fica no banco, mas
+    /// não vale (spec 004).
+    pub arquivado: bool,
 }
 
 /// A trava nunca dá pânico: se outra thread caiu segurando-a, segue com o estado como está.
@@ -375,6 +381,9 @@ impl Nucleo {
         // a saida da conversa lida que esperava confirmacao quando o app fechou (troca suave)
         let saida_leitura = banco.valor(CHAVE_SAIDA_LEITURA).map_err(texto)?.and_then(|v| v.parse::<Ms>().ok());
         mud.extend(motor.ao_reabrir(abertos, ultimo_tique, saida_leitura, agora));
+        // spec 004: os escondidos (arquivados, ou de grupo ou espaço arquivado) não recebem tempo; o
+        // que estava ligado a eles (de uma versão de antes) fica sem timer
+        mud.extend(motor.esconder(banco.timers_escondidos().map_err(texto)?, agora));
         // a conversa continuada que a regra de pasta ligou antes de existir a herança (ou com o app
         // fechado antes de o título chegar) herda agora o timer da anterior, ligada à mão
         let validos: BTreeSet<i64> = banco.timers().map_err(texto)?.iter().map(|t| t.id).collect();
@@ -408,6 +417,7 @@ impl Nucleo {
             offsets_wsl: std::collections::BTreeMap::new(),
             wsl_ultimo_evento: std::collections::BTreeMap::new(),
             wsl_sem_hooks: BTreeSet::new(),
+            diag_leitura: Default::default(),
         };
         // com o "Zerar sozinho na virada" ligado e o app fechado num corte: vale o mais recente
         n.zerar_na_virada(agora)?;
@@ -630,6 +640,33 @@ impl Nucleo {
         self.wsl_ultimo_evento.get(distro).is_some_and(|(quando, fim)| !fim && quando.elapsed() < quente)
     }
 
+    /// Spec 001: o que a amostra do app do Claude mostrou vai para o diagnóstico da leitura. Só as
+    /// amostras em que a conversa foi consultada (a janela do app em uso). Devolve se o estado
+    /// mudou (ok ↔ falhando), para a tela saber.
+    pub fn registrar_leitura_app(&mut self, a: &nucleo::motor::Amostra, lentas: nucleo::diagnostico_leitura::Lentas) -> bool {
+        use nucleo::diagnostico_leitura::Resultado;
+        use nucleo::motor::Aberta;
+        let Some(aberta) = self.motor.aberta_no_app(a) else { return false };
+        let r = match (&a.conversa, aberta) {
+            (nucleo::motor::Conversa::App(None), _) => Resultado::SemConversa,
+            (_, Aberta::Desconhecida) => Resultado::SemSessao,
+            // a sessão, ou várias com o mesmo nome (de timers diferentes: o motor não sabe para qual
+            // vai o tempo, mas a conversa foi reconhecida)
+            (_, Aberta::Sessao(_) | Aberta::NaoSei) => Resultado::Sessao,
+        };
+        let em_uso = a.em_foco && !a.neutra && a.ocioso_ms <= self.motor.cfg.uso_ms;
+        // a aba do Chat à vista: a conversa do Code não aparece lá
+        let neutra = a.chat.as_ref().is_some_and(|c| c.aba_do_chat);
+        let ultimo_do_app = self
+            .motor
+            .sessoes
+            .values()
+            .filter(|s| s.origem.as_deref() == Some(nucleo::motor::ORIGEM_APP_DO_CLAUDE))
+            .map(|s| s.ultimo_evento)
+            .max();
+        self.diag_leitura.registrar(a.t, r, lentas, em_uso, neutra, ultimo_do_app)
+    }
+
     /// Os rótulos lidos dos `~/.claude.json` (o resumo do `accountUuid` e o rótulo; 0.6.1): cada
     /// um vai para a conta vista com o mesmo resumo. Devolve se algum mudou.
     pub fn aplicar_rotulos(&mut self, lidos: &[(String, String)]) -> Result<bool, String> {
@@ -704,6 +741,7 @@ impl Nucleo {
         // as distros ligadas sem os hooks (0.6.1), só as que seguem na config
         let ligadas = self.banco.config_app().map(|c| c.wsl_distros).unwrap_or_default();
         s.wsl_sem_hooks = self.wsl_sem_hooks.iter().filter(|d| ligadas.contains(d)).cloned().collect();
+        s.leitura_app = self.diag_leitura.estado();
         // o idioma do estado vale para o resto do app: a bandeja, os títulos e os erros (rodada 23)
         nucleo::idioma::usar(if s.idioma == nucleo::idioma::IDIOMA_EN { nucleo::idioma::Idioma::En } else { nucleo::idioma::Idioma::Pt });
         Ok(s)
@@ -726,8 +764,10 @@ impl Nucleo {
         }
     }
 
+    /// Erro se o timer não existe ou está fora da tela (arquivado, ou de grupo ou espaço
+    /// arquivado; spec 004).
     pub fn checar_timer(&self, id: i64) -> Result<(), String> {
-        if self.banco.timers().map_err(texto)?.iter().any(|t| t.id == id) {
+        if !self.motor.escondido(Some(id)) && self.banco.timers().map_err(texto)?.iter().any(|t| t.id == id) {
             Ok(())
         } else {
             Err(ta("erro.timer_nao_encontrado").into())
@@ -943,7 +983,8 @@ impl Nucleo {
             self.largar_aba(e.id)?;
         }
         self.banco.editar_espaco(&Espaco { nome: nome.to_string(), ..e.clone() }).map_err(texto)?;
-        Ok(vec![])
+        // spec 004: os timers do espaço arquivado não recebem tempo
+        self.reesconder(agora)
     }
 
     /// Para onde vão os itens arquivados de um espaço apagado: o primeiro outro espaço não
@@ -1093,7 +1134,8 @@ impl Nucleo {
             self.aplicar(&mud)?;
         }
         self.banco.editar_grupo(g).map_err(texto)?;
-        Ok(vec![])
+        // spec 004: arquivado ou desarquivado, o motor sabe
+        self.reesconder(agora)
     }
 
     /// Arquivar um timer rodando pausa ele antes. A atividade padrão nova vale para o que abrir
@@ -1118,8 +1160,8 @@ impl Nucleo {
             self.aplicar(&mud)?;
         }
         self.banco.editar_timer_com_ocultas(t, &ocultas).map_err(texto)?;
-        self.motor.atividades_padrao = self.banco.atividades_padrao().map_err(texto)?;
-        Ok(vec![])
+        // spec 004: arquivado ou desarquivado, o motor sabe (e relê as atividades padrão)
+        self.reesconder(agora)
     }
 
     /// Confere o editar timer sem gravar nada (revisão da rodada 21: o diálogo confere tudo, o
@@ -1287,7 +1329,13 @@ impl Nucleo {
             .regras_pasta_com_timer()
             .map_err(texto)?
             .into_iter()
-            .map(|(r, timer_nome)| RegraDto { id: r.id, pasta: r.pasta, timer_id: r.timer_id, timer_nome })
+            .map(|(r, timer_nome)| RegraDto {
+                id: r.id,
+                arquivado: self.motor.escondido(Some(r.timer_id)),
+                pasta: r.pasta,
+                timer_id: r.timer_id,
+                timer_nome,
+            })
             .collect())
     }
 
@@ -1553,6 +1601,16 @@ impl Nucleo {
             dock_larg: atual.dock_larg,
             dock_alt: atual.dock_alt,
             dock_expandido: atual.dock_expandido,
+            // o lugar escolhido do dock e o da janela principal (spec 005): só o Rust muda
+            dock_w: atual.dock_w,
+            dock_h: atual.dock_h,
+            dock_larg_l: atual.dock_larg_l,
+            dock_alt_l: atual.dock_alt_l,
+            principal_x: atual.principal_x,
+            principal_y: atual.principal_y,
+            principal_w: atual.principal_w,
+            principal_h: atual.principal_h,
+            principal_max: atual.principal_max,
             // só o tour muda isto (`marcar_tour_visto`): a config que vem da página pode estar velha
             tour_visto: atual.tour_visto,
             // as dicas também: só pelos comandos delas (rodada 16)
@@ -1603,16 +1661,39 @@ impl Nucleo {
         self.guardar_dock(|c| c.ao_minimizar = valor.to_string())
     }
 
-    /// Posição do dock; o tamanho só vale para o expandido (o recolhido acompanha o conteúdo).
-    pub fn guardar_posicao_dock(&self, x: i32, y: i32, larg: i32, alt: i32) -> Result<ConfigApp, String> {
+    /// O lugar do dock escolhido arrastando (spec 005): o retângulo inteiro (físico). Com o dock
+    /// expandido **no arrastar** (não na hora de gravar; revisão, M1), `escala` também grava o
+    /// tamanho dele em pixels lógicos (o recolhido acompanha o conteúdo).
+    pub fn guardar_escolha_dock(&self, x: i32, y: i32, w: i32, h: i32, escala: Option<f64>, expandido: bool) -> Result<ConfigApp, String> {
         self.guardar_dock(|c| {
             c.dock_x = Some(x);
             c.dock_y = Some(y);
-            if c.dock_expandido && larg > 0 && alt > 0 {
-                c.dock_larg = Some(larg);
-                c.dock_alt = Some(alt);
+            c.dock_w = Some(w);
+            c.dock_h = Some(h);
+            if let Some(e) = escala.filter(|e| *e > 0.0) {
+                if expandido && w > 0 && h > 0 {
+                    c.dock_larg_l = Some(w as f64 / e);
+                    c.dock_alt_l = Some(h as f64 / e);
+                }
             }
         })
+    }
+
+    /// O lugar da janela principal (spec 005): o retângulo fora de maximizada (físico) e se ela
+    /// está maximizada. Só grava se mudou.
+    pub fn guardar_lugar_principal(&self, x: i32, y: i32, w: i32, h: i32, max: bool) -> Result<(), String> {
+        let c = self.banco.config_app().map_err(texto)?;
+        if (c.principal_x, c.principal_y, c.principal_w, c.principal_h, c.principal_max) == (Some(x), Some(y), Some(w), Some(h), max) {
+            return Ok(());
+        }
+        self.guardar_dock(|c| {
+            c.principal_x = Some(x);
+            c.principal_y = Some(y);
+            c.principal_w = Some(w);
+            c.principal_h = Some(h);
+            c.principal_max = max;
+        })
+        .map(|_| ())
     }
 
     /// Sessões dos últimos 7 dias, a mais recente primeiro. O título de uma conversa do Chat só
@@ -1637,7 +1718,8 @@ impl Nucleo {
         Ok(v
             .iter()
             .map(|s| {
-                let mut d = snapshot::sessao_dto(nucleo::idioma::atual(), s, &self.motor.regras_pasta);
+                // só as regras que valem (spec 004, re-revisão R1)
+                let mut d = snapshot::sessao_dto(nucleo::idioma::atual(), s, &self.motor.regras_vivas());
                 d.conta_espaco = s.conta.as_ref().and_then(|c| espacos.get(c).copied());
                 d
             })
@@ -1808,7 +1890,7 @@ impl Nucleo {
 }
 
 #[cfg(test)]
-mod testes {
+pub(crate) mod testes {
     use super::*;
     use fila::EventoHook;
     use nucleo::modelo::{MotivoFim, Origem, ATIVIDADE_REUNIAO, ATIVIDADE_TRABALHO, ESPACO_PRIMEIRO};
@@ -1995,6 +2077,8 @@ mod testes {
     #[test]
     fn zerar_todos_e_desfazer() {
         let mut n = nucleo(h(9, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003): vários ▶ juntos
+        n.motor.cfg.um_play_por_vez = false;
         let a = timer_zerado(&n, "A", h(0, 0));
         let b = timer_zerado(&n, "B", h(0, 0));
         let arq = timer_zerado(&n, "Velho", 5);
@@ -2169,6 +2253,8 @@ mod testes {
     #[test]
     fn zerar_todos_e_pausar_tudo_valem_para_o_espaco_da_aba() {
         let mut n = nucleo(h(8, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003): vários ▶ juntos
+        n.motor.cfg.um_play_por_vez = false;
         let (pessoal, obra, leitura, flow) = dois_espacos(&mut n);
         assert_eq!(n.banco.espacos_dos_timers().unwrap()[&obra], pessoal, "o timer do grupo segue o espaço do grupo");
         for id in [obra, leitura, flow] {
@@ -2302,9 +2388,10 @@ mod testes {
         assert_eq!(n.editar_timer(&f, h(9, 0)), Err("Escolha outro grupo: Pessoal está arquivado.".into()));
         assert_eq!(timer(&n, flow).nome, "Flow");
         assert_eq!(n.banco.espacos_dos_timers().unwrap()[&flow], ESPACO_PRIMEIRO);
-        // o ajuste se confere sem gravar
-        assert!(n.checar_ajuste(leitura, None, 10 * MIN, None).is_ok());
-        assert!(n.checar_ajuste(leitura, None, 0, None).is_err());
+        // o ajuste se confere sem gravar; num timer fora da tela (o espaço arquivado), não (spec 004)
+        assert!(n.checar_ajuste(leitura, None, 10 * MIN, None).is_err());
+        assert!(n.checar_ajuste(flow, None, 10 * MIN, None).is_ok());
+        assert!(n.checar_ajuste(flow, None, 0, None).is_err());
         assert!(n.checar_ajuste(999, None, 10 * MIN, None).is_err());
         assert!(n.banco.ajustes_do_dia(&n.dia_texto(h(9, 0))).unwrap().is_empty(), "conferir não grava");
         // o grupo novo num espaço arquivado também é destino novo
@@ -2441,42 +2528,32 @@ mod testes {
         assert!(n.editar_grupo(&g, h(9, 0)).is_err());
     }
 
-    /// Revisão da rodada 20: o timer rodando num grupo ou espaço arquivado segue à vista (no
-    /// "Sem grupo" do espaço dele), no dock e no total do dia.
+    /// Spec 004 (no lugar da revisão da rodada 20, "o rodando segue à vista"): o timer de um grupo
+    /// ou espaço arquivado não roda (o ▶ recusa e o que rodava fecha ao arquivar) e fica fora da
+    /// tela; o tempo de hoje dele segue no total do dia (`escondidos_hoje`).
     #[test]
-    fn timer_rodando_em_grupo_ou_espaco_arquivado_segue_a_vista() {
+    fn timer_de_grupo_ou_espaco_arquivado_nao_roda_e_o_dia_nao_encolhe() {
         let mut n = nucleo(h(8, 0));
         let (pessoal, obra, leitura, _) = dois_espacos(&mut n);
-        let mut g = n.banco.grupos().unwrap().into_iter().find(|g| g.espaco_id == pessoal).unwrap();
-        g.arquivado = true;
-        n.editar_grupo(&g, h(8, 0)).unwrap();
-        // o Claude abre um trecho na Obra (o grupo dela está arquivado)
         let m = n.motor.play(obra, h(9, 0));
         n.aplicar(&m).unwrap();
-        let s = n.snapshot(h(9, 30)).unwrap();
-        let sem = s.grupos.iter().find(|x| x.id.is_none() && x.espaco_id == pessoal).unwrap();
-        assert_eq!(sem.timers.iter().map(|t| t.id).collect::<Vec<_>>(), [obra, leitura], "no Sem grupo do Pessoal");
-        // re-revisão: o timer leva o nome do grupo arquivado (o editar mostra esse grupo)
-        assert_eq!(sem.timers[0].grupo_arquivado.as_deref(), Some("Casa"));
-        assert_eq!(sem.timers[1].grupo_arquivado, None, "sem grupo");
-        // salvar o timer sem mexer no grupo mantém o grupo arquivado
-        let t = n.banco.timers().unwrap().into_iter().find(|t| t.id == obra).unwrap();
-        n.editar_timer(&t, h(9, 31)).unwrap();
-        assert_eq!(n.banco.timers().unwrap().into_iter().find(|t| t.id == obra).unwrap().grupo_id, Some(g.id));
-        // pausada, some de novo
-        let m = n.motor.pausar(obra, h(9, 30));
+        let mut g = n.banco.grupos().unwrap().into_iter().find(|g| g.espaco_id == pessoal).unwrap();
+        g.arquivado = true;
+        let m = n.editar_grupo(&g, h(9, 30)).unwrap();
         n.aplicar(&m).unwrap();
+        assert!(n.motor.abertos.is_empty(), "o ▶ fechou ao arquivar");
+        assert!(n.motor.play(obra, h(9, 31)).is_empty(), "e não volta");
         let s = n.snapshot(h(9, 40)).unwrap();
         assert!(!s.grupos.iter().flat_map(|g| &g.timers).any(|t| t.id == obra));
-        // o espaço arquivado: a Leitura que voltar a rodar aparece no "Sem grupo" dele
+        assert_eq!(s.escondidos_hoje.iter().map(|e| (e.id, e.trechos.len())).collect::<Vec<_>>(), vec![(obra, 1)]);
+        // o espaço arquivado: a Leitura também não roda
         let mut e = n.banco.espacos().unwrap().into_iter().find(|e| e.id == pessoal).unwrap();
         e.arquivado = true;
-        n.editar_espaco(&e, h(9, 40)).unwrap();
-        let m = n.motor.play(leitura, h(10, 0));
+        let m = n.editar_espaco(&e, h(9, 40)).unwrap();
         n.aplicar(&m).unwrap();
+        assert!(n.motor.play(leitura, h(10, 0)).is_empty());
         let s = n.snapshot(h(10, 10)).unwrap();
-        let sem = s.grupos.iter().find(|x| x.espaco_id == pessoal).unwrap();
-        assert_eq!((sem.id, sem.timers.len(), sem.timers[0].rodando), (None, 1, true));
+        assert!(!s.grupos.iter().any(|x| x.espaco_id == pessoal));
     }
 
     /// Revisão da rodada 20: com 2 ou mais espaços, o nome repetido leva o espaço no botão.
@@ -2747,7 +2824,7 @@ mod testes {
         let t = n.banco.criar_timer(None, "Projeto A", "#a00").unwrap();
         n.criar_regra("G:\\Projeto A", t).unwrap();
         let v = n.regras().unwrap();
-        assert_eq!(v, vec![RegraDto { id: v[0].id, pasta: "G:\\Projeto A".into(), timer_id: t, timer_nome: "Projeto A".into() }]);
+        assert_eq!(v, vec![RegraDto { id: v[0].id, pasta: "G:\\Projeto A".into(), timer_id: t, timer_nome: "Projeto A".into(), arquivado: false }]);
         n.remover_regra(v[0].id).unwrap();
         assert!(n.regras().unwrap().is_empty());
         assert!(n.motor.regras_pasta.is_empty());
@@ -3410,19 +3487,36 @@ mod testes {
     fn dock_guarda_posicao_e_tamanho_so_do_expandido() {
         let d = tempfile::tempdir().unwrap();
         let n = nucleo(h(9, 0));
-        let c = n.guardar_posicao_dock(100, 20, 300, 46).unwrap();
-        assert_eq!((c.dock_x, c.dock_y, c.dock_larg, c.dock_alt), (Some(100), Some(20), None, None));
+        let c = n.guardar_escolha_dock(100, 20, 300, 46, Some(1.0), false).unwrap();
+        assert_eq!((c.dock_x, c.dock_y, c.dock_w, c.dock_h), (Some(100), Some(20), Some(300), Some(46)));
+        assert_eq!((c.dock_larg_l, c.dock_alt_l), (None, None), "recolhido: o tamanho do expandido fica");
         n.guardar_dock(|c| c.dock_expandido = true).unwrap();
-        let c = n.guardar_posicao_dock(90, 20, 330, 450).unwrap();
-        assert_eq!((c.dock_x, c.dock_larg, c.dock_alt, c.dock_expandido), (Some(90), Some(330), Some(450), true));
+        // a pílula arrastada logo antes de expandir não vira o tamanho do expandido (M1)
+        let c = n.guardar_escolha_dock(95, 20, 300, 46, Some(1.0), false).unwrap();
+        assert_eq!((c.dock_x, c.dock_larg_l), (Some(95), None));
+        // a 150%: o expandido de 495×675 físicos é 330×450 lógicos
+        let c = n.guardar_escolha_dock(90, 20, 495, 675, Some(1.5), true).unwrap();
+        assert_eq!((c.dock_x, c.dock_larg_l, c.dock_alt_l, c.dock_expandido), (Some(90), Some(330.0), Some(450.0), true));
         assert_eq!(n.banco.config_app().unwrap(), c);
+        // a janela principal
+        n.guardar_lugar_principal(2200, 100, 1200, 800, true).unwrap();
+        let c = n.banco.config_app().unwrap();
+        assert_eq!((c.principal_x, c.principal_y, c.principal_w, c.principal_h, c.principal_max), (Some(2200), Some(100), Some(1200), Some(800), true));
         // a config velha da janela principal não desfaz o dock
         let mut n = n;
         let velha = ConfigApp { tema: "claro".into(), ..ConfigApp::default() };
         n.salvar_config(&velha, &d.path().join("hook.json")).unwrap();
         let c = n.banco.config_app().unwrap();
         assert_eq!(c.tema, "claro");
-        assert_eq!((c.dock_x, c.dock_larg, c.dock_expandido), (Some(90), Some(330), true));
+        assert_eq!(
+            (c.dock_x, c.dock_y, c.dock_w, c.dock_h, c.dock_larg_l, c.dock_alt_l, c.dock_expandido),
+            (Some(90), Some(20), Some(495), Some(675), Some(330.0), Some(450.0), true)
+        );
+        assert_eq!(
+            (c.principal_x, c.principal_y, c.principal_w, c.principal_h, c.principal_max),
+            (Some(2200), Some(100), Some(1200), Some(800), true),
+            "a config da página não desfaz a janela"
+        );
     }
 
     #[test]

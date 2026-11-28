@@ -4,7 +4,7 @@
 // com um só, a tela fica como antes. Também o "+ Novo" global (Timer, Grupo, Espaço) e o que vem
 // pré-escolhido nele. Sem DOM: testado com node --test.
 import { esc, cor } from './componentes.js';
-import { curto, totalDeTimers, dicaDoTotalDoDia, totalDoGrupo } from './formato.js';
+import { curto, totalDeTimers, totalDoDia, totalDoGrupo, escondidosDoDia } from './formato.js';
 import { TEXTOS } from './textos.js';
 
 /** O primeiro espaço (o padrão das colunas `espaco_id`). */
@@ -81,19 +81,28 @@ export function secoesDaAba(snap, aba, desenharGrupo, agora) {
     .join('');
 }
 
-/** O total do dia da aba: a união de hoje dos timers dela (em "Todos", de todos). */
+/** O tempo real de hoje da aba: a união de hoje dos timers dela (em "Todos", de todos). */
 export const totalDaAba = (snap, aba, agora) => totalDeTimers(timersDaAba(snap, aba), agora);
 
 /**
- * A dica do total do dia da aba: de onde vem o número (a da rodada 12) e, com abas, o total geral
- * e o de cada espaço ("Total geral 5h 10min · Trabalho 3h · Pessoal 2h 10min").
+ * O total do dia da aba pela escolha dos Ajustes (spec 003: a soma, o real ou os dois), para o
+ * topo: o texto inteiro e as duas partes (o número grande e, pequeno, o real ou o rótulo).
+ */
+export const partesDoTotalDaAba = (snap, aba, agora) => totalDoDia(timersDaAba(snap, aba), agora, undefined, escondidosDaAba(snap, aba));
+
+/** Spec 004: o tempo dos arquivados entra só no total geral ("Todos", ou sem abas). */
+const escondidosDaAba = (snap, aba) => (aba === null || !comAbas(snap) ? escondidosDoDia(snap) : []);
+
+/**
+ * A dica do total do dia da aba: de onde vem o número (a da rodada 12), a soma e o real (spec 003)
+ * e, com abas, o total geral e o de cada espaço ("Total geral 5h 10min · Trabalho 3h · Pessoal
+ * 2h 10min"), no número que vale sozinho pela escolha (a soma, ou o real no "Tempo real").
  */
 export function dicaDoTotalDaAba(snap, aba, agora) {
-  const base = dicaDoTotalDoDia(timersDaAba(snap, aba), agora);
+  const base = totalDoDia(timersDaAba(snap, aba), agora, undefined, escondidosDaAba(snap, aba)).dica;
   if (!comAbas(snap)) return base;
-  const partes = [`${TEXTOS.totalGeral} ${curto(totalDaAba(snap, null, agora))}`].concat(
-    espacosAtivos(snap).map((e) => `${e.nome} ${curto(totalDaAba(snap, e.id, agora))}`),
-  );
+  const ms = (a) => totalDoDia(timersDaAba(snap, a), agora, undefined, escondidosDaAba(snap, a)).ms;
+  const partes = [`${TEXTOS.totalGeral} ${curto(ms(null))}`].concat(espacosAtivos(snap).map((e) => `${e.nome} ${curto(ms(e.id))}`));
   return `${base}\n${partes.join(' · ')}`;
 }
 
@@ -167,6 +176,8 @@ export function itensDoMenuGrupo(snap, g) {
   ];
   if (comAbas(snap) && espacosParaMover(snap, g).length) v.push({ id: 'mover', rotulo: TEXTOS.moverParaOutroEspaco });
   v.push({ id: 'arquivar', rotulo: TEXTOS.arquivar });
+  // spec 004: apagar de verdade
+  v.push({ id: 'apagar', rotulo: TEXTOS.apagarReticencias });
   return v;
 }
 
@@ -184,10 +195,15 @@ export const htmlDoMenuEspacos = (snap, g) =>
     .map((e) => botaoDeMenu(`data-mover-grupo="${g.id}" data-espaco="${e.id}"`, e.nome))
     .join('')}</div>`;
 
-/** O menu ⋯ do cartão de um timer: Editar e "Mover para…" (o rótulo no idioma de agora). */
+/**
+ * O menu ⋯ do cartão de um timer: Editar, "Mover para…" e (spec 004) "Arquivar…" e "Apagar…" (o
+ * rótulo no idioma de agora).
+ */
 export const ITENS_DO_MENU_TIMER = [
   { id: 'editar', get rotulo() { return TEXTOS.editar; } },
   { id: 'mover', get rotulo() { return TEXTOS.moverPara; } },
+  { id: 'arquivar', get rotulo() { return TEXTOS.arquivarReticencias; } },
+  { id: 'apagar', get rotulo() { return TEXTOS.apagarReticencias; } },
 ];
 
 export const htmlDoMenuTimer = (t) =>

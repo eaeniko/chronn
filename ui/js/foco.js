@@ -1,7 +1,7 @@
 // Chronn — © 2026 Nikolai Cinotti (@eaeniko). Veja LICENSE.
 // Visão "Foco": a lista por grupo à esquerda e o relógio grande do timer selecionado
 // à direita, com os trechos do dia (mockup B).
-import { relogio, relogioGrande, curto, totalDeTimers, horaDoDia, textoDoAjuste, minusculas } from './formato.js';
+import { relogio, relogioGrande, curto, totalDoDia, horaDoDia, textoDoAjuste, minusculas, escondidosDoDia } from './formato.js';
 import {
   esc,
   cor,
@@ -32,7 +32,8 @@ function item(timer, agora, selecionado) {
 }
 
 function lista(snap, agora, fechados, selecionado) {
-  const total = totalDeTimers(snap.grupos.flatMap((g) => g.timers), agora);
+  // spec 003: pela escolha dos Ajustes (a soma, o real ou os dois)
+  const total = totalDoDia(snap.grupos.flatMap((g) => g.timers), agora, undefined, escondidosDoDia(snap));
   const grupos = snap.grupos
     .map((g) => {
       const aberto = !fechados.has(chaveGrupo(g));
@@ -41,7 +42,7 @@ function lista(snap, agora, fechados, selecionado) {
     })
     .join('');
   return `<nav class="fs" data-rolagem="foco-lista" aria-label="${TEXTOS.timersRotulo}">
-  <h4>${TEXTOS.hoje} · <span class="mono" data-total-dia>${curto(total)}</span></h4>
+  <h4>${TEXTOS.hoje} · <span class="mono" data-total-dia title="${esc(total.dica)}">${esc(total.texto)}</span></h4>
   ${grupos || semTimerNenhum()}
 </nav>`;
 }

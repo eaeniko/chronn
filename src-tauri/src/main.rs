@@ -11,6 +11,7 @@ macro_rules! log_debug {
     }};
 }
 
+mod arquivo;
 mod atualizar;
 mod bandeja;
 mod comandos;
@@ -18,6 +19,7 @@ mod escolher_pasta;
 mod estado_app;
 mod janelas;
 mod laco;
+mod lugar_dock;
 mod perfil;
 mod wsl_app;
 mod wsl_real;
@@ -102,8 +104,8 @@ fn eventos_da_principal(janela: &Window, evento: &WindowEvent) {
     if janela.label() == janelas::DOCK {
         match evento {
             WindowEvent::Focused(false) => janelas::dock_perdeu_foco(janela.app_handle()),
-            // o aviso do dock acompanha o dock (rodada 15)
-            WindowEvent::Moved(_) | WindowEvent::Resized(_) => janelas::reposicionar_aviso(janela.app_handle()),
+            // o arrastar da pessoa vira a escolha (spec 005); o aviso do dock acompanha o dock
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) => janelas::dock_mexeu(janela.app_handle()),
             _ => {}
         }
         return;
@@ -128,6 +130,8 @@ fn eventos_da_principal(janela: &Window, evento: &WindowEvent) {
         WindowEvent::Resized(_) if janela.is_minimized().unwrap_or(false) => {
             janelas::ao_minimizar(app, janela, janelas::AoMinimizar::de(&config(app).ao_minimizar));
         }
+        // o lugar dela, gravado pelo laço (spec 005)
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => janelas::principal_mexeu(),
         _ => {}
     }
 }
@@ -204,6 +208,8 @@ fn main() {
                 let _ = d.set_title(&janelas::titulo_dock());
             }
             janelas::restaurar_dock(app.handle(), &config(app.handle()));
+            // o dock volta por cima da barra quando outra janela vem para a frente (spec 006)
+            janelas::vigiar_primeiro_plano(app.handle());
 
             // a principal não nasce com o app (tauri.conf.json): aberto pelo Windows, nem é
             // criada (o WebView dela não ocupa memória) até alguém pedir; no primeiro uso, sim
@@ -211,7 +217,7 @@ fn main() {
                 app.try_state::<estado_app::Estado>().is_none_or(|e| estado_app::trava(&e).primeiro_uso());
             if janelas::principal_na_partida(janelas::so_bandeja(std::env::args()), primeiro_uso) {
                 // sem a janela, o dock e a bandeja seguem contando; ela é recriada ao abrir
-                if let Err(e) = janelas::criar_principal(app.handle()) {
+                if let Err(e) = janelas::criar_principal(app.handle(), false) {
                     log_debug!("worktimer: não consegui criar a janela principal: {e}");
                 }
             }
@@ -243,6 +249,16 @@ fn main() {
             comandos::desfazer_ajuste,
             comandos::criar_grupo,
             comandos::editar_grupo,
+            comandos::uso_do_timer,
+            comandos::uso_do_grupo,
+            comandos::arquivar_timer,
+            comandos::arquivar_grupo,
+            comandos::desarquivar_timer,
+            comandos::desarquivar_grupo,
+            comandos::arquivados,
+            comandos::apagar_timer,
+            comandos::apagar_grupo,
+            comandos::desfazer_apagar,
             comandos::criar_timer,
             comandos::editar_timer,
             comandos::checar_editar_timer,
@@ -293,6 +309,7 @@ fn main() {
             comandos::novo_timer_pedido,
             comandos::dock_etapa,
             comandos::dock_guardar,
+            comandos::dock_vivo,
             comandos::dock_ajustar,
             comandos::dock_mouse,
             comandos::aviso_mostrar,
@@ -360,24 +377,24 @@ mod testes {
 
     /// 0.4.1 (teste do atualizador; antes, rodada 23: 0.3.1 → 0.4.0): a versão 0.4.1 no `tauri.conf.json` e nos
     /// `Cargo.toml`, e o instalador que o `build.ps1` copia com o nome de exibição:
-    /// `Chronn_0.6.1_x64-setup.exe`.
+    /// `Chronn_0.6.2_x64-setup.exe`.
     #[test]
     fn versao_0_4_1_e_o_nome_do_instalador() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.6.1");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.6.2");
         let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        assert_eq!(conf["version"], "0.6.1");
+        assert_eq!(conf["version"], "0.6.2");
         for toml in [
             include_str!("../../crates/fila/Cargo.toml"),
             include_str!("../../crates/hook/Cargo.toml"),
             include_str!("../../crates/nucleo/Cargo.toml"),
             include_str!("../../crates/sinais/Cargo.toml"),
         ] {
-            assert!(toml.replace("\r\n", "\n").contains("\nversion = \"0.6.1\"\n"), "{toml}");
+            assert!(toml.replace("\r\n", "\n").contains("\nversion = \"0.6.2\"\n"), "{toml}");
         }
         // o Cargo.lock acompanha os pacotes do workspace
         let lock = include_str!("../../Cargo.lock").replace("\r\n", "\n");
         for nome in ["fila", "nucleo", "sinais", "work-timer", "work-timer-hook"] {
-            assert!(lock.contains(&format!("name = \"{nome}\"\nversion = \"0.6.1\"\n")), "{nome} no Cargo.lock");
+            assert!(lock.contains(&format!("name = \"{nome}\"\nversion = \"0.6.2\"\n")), "{nome} no Cargo.lock");
         }
         // o build.ps1 pega o instalador da versão do tauri.conf.json (revisão da rodada 25) e faz a
         // cópia com o nome de exibição
@@ -386,7 +403,7 @@ mod testes {
         assert!(ps1.contains(r#"(Join-Path $pasta "Work Timer_${versao}_x64-setup.exe")"#));
         assert!(ps1.contains(r#"$copia = Join-Path $pasta "${nome}_${versao}_x64-setup.exe""#));
         let versao = conf["version"].as_str().unwrap();
-        assert_eq!(format!("{APP_NOME}_{versao}_x64-setup.exe"), "Chronn_0.6.1_x64-setup.exe");
+        assert_eq!(format!("{APP_NOME}_{versao}_x64-setup.exe"), "Chronn_0.6.2_x64-setup.exe");
         // as variáveis da chave saem do ambiente no fim, com ou sem erro
         assert!(ps1.contains("Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD"));
     }

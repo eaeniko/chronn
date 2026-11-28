@@ -118,7 +118,7 @@ test('rodada 24: as chaves novas existem nos dois idiomas', () => {
 
 test('rodada 24: "Renomear" é o primeiro item do ⋯ do grupo', () => {
   const s = { espacos: [ESPACOS[0]], grupos: [] };
-  assert.deepEqual(itensDoMenuGrupo(s, { id: 5, nome: 'Casa' }).map((i) => i.id), ['renomear', 'editar', 'arquivar']);
+  assert.deepEqual(itensDoMenuGrupo(s, { id: 5, nome: 'Casa' }).map((i) => i.id), ['renomear', 'editar', 'arquivar', 'apagar']);
   em('en', () => assert.equal(itensDoMenuGrupo(s, { id: 5 })[0].rotulo, 'Rename'));
   const p = fonte('painel.js');
   assert.match(p, /if \(b\.dataset\.mg === 'renomear'\) renomearGrupo\(grupoId\);\s*else if \(b\.dataset\.mg === 'editar'\)/);

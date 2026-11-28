@@ -46,6 +46,23 @@ pub struct Snapshot {
     /// (`Nucleo::snapshot`); o núcleo não olha o WSL.
     #[serde(default)]
     pub wsl_sem_hooks: Vec<String>,
+    /// A leitura no app do Claude (spec 001): "ok", "falhando" desde quando, ou "sem_uso". O app
+    /// preenche (`Nucleo::snapshot`), com o diagnóstico do laço.
+    #[serde(default)]
+    pub leitura_app: crate::diagnostico_leitura::LeituraApp,
+    /// O que os timers fora da tela (arquivados, ou de grupo ou espaço arquivado; spec 004)
+    /// contaram hoje: o total do dia soma (a soma e o tempo real), e a dica diz quanto é deles.
+    pub escondidos_hoje: Vec<EscondidoHojeDto>,
+}
+
+/// Um timer fora da tela com tempo hoje (spec 004): o que o total do dia precisa dele.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EscondidoHojeDto {
+    pub id: i64,
+    pub nome: String,
+    pub trechos: Vec<TrechoDto>,
+    pub ajustes: Vec<AjusteDto>,
+    pub ajuste_ms: Ms,
 }
 
 /// Uma conta do Claude para a tela (rodada 28).
@@ -592,13 +609,14 @@ fn pergunta_dto(
             let lista = motor.pastas_da_sessao(sessao_id, cwd);
             let inicio = chave_de_pasta(raiz_do_projeto(s.map_or(cwd.as_str(), |s| s.cwd.as_str())));
             let agora = chave_de_pasta(pasta.as_deref().unwrap_or(""));
+            let regras_vivas = motor.regras_vivas();
             let pastas = lista
                 .into_iter()
                 .map(|x| PastaDaPergunta {
                     curta: pasta_curta(&x),
                     comecou: chave_de_pasta(&x) == inicio,
                     agora: chave_de_pasta(&x) == agora,
-                    varios: crate::pastas::pasta_mae_com_cache(&x, &motor.regras_pasta),
+                    varios: crate::pastas::pasta_mae_com_cache(&x, &regras_vivas),
                     pasta: x,
                 })
                 .collect();
@@ -829,6 +847,8 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
     let espaco_na_tela: std::collections::BTreeMap<i64, i64> = timers.iter().map(|t| (t.id, espaco_de(t))).collect();
     let antes = banco.acumulado_antes(&na_tela, &espaco_na_tela, dia_inicio, corte, fuso)?;
 
+    // a regra que a sessão mostra é uma das que valem (spec 004: a de um escondido fica inerte)
+    let regras_vivas = motor.regras_vivas();
     let timer_dto = |t: &Timer| {
         let meus: Vec<AjusteDto> = ajustes
             .iter()
@@ -894,7 +914,7 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
                     atividade_id: x.atividade_id,
                 })
                 .collect(),
-            sessoes: sessoes.into_iter().map(|(s, estado)| sessao_dto_com(i, s, estado, &motor.regras_pasta)).collect(),
+            sessoes: sessoes.into_iter().map(|(s, estado)| sessao_dto_com(i, s, estado, &regras_vivas)).collect(),
             ajuste_ms: meus.iter().map(|a| a.delta_ms).sum(),
             ajustes: meus,
             zerado_em: zerados.do_timer(t.id),
@@ -967,6 +987,43 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
             arquivados: 0,
         })
         .collect();
+    // spec 004: os timers fora da tela com tempo hoje (o total do dia não encolhe ao arquivar)
+    let a_vista: std::collections::BTreeSet<i64> = timers.iter().map(|t| t.id).collect();
+    let escondidos_hoje: Vec<EscondidoHojeDto> = banco
+        .timers_com(true)?
+        .into_iter()
+        .filter(|t| !a_vista.contains(&t.id))
+        .filter_map(|t| {
+            let meus: Vec<TrechoDto> = trechos
+                .iter()
+                .filter(|x| x.timer_id == Some(t.id) && !x.descartado)
+                .map(|x| TrechoDto {
+                    inicio: x.inicio.max(dia_inicio),
+                    fim: x.fim.map(|f| f.min(dia_fim)),
+                    origem: x.origem.as_str().to_string(),
+                    atividade_id: x.atividade_id,
+                })
+                .collect();
+            let aj: Vec<AjusteDto> = ajustes
+                .iter()
+                .filter(|a| a.timer_id == t.id)
+                .map(|a| AjusteDto {
+                    id: a.id,
+                    delta_ms: a.delta_ms,
+                    motivo: a.motivo.clone(),
+                    atividade_id: a.atividade_id,
+                    criado_em: a.criado_em,
+                })
+                .collect();
+            (!meus.is_empty() || !aj.is_empty()).then(|| EscondidoHojeDto {
+                id: t.id,
+                nome: t.nome,
+                trechos: meus,
+                ajuste_ms: aj.iter().map(|a| a.delta_ms).sum(),
+                ajustes: aj,
+            })
+        })
+        .collect();
     let mut espacos_dto = espacos_dto;
     for e in &mut espacos_dto {
         let c = banco.conteudo_do_espaco(e.id)?;
@@ -993,6 +1050,8 @@ pub fn montar_em(banco: &Banco, motor: &Motor, agora: Ms, i: Idioma) -> rusqlite
         config: banco.config_app()?,
         idioma: i.codigo().to_string(),
         wsl_sem_hooks: vec![],
+        leitura_app: Default::default(),
+        escondidos_hoje,
         contas: contas
             .iter()
             .map(|c| ContaDto {
@@ -1181,9 +1240,35 @@ mod testes {
         let ts: Vec<&TimerDto> = s.grupos.iter().flat_map(|g| &g.timers).collect();
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].trechos.len(), 1);
+        // spec 004: o arquivado fora da tela vai para o total do dia, com o trecho de hoje
+        assert_eq!(s.escondidos_hoje.iter().map(|e| (e.id, e.trechos.len())).collect::<Vec<_>>(), vec![(arq, 1)]);
         b.descartar(t, h(0, 0), h(23, 0)).unwrap();
         let s = montar(&b, &motor(h(9, 0)), h(9, 0)).unwrap();
         assert!(s.grupos[0].timers[0].trechos.is_empty());
+    }
+
+    /// Spec 004: o timer de um grupo arquivado, parado, sai da tela, mas o tempo de hoje dele
+    /// (trechos e ajustes) segue no `escondidos_hoje`; sem tempo hoje, fica de fora.
+    #[test]
+    fn escondidos_hoje_leva_o_tempo_do_grupo_arquivado() {
+        let b = Banco::abrir_memoria().unwrap();
+        let g = b.criar_grupo("Casa", "#fff").unwrap();
+        let obra = b.criar_timer(Some(g), "Obra", "#fff").unwrap();
+        let _parado = b.criar_timer(Some(g), "Jardim", "#fff").unwrap();
+        b.aplicar(&[
+            Mudanca::Abriu { timer_id: Some(obra), sessao_id: None, origem: Origem::Manual, inicio: h(8, 0), atividade_id: 1 },
+            Mudanca::Fechou { timer_id: Some(obra), sessao_id: None, origem: Origem::Manual, fim: h(9, 0), motivo: MotivoFim::Pausa },
+        ])
+        .unwrap();
+        b.criar_ajuste(obra, 1, "2026-11-17", 10 * MIN, None, h(9, 5)).unwrap();
+        let mut gr = b.grupos().unwrap().remove(0);
+        gr.arquivado = true;
+        b.editar_grupo(&gr).unwrap();
+        let s = montar(&b, &motor(h(10, 0)), h(10, 0)).unwrap();
+        assert!(s.grupos.iter().all(|x| x.timers.is_empty()));
+        assert_eq!(s.escondidos_hoje.len(), 1);
+        let e = &s.escondidos_hoje[0];
+        assert_eq!((e.id, e.nome.as_str(), e.trechos.len(), e.ajuste_ms), (obra, "Obra", 1, 10 * MIN));
     }
 
     #[test]
@@ -1231,6 +1316,8 @@ mod testes {
         let t = b.criar_timer(None, "Cliente A", "#a00").unwrap();
         let outro = b.criar_timer(None, "Projeto A", "#b00").unwrap();
         let mut m = motor(h(9, 0));
+        // com "Vários ▶ ao mesmo tempo" ligado (spec 003): a reunião e o ▶ de outro timer juntos
+        m.cfg.um_play_por_vez = false;
         let mud = m.play_atividade(t, ATIVIDADE_REUNIAO, h(9, 0));
         b.aplicar(&mud).unwrap();
         b.aplicar(&m.play(outro, h(9, 0))).unwrap();

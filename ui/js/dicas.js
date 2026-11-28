@@ -6,6 +6,7 @@
 // Das duas janelas, mostra a que pedir primeiro ao núcleo (`dica_reivindicar`).
 import { ladoDoBalao } from './tour.js';
 import { TEXTOS } from './textos.js';
+import { totaisDoDia, totaisDivergem, totalAtual, TOTAL_OS_DOIS } from './formato.js';
 
 const minutos = (s) => Math.max(1, Math.round((Number(s) || 600) / 60));
 
@@ -36,6 +37,14 @@ export const DICAS = {
     texto: () => TEXTOS.dicaZerarNaoApaga,
     alvo: () => '#bt-zerar-todos',
   },
+  // spec 003: na primeira vez que a soma e o tempo real divergem no topo ("Os dois")
+  total_dois: {
+    texto: () => TEXTOS.dicaTotalDois,
+    // o total inteiro: o número grande e o real ao lado
+    alvo: () => '.day',
+    // o dock mostra só um número: a dica é da janela principal
+    soNaPrincipal: true,
+  },
   manual_mais: {
     texto: () => TEXTOS.dicaManualMais,
     alvo: (snap) => cartaoCom(snap, (t) => t.situacao === 'manual' && Boolean(t.situacao_claude)),
@@ -63,6 +72,8 @@ export function gatilhos(snap) {
   if (timers.some((t) => t.situacao === 'esperando')) ids.push('esperando');
   if (perguntas.some((p) => p.tipo === 'volta_inatividade')) ids.push('inatividade');
   if (timers.some((t) => t.situacao === 'manual' && t.situacao_claude)) ids.push('manual_mais');
+  const comTrechos = timers.length > 0 && timers.every((t) => Array.isArray(t.trechos));
+  if (comTrechos && totalAtual() === TOTAL_OS_DOIS && totaisDivergem(totaisDoDia(timers, snap?.agora ?? Date.now()))) ids.push('total_dois');
   return ids;
 }
 

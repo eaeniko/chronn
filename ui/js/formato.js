@@ -318,21 +318,116 @@ export function dicaDoTotalDoDia(timers, agora) {
 
 /**
  * Total de um grupo: a soma dos números dos timers dele (cada um desde o seu zerar; o Claude
- * durante a reunião conta nas duas atividades). O tempo real do grupo (a união) vai só na dica do
- * cabeçalho; o total do dia, no topo, continua a união de hoje.
+ * durante a reunião conta nas duas atividades).
  */
 export function somaDosTimers(timers, agora) {
   return timers.reduce((s, t) => s + msDoTimer(t, agora), 0);
 }
 
+// ---- o que os totais mostram (spec 003) ----
+
+export const TOTAL_OS_DOIS = 'os_dois';
+export const TOTAL_SOMA = 'soma';
+export const TOTAL_REAL = 'real';
+let modoDoTotal = TOTAL_OS_DOIS;
 /**
- * O cabeçalho do grupo: { texto: a soma dos timers, dica: "tempo real: …" }. O tempo real é o do
+ * A escolha "Total do dia" dos Ajustes (`config.total_topo`): quem desenha chama a cada estado
+ * novo, como o `usarCorte`. Desconhecida, "Os dois".
+ */
+export function usarTotal(modo) {
+  modoDoTotal = modo === TOTAL_SOMA || modo === TOTAL_REAL ? modo : TOTAL_OS_DOIS;
+}
+export const totalAtual = () => modoDoTotal;
+
+/**
+ * Os dois totais de hoje: a soma do tempo de hoje de cada timer (as horas a lançar) e o tempo
+ * real (`totalDeTimers`: a hora com dois timers rodando conta uma vez).
+ */
+export function totaisDoDia(timers, agora) {
+  return { soma: timers.reduce((s, t) => s + msDeHoje(t, agora), 0), real: totalDeTimers(timers, agora) };
+}
+
+/** O número que vale sozinho (o dock, o "Total geral" da dica): o real no "Tempo real"; a soma nos outros. */
+export const totalPrincipal = ({ soma, real }, modo = modoDoTotal) => (modo === TOTAL_REAL ? real : soma);
+
+/** A soma e o real diferem de verdade (1 min ou mais)? */
+export const totaisDivergem = ({ soma, real }) => Math.abs(soma - real) >= M;
+
+/**
+ * O texto de um total (o topo, um espaço, um grupo) pela escolha, dizendo na tela o que o número
+ * é: "Os dois", a soma e, só quando é diferente, o real ("12h 02min · 8h 42min real"); "Soma",
+ * "12h 02min a lançar"; "Tempo real", "8h 42min real".
+ */
+export function textoDoTotal(totais, modo = modoDoTotal) {
+  if (modo === TOTAL_REAL) return TEXTOS.totalReal(curto(totais.real));
+  if (modo === TOTAL_SOMA) return TEXTOS.totalALancar(curto(totais.soma));
+  return totaisDivergem(totais) ? TEXTOS.totalOsDois(curto(totais.soma), curto(totais.real)) : curto(totais.soma);
+}
+
+/**
+ * O total do topo em duas partes (spec 003, o número grande e, pequeno ao lado, o que ele é):
+ * "Os dois", a soma e "· 8h 42min real" (vazio quando são iguais); "Soma", a soma e "a lançar";
+ * "Tempo real", o real e "real".
+ */
+export function partesDoTotal(totais, modo = modoDoTotal) {
+  if (modo === TOTAL_REAL) return { grande: curto(totais.real), pequeno: TEXTOS.rotuloReal };
+  if (modo === TOTAL_SOMA) return { grande: curto(totais.soma), pequeno: TEXTOS.rotuloALancar };
+  return { grande: curto(totais.soma), pequeno: totaisDivergem(totais) ? TEXTOS.subReal(curto(totais.real)) : '' };
+}
+
+/** A dica de um total: sempre os dois e, com diferença, o "em paralelo" ("a lançar: 12h 02min · tempo real: 8h 42min · 3h 20min em paralelo"). */
+export function dicaDosTotais({ soma, real }) {
+  const partes = [TEXTOS.aLancar(curto(soma)), TEXTOS.tempoReal(curto(real))];
+  if (soma - real >= M) partes.push(TEXTOS.emParalelo(curto(soma - real)));
+  return partes.join(' · ');
+}
+
+/**
+ * O total do dia: { texto, grande, pequeno, dica, ms } dos timers dados. A dica: a soma, o real e
+ * o "em paralelo"; com ajustes hoje, antes deles a de antes ("tempo contado … · ajustes …"; sem
+ * ajuste, o tempo contado é o próprio real e não se repete). `escondidos` (spec 004, o
+ * `escondidos_hoje` do snapshot): só no total geral; somam, e a dica diz quanto é deles.
+ */
+export function totalDoDia(timers, agora, modo = modoDoTotal, escondidos = []) {
+  // spec 004: o tempo de hoje dos timers fora da tela (arquivados) entra no total geral
+  const todos = escondidos.length ? [...timers, ...escondidos] : timers;
+  const totais = totaisDoDia(todos, agora);
+  const comAjuste = todos.some((t) => (t.ajustes ?? []).length > 0 || (t.ajuste_ms ?? 0) !== 0);
+  let dica = comAjuste ? `${dicaDoTotalDoDia(todos, agora)}\n${dicaDosTotais(totais)}` : dicaDosTotais(totais);
+  const deles = escondidos.reduce((s, t) => s + msDeHoje(t, agora), 0);
+  if (deles >= 1000) dica += `\n${TEXTOS.incluiArquivados(curto(deles))}`;
+  return { texto: textoDoTotal(totais, modo), ...partesDoTotal(totais, modo), dica, ms: totalPrincipal(totais, modo) };
+}
+
+/** Os timers fora da tela com tempo hoje (spec 004), do snapshot. */
+export const escondidosDoDia = (snap) => snap?.escondidos_hoje ?? [];
+
+/**
+ * O cabeçalho do grupo (e do espaço): { texto, dica } pela mesma escolha do topo, no período do
+ * grupo (cada timer desde o seu zerar). A soma é a dos números dos timers; o tempo real é o do
  * mesmo período: a união de hoje de cada timer desde o zerar dele mais a dos dias fechados, que o
  * núcleo manda no grupo (`realAntesMs`, o `real_antes_ms`).
  */
-export function totalDoGrupo(timers, agora, realAntesMs = 0) {
+export function totalDoGrupo(timers, agora, realAntesMs = 0, modo = modoDoTotal) {
   const real = realAntesMs + totalDeTimers(timers.map(hojeDesdeZerar), agora);
-  return { texto: curto(somaDosTimers(timers, agora)), dica: TEXTOS.tempoReal(curto(real)) };
+  const totais = { soma: somaDosTimers(timers, agora), real };
+  return { texto: textoDoTotal(totais, modo), dica: dicaDosTotais(totais) };
+}
+
+/**
+ * US 003.3: o número do timer traz tempo de antes de hoje (um dia fechado desde o zerar)? Então o
+ * "desde ontem 09:00" fica à vista; vazio quando é só de hoje ou sem zerar.
+ */
+export function desdeDeAntes(timer, agora, corteMin = 0) {
+  const antes = (timer.acumulado_antes ?? []).some((a) => a.ms >= 1000);
+  // nunca zerado (`zerado_em` 0): sem a data, "inclui dias de antes" (revisão, I3)
+  return antes ? desdeTexto(timer.zerado_em, agora, corteMin) || TEXTOS.comDiasDeAntes : '';
+}
+
+/** US 003.3: quanto do número do timer é de hoje ("2h 10min hoje"), só quando ele traz dias de antes. */
+export function hojeDoNumero(timer, agora) {
+  if (!(timer.acumulado_antes ?? []).some((a) => a.ms >= 1000)) return '';
+  return TEXTOS.dissoHoje(curto(contasDoTimer(hojeDesdeZerar(timer), agora).total));
 }
 
 /** "+15 min", "−1h 05min": o ajuste à mão (arredonda para o minuto). */
@@ -462,12 +557,13 @@ export function etiquetaComposta(t, agora, limiteMin, forma = 'curta') {
     // pausado, só o lembrete do Claude entra na segunda parte
     const p2 = ehLembrete(claude) ? { k: claude, texto: SEGUNDA[claude] } : null;
     const pausado = TEXTOS.pausado;
-    return { p1: { k: 'pausado', texto: pausado }, p2, texto: p2 ? `${pausado} + ${p2.texto}` : pausado };
+    return { p1: { k: 'pausado', texto: pausado }, p2, texto: p2 ? `${pausado} · ${p2.texto}` : pausado };
   }
   if (manual) {
     const p1 = t.manual_atividade_id === REUNIAO ? { k: 'reuniao', texto: TEXTOS.reuniaoMin } : { k: 'manual', texto: TEXTOS.manual };
     const p2 = claude ? { k: claude, texto: SEGUNDA[claude] } : null;
-    return { p1, p2, texto: p2 ? `${p1.texto} + ${p2.texto}` : p1.texto };
+    // spec 009: "▶ ligado · lendo"
+    return { p1, p2, texto: p2 ? `${p1.texto} · ${p2.texto}` : p1.texto };
   }
   if (!claude) return null;
   const texto = SITUACAO[claude][forma];
@@ -546,6 +642,18 @@ export function trechosDoDia(timer, diaInicio, agora, horaIni = 8, horaFim = 19,
 export function atividadesDosTrechos(timers, atividades) {
   const ids = new Set(timers.flatMap((t) => t.trechos.map((x) => x.atividade_id ?? TRABALHO)));
   return (atividades ?? []).filter((a) => ids.has(a.id));
+}
+
+/**
+ * Spec 001: o aviso do dock quando a leitura no app do Claude falha (`snap.leitura_app`), uma vez
+ * por falha: `{ chave, texto }`, ou `null` (ok, sem uso ou já avisada: `avisada` é a chave da
+ * última avisada).
+ */
+export function avisoDaLeituraApp(l, avisada, diaInicio) {
+  if (l?.estado !== 'falhando' || l.desde === null || l.desde === undefined) return null;
+  const chave = String(l.desde);
+  if (chave === avisada) return null;
+  return { chave, texto: TEXTOS.avisoLeituraApp(horaDoDia(l.desde, diaInicio)) };
 }
 
 /** "09:12": hora local do instante, contada da meia-noite `diaInicio`. */

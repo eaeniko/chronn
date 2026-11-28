@@ -592,7 +592,8 @@ pub fn remover_regra_pasta(app: AppHandle, estado: State<'_, Estado>, id: i64) -
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn abrir_app(app: AppHandle) {
-    janelas::mostrar_principal(&app);
+    // só o dock chama (o duplo clique): a janela vem para o monitor dele
+    janelas::mostrar_principal_pelo_dock(&app);
 }
 
 /// Mostra a janela principal na tela de Ajustes (o ⚙ do dock).
@@ -830,11 +831,22 @@ pub fn dock_etapa(app: AppHandle, estado: State<'_, Estado>, expandido: bool) ->
     Ok(janelas::mudar_etapa(&app, &cfg))
 }
 
-/// Posição e tamanho do dock em pixels físicos (o tamanho só vale no expandido).
+/// A página chama meio segundo depois de o dock se mover ou mudar de tamanho; só o arrastar da
+/// pessoa vira a escolha gravada (spec 005, US 005.3): o que o app ou o Windows moveram, não. Os
+/// números da página ficam só por compatibilidade (o Rust usa o retângulo que ele viu no arrastar).
 #[tauri::command(rename_all = "snake_case")]
 pub fn dock_guardar(app: AppHandle, estado: State<'_, Estado>, x: i32, y: i32, larg: i32, alt: i32) -> Result<Lado, String> {
-    trava(&estado).guardar_posicao_dock(x, y, larg, alt)?;
+    let _ = (x, y, larg, alt);
+    if let Some((r, escala, expandido)) = janelas::tirar_escolha(&app) {
+        trava(&estado).guardar_escolha_dock(r.x, r.y, r.w, r.h, Some(escala), expandido)?;
+    }
     Ok(janelas::lado_do_dock(&app))
+}
+
+/// A página do dock responde ao `dock-ping` (spec 006, US 006.2: o sinal de vida).
+#[tauri::command(rename_all = "snake_case")]
+pub fn dock_vivo() {
+    janelas::dock_respondeu();
 }
 
 // ---- avisos fora do dock (rodada 15) ----
@@ -965,7 +977,8 @@ pub fn conexao_claude() -> Result<ConexaoClaude, String> {
 pub async fn projetos_recentes(estado: State<'_, Estado>) -> Result<Vec<nucleo::recentes::ProjetoRecente>, String> {
     let (regras, ignoradas) = {
         let n = trava(&estado);
-        (n.motor.regras_pasta.clone(), n.motor.cfg.pastas_ignoradas.clone())
+        // só as regras que valem (spec 004: a de um arquivado fica inerte)
+        (n.motor.regras_vivas(), n.motor.cfg.pastas_ignoradas.clone())
     };
     let pasta = fila::caminhos::pasta_claude().join("projects");
     tauri::async_runtime::spawn_blocking(move || {
@@ -1150,6 +1163,83 @@ pub fn pasta_do_perfil_teste(pasta: &Path) -> bool {
 pub fn hooks_remover(estado: State<'_, Estado>) -> Result<Snapshot, String> {
     hooks_claude::desinstalar(&caminho_settings()?)?;
     trava(&estado).snapshot(agora_ms())
+}
+
+// ---- arquivados e apagar (spec 004) ----
+
+/// O que o diálogo de arquivar ou de apagar um timer mostra (as conversas, as regras, as horas).
+#[tauri::command(rename_all = "snake_case")]
+pub fn uso_do_timer(estado: State<'_, Estado>, timer_id: i64) -> Result<crate::arquivo::UsoDto, String> {
+    trava(&estado).uso_do_timer(timer_id, agora_ms())
+}
+
+/// O mesmo, de um grupo (os timers dele).
+#[tauri::command(rename_all = "snake_case")]
+pub fn uso_do_grupo(estado: State<'_, Estado>, grupo_id: i64) -> Result<crate::arquivo::UsoDto, String> {
+    trava(&estado).uso_do_grupo(grupo_id, agora_ms())
+}
+
+/// Arquiva o timer; `destino`: o timer para onde vão as conversas e as regras dele (nulo: "Não
+/// contar mais").
+#[tauri::command(rename_all = "snake_case")]
+pub fn arquivar_timer(app: AppHandle, estado: State<'_, Estado>, timer_id: i64, destino: Option<i64>) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, agora| n.arquivar_timer(timer_id, destino, agora))
+}
+
+/// Arquiva o grupo, com o destino das conversas e das regras dos timers dele.
+#[tauri::command(rename_all = "snake_case")]
+pub fn arquivar_grupo(app: AppHandle, estado: State<'_, Estado>, grupo_id: i64, destino: Option<i64>) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, agora| n.arquivar_grupo(grupo_id, destino, agora))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn desarquivar_timer(app: AppHandle, estado: State<'_, Estado>, timer_id: i64) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, agora| n.desarquivar_timer(timer_id, agora))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn desarquivar_grupo(app: AppHandle, estado: State<'_, Estado>, grupo_id: i64) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, agora| n.desarquivar_grupo(grupo_id, agora))
+}
+
+/// Ajustes → Arquivados.
+#[tauri::command(rename_all = "snake_case")]
+pub fn arquivados(estado: State<'_, Estado>) -> Result<crate::arquivo::ArquivadosDto, String> {
+    trava(&estado).arquivados(agora_ms())
+}
+
+/// Apaga o timer. Sem horas, devolve o que o `desfazer_apagar` precisa; com horas, só com o
+/// `nome` certo, depois de um backup, e sem "Desfazer" (nulo).
+#[tauri::command(rename_all = "snake_case")]
+pub fn apagar_timer(
+    app: AppHandle,
+    estado: State<'_, Estado>,
+    timer_id: i64,
+    nome: Option<String>,
+) -> Result<Option<nucleo::banco::Apagado>, String> {
+    let a = trava(&estado).apagar_timer(timer_id, nome.as_deref(), &fila::caminhos::backups(), agora_local(), agora_ms())?;
+    avisar(&app);
+    Ok(a)
+}
+
+/// Apaga o grupo: "Só o grupo" (`com_timers` falso) ou o grupo e os timers, como o `apagar_timer`.
+#[tauri::command(rename_all = "snake_case")]
+pub fn apagar_grupo(
+    app: AppHandle,
+    estado: State<'_, Estado>,
+    grupo_id: i64,
+    com_timers: bool,
+    nome: Option<String>,
+) -> Result<Option<nucleo::banco::Apagado>, String> {
+    let a = trava(&estado).apagar_grupo(grupo_id, com_timers, nome.as_deref(), &fila::caminhos::backups(), agora_local(), agora_ms())?;
+    avisar(&app);
+    Ok(a)
+}
+
+/// O "Desfazer" do apagar sem horas.
+#[tauri::command(rename_all = "snake_case")]
+pub fn desfazer_apagar(app: AppHandle, estado: State<'_, Estado>, apagado: nucleo::banco::Apagado) -> Result<Snapshot, String> {
+    agir(&app, &estado, |n, agora| n.desfazer_apagar(&apagado, agora))
 }
 
 #[cfg(test)]

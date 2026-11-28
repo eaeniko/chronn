@@ -64,7 +64,7 @@ test('revisão 23 M4: as frases do inglês que estavam quebradas ou estranhas', 
   assert.equal(EN.aMaisOuAMenos, 'Add or subtract');
   assert.deepEqual([EN.aMais, EN.aMenos, EN.ajusteDe], ['add', 'subtract', 'on']);
   assert.equal(EN.tempoDela('Meeting'), 'Time in Meeting');
-  assert.equal(EN.reuniaoDicaTroca('Meeting', 'Meeting'), 'Meeting: count the manual time as Meeting from now');
+  assert.equal(EN.reuniaoDicaTroca('Meeting', 'Meeting'), 'Meeting: count the ▶ time as Meeting from now');
   for (const s of textos(EN)) assert.doesNotMatch(s, /more or less/i, s);
 });
 
@@ -88,7 +88,7 @@ test('revisão 23 M6: a redação revista do inglês', () => {
     assert.match(TEXTOS.textoEncerrado, /comes back when you send a message or press play/);
     assert.match(TEXTOS.tempos[2][2], /is marked as stopped/);
     assert.match(TEXTOS.dicaInatividade(10), /You can change it in Settings → Times/);
-    assert.equal(TEXTOS.motivo('manual'), 'manual');
+    assert.equal(TEXTOS.motivo('manual'), 'you pressed ▶');
   });
   for (const s of textos(EN)) assert.doesNotMatch(s, /manual play/i, s);
 });
